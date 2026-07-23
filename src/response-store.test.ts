@@ -22,7 +22,7 @@ describe("ResponseStore", () => {
     await first.set({
       clientMsgId: "msg-1",
       type: "message",
-      content: "Hola desde OpenClaw",
+      content: "Hola desde El agente",
       data: { attachments: [] },
       completedAt: Date.now(),
     });
@@ -31,7 +31,7 @@ describe("ResponseStore", () => {
     await second.load();
     expect(second.get("msg-1")).toMatchObject({
       type: "message",
-      content: "Hola desde OpenClaw",
+      content: "Hola desde El agente",
     });
   });
 

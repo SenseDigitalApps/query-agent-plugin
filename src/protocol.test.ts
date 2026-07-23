@@ -16,9 +16,36 @@ describe("Query protocol", () => {
     ).toMatchObject({ type: "message", content: "hola", client_msg_id: "msg-1" });
   });
 
+  it("accepts attachment-only user messages without text content", () => {
+    expect(
+      parseQueryEvent(
+        JSON.stringify({
+          type: "message",
+          role: "user",
+          client_msg_id: "msg-audio-1",
+          data: {
+            attachments: [
+              {
+                kind: "audio",
+                mime_type: "audio/ogg",
+                url: "https://cdn.test/audio.ogg",
+              },
+            ],
+          },
+        }),
+      ),
+    ).toMatchObject({
+      type: "message",
+      content: "",
+      client_msg_id: "msg-audio-1",
+      data: { attachments: [{ kind: "audio" }] },
+    });
+  });
+
   it("rejects malformed and unsupported messages", () => {
     expect(parseQueryEvent("not-json")).toBeNull();
     expect(parseQueryEvent('{"type":"message","role":"assistant"}')).toBeNull();
+    expect(parseQueryEvent('{"type":"message","role":"user","client_msg_id":"empty"}')).toBeNull();
   });
 
   it("adds the token without losing existing query parameters", () => {

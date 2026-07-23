@@ -1,3 +1,8 @@
+import { spawn } from "node:child_process";
+import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { createRequire } from "node:module";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import WebSocket, { type RawData } from "ws";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-runtime";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
@@ -9,14 +14,24 @@ import {
   parseQueryEvent,
   reconnectDelay,
 } from "./protocol.js";
+import { queryAttachmentForMediaSource } from "./media.js";
 import { defaultResponseStorePath, ResponseStore } from "./response-store.js";
 import type {
   CachedResponse,
   QueryConfig,
+  QueryAttachment,
   QueryOutboundEvent,
   QueryUserMessageEvent,
   ResolvedQueryAccount,
 } from "./types.js";
+
+const require = createRequire(import.meta.url);
+const QUERY_REPLY_AUDIO = process.env.QUERY_REPLY_AUDIO ?? "1";
+const QUERY_REPLY_AUDIO_MODE = process.env.QUERY_REPLY_AUDIO_MODE ?? "requested";
+const QUERY_TTS_BIN = process.env.QUERY_TTS_BIN ?? require.resolve("node-edge-tts/bin.js");
+const QUERY_TTS_VOICE = process.env.QUERY_TTS_VOICE ?? "es-CO-GonzaloNeural";
+const QUERY_TTS_LANG = process.env.QUERY_TTS_LANG ?? "es-CO";
+const QUERY_TTS_RATE = process.env.QUERY_TTS_RATE ?? "+15%";
 
 export type QuerySocketOptions = {
   cfg: QueryConfig;
@@ -55,7 +70,7 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
   if (!timeoutMs) return promise;
   return new Promise<T>((resolve, reject) => {
     const timer = setTimeout(
-      () => reject(new Error(`OpenClaw did not finish within ${timeoutMs}ms.`)),
+      () => reject(new Error(`El agente no terminó dentro de ${timeoutMs}ms.`)),
       timeoutMs,
     );
     promise.then(
@@ -68,6 +83,104 @@ function withTimeout<T>(promise: Promise<T>, timeoutMs: number): Promise<T> {
         reject(error);
       },
     );
+  });
+}
+
+function eventRequestsAudio(event: QueryUserMessageEvent): boolean {
+  if (QUERY_REPLY_AUDIO !== "1") return false;
+  const mode = QUERY_REPLY_AUDIO_MODE.toLowerCase();
+  if (mode === "always") return true;
+  if (mode === "never" || mode === "0" || mode === "false") return false;
+  const content = event.content.toLowerCase();
+  const asksForAudio =
+    /\b(audio|voz|nota de voz|voice note|voice|habl[aá]me|responde(?:me)? en voz|m[aá]ndame .*voz)\b/i.test(
+      content,
+    );
+  const hasInboundAudio = (event.data?.attachments ?? []).some((attachment) => {
+    const mimeType = attachment.mime_type?.toLowerCase() ?? "";
+    return attachment.kind === "audio" || mimeType.startsWith("audio/");
+  });
+  return asksForAudio || hasInboundAudio;
+}
+
+async function buildAssistantAudioAttachment(
+  event: QueryUserMessageEvent,
+  text: string,
+): Promise<QueryAttachment | undefined> {
+  if (!eventRequestsAudio(event)) return undefined;
+  const speechText = textForSpeech(text);
+  if (!speechText) return undefined;
+  const directory = await mkdtemp(join(tmpdir(), "query-tts-"));
+  const outputPath = join(directory, "reply.mp3");
+  try {
+    await runTextToSpeech(speechText, outputPath);
+    const bytes = await readFile(outputPath);
+    return {
+      id: `assistant-audio-${Date.now()}`,
+      kind: "audio",
+      name: "respuesta-openclaw.mp3",
+      mime_type: "audio/mpeg",
+      is_voice_note: true,
+      voice: true,
+      size: bytes.length,
+      url: `data:audio/mpeg;base64,${bytes.toString("base64")}`,
+    };
+  } finally {
+    await rm(directory, { recursive: true, force: true });
+  }
+}
+
+function textForSpeech(text: string): string {
+  return text
+    .replace(/\s+/g, " ")
+    .replace(/https?:\/\/\S+/gi, " enlace ")
+    .trim()
+    .slice(0, 1400);
+}
+
+function runTextToSpeech(text: string, outputPath: string): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const child = spawn(
+      "node",
+      [
+        QUERY_TTS_BIN,
+        "--text",
+        text,
+        "--filepath",
+        outputPath,
+        "--voice",
+        QUERY_TTS_VOICE,
+        "--lang",
+        QUERY_TTS_LANG,
+        "--rate",
+        QUERY_TTS_RATE,
+        "--outputFormat",
+        "audio-24khz-48kbitrate-mono-mp3",
+        "--timeout",
+        "30000",
+      ],
+      { stdio: ["ignore", "pipe", "pipe"] },
+    );
+    let stderr = "";
+    const timer = setTimeout(() => {
+      child.kill("SIGTERM");
+      reject(new Error("Query assistant audio synthesis timed out."));
+    }, 45_000);
+    child.stderr.on("data", (chunk) => {
+      stderr += chunk.toString();
+    });
+    child.on("error", (error) => {
+      clearTimeout(timer);
+      reject(error);
+    });
+    child.on("close", (code) => {
+      clearTimeout(timer);
+      if (code !== 0) {
+        reject(new Error(stderr.trim() || `node-edge-tts exited with ${code}`));
+        return;
+      }
+      resolve();
+    });
   });
 }
 
@@ -96,7 +209,7 @@ export class QuerySocketMonitor {
     if (activeMonitors.get(this.options.account.accountId) === this) {
       activeMonitors.delete(this.options.account.accountId);
     }
-    this.socket?.close(1000, "OpenClaw gateway stopping");
+    this.socket?.close(1000, "El agente se está deteniendo");
     await this.runTask;
   }
 
@@ -156,7 +269,7 @@ export class QuerySocketMonitor {
         error ? reject(error) : resolve();
       };
       const abort = () => {
-        socket.close(1000, "OpenClaw gateway stopping");
+        socket.close(1000, "El agente se está deteniendo");
         finish();
       };
       abortSignal.addEventListener("abort", abort, { once: true });
@@ -216,7 +329,7 @@ export class QuerySocketMonitor {
         activityEvent({
           clientMsgId: event.client_msg_id,
           state: "working",
-          label: "OpenClaw sigue procesando el mensaje",
+          label: "El agente sigue procesando el mensaje",
           stage: "agent",
         }),
       );
@@ -234,7 +347,7 @@ export class QuerySocketMonitor {
       activityEvent({
         clientMsgId: event.client_msg_id,
         state: "working",
-        label: "OpenClaw recibió el mensaje",
+        label: "El agente recibió el mensaje",
         stage: "received",
         progress: 0,
       }),
@@ -268,16 +381,23 @@ export class QuerySocketMonitor {
       this.options.log?.info?.(
         `[${this.options.account.accountId}] ${event.client_msg_id}: query_agent_done agent_ms=${agentDoneAt - dispatchAt} total_ms=${agentDoneAt - receivedAt}`,
       );
+      const mediaAttachments = await Promise.all(
+        result.mediaUrls.map((url) => queryAttachmentForMediaSource(url)),
+      );
+      try {
+        const assistantAudio = await buildAssistantAudioAttachment(event, result.text);
+        if (assistantAudio) mediaAttachments.push(assistantAudio);
+      } catch (error) {
+        this.options.log?.warn?.(
+          `[${this.options.account.accountId}] ${event.client_msg_id}: query_assistant_audio_failed error=${String(error)}`,
+        );
+      }
       const response: CachedResponse = {
         clientMsgId: event.client_msg_id,
         type: "message",
         content: result.text,
         data: {
-          attachments: result.mediaUrls.map((url) => ({
-            kind: "file",
-            name: url.split("/").pop() || "attachment",
-            url,
-          })),
+          attachments: mediaAttachments,
         },
         completedAt: Date.now(),
       };
@@ -295,7 +415,7 @@ export class QuerySocketMonitor {
       const response: CachedResponse = {
         clientMsgId: event.client_msg_id,
         type: "error",
-        content: "OpenClaw no pudo procesar este mensaje.",
+        content: "El agente no pudo procesar este mensaje.",
         data: { detail: error instanceof Error ? error.message : String(error) },
         completedAt: Date.now(),
       };

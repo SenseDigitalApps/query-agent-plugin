@@ -4,7 +4,8 @@ import {
   type ChannelPlugin,
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/channel-core";
-import { inspectQueryAccount, resolveQueryAccount } from "./config.js";
+import { inspectQueryAccount, listQueryAccountIds, resolveQueryAccount } from "./config.js";
+import { queryAttachmentForMediaSource } from "./media.js";
 import {
   CHANNEL_ID,
   DEFAULT_ACCOUNT_ID,
@@ -72,21 +73,51 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
           media: true,
         },
         config: {
-          listAccountIds: () => [DEFAULT_ACCOUNT_ID],
+          listAccountIds: (cfg: OpenClawConfig) => listQueryAccountIds(cfg as QueryConfig),
           resolveAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
             resolveQueryAccount(cfg as QueryConfig, accountId),
           inspectAccount: (cfg: OpenClawConfig, accountId?: string | null) =>
             inspectQueryAccount(resolveQueryAccount(cfg as QueryConfig, accountId)),
         },
         setup: {
-          applyAccountConfig: ({ cfg, input }) => {
+          applyAccountConfig: ({ cfg, accountId, input }) => {
+            const resolvedAccountId = accountId?.trim() || DEFAULT_ACCOUNT_ID;
             const current = (cfg.channels as Record<string, unknown> | undefined)?.query;
+            const currentQuery =
+              typeof current === "object" && current !== null
+                ? (current as Record<string, unknown>)
+                : {};
+            if (resolvedAccountId !== DEFAULT_ACCOUNT_ID || currentQuery.accounts) {
+              const currentAccounts =
+                typeof currentQuery.accounts === "object" && currentQuery.accounts !== null
+                  ? (currentQuery.accounts as Record<string, unknown>)
+                  : {};
+              const currentAccount = currentAccounts[resolvedAccountId];
+              return {
+                ...cfg,
+                channels: {
+                  ...cfg.channels,
+                  query: {
+                    ...currentQuery,
+                    accounts: {
+                      ...currentAccounts,
+                      [resolvedAccountId]: {
+                        ...(typeof currentAccount === "object" && currentAccount !== null
+                          ? currentAccount
+                          : {}),
+                        ...input,
+                      },
+                    },
+                  },
+                },
+              };
+            }
             return {
               ...cfg,
               channels: {
                 ...cfg.channels,
                 query: {
-                  ...(typeof current === "object" && current !== null ? current : {}),
+                  ...currentQuery,
                   ...input,
                 },
               },
@@ -154,24 +185,21 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
           threadId: ctx.threadId,
           deliveryQueueId: ctx.deliveryQueueId,
         }),
-      sendMedia: async (ctx) =>
-        sendOutboundEvent({
+      sendMedia: async (ctx) => {
+        const attachment = ctx.mediaUrl
+          ? await queryAttachmentForMediaSource(ctx.mediaUrl, {
+              audioAsVoice: ctx.audioAsVoice,
+              forceDocument: ctx.forceDocument,
+            })
+          : undefined;
+        return sendOutboundEvent({
           accountId: ctx.accountId,
           to: ctx.to,
           text: ctx.text,
           threadId: ctx.threadId,
           deliveryQueueId: ctx.deliveryQueueId,
-          data: ctx.mediaUrl
-            ? {
-                attachments: [
-                  {
-                    kind: "file",
-                    name: ctx.mediaUrl.split("/").pop() || "attachment",
-                    url: ctx.mediaUrl,
-                  },
-                ],
-              }
-            : undefined,
-        }),
+          data: attachment ? { attachments: [attachment] } : undefined,
+        });
+      },
     },
   });

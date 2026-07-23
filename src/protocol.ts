@@ -27,11 +27,15 @@ export function parseQueryEvent(raw: string): QueryInboundEvent | null {
   if (
     value.type === "message" &&
     value.role === "user" &&
-    typeof value.content === "string" &&
     typeof value.client_msg_id === "string" &&
     value.client_msg_id.length > 0
   ) {
-    return value as QueryUserMessageEvent;
+    const content = typeof value.content === "string" ? value.content : "";
+    const attachments = isRecord(value.data) && Array.isArray(value.data.attachments)
+      ? value.data.attachments
+      : [];
+    if (!content && attachments.length === 0) return null;
+    return { ...value, content } as QueryUserMessageEvent;
   }
   return null;
 }

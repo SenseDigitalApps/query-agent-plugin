@@ -1,5 +1,5 @@
 import { afterEach, describe, expect, it } from "vitest";
-import { resolveQueryAccount } from "./config.js";
+import { listQueryAccountIds, resolveQueryAccount } from "./config.js";
 
 afterEach(() => {
   delete process.env.QUERY_OPENCLAW_TOKEN;
@@ -45,5 +45,40 @@ describe("Query account configuration", () => {
       },
     } as never);
     expect(account.origin).toBe("https://us.itsquery.com");
+  });
+
+  it("lists and resolves multiple Query accounts", () => {
+    const cfg = {
+      channels: {
+        query: {
+          enabled: true,
+          origin: "https://us.itsquery.com",
+          accounts: {
+            query: {
+              url: "wss://apius.itsquery.com/ws/openclaw-agent/3/?token=query-secret",
+            },
+            "director-asocapitales": {
+              url: "wss://apiasocapitales.itsquery.com/ws/openclaw-agent/1/?token=director-secret",
+              stateFile: "/tmp/director-cache.json",
+            },
+          },
+        },
+      },
+    } as never;
+
+    expect(listQueryAccountIds(cfg)).toEqual(["query", "director-asocapitales"]);
+    expect(resolveQueryAccount(cfg, "query")).toMatchObject({
+      accountId: "query",
+      configured: true,
+      token: "query-secret",
+      origin: "https://us.itsquery.com",
+    });
+    expect(resolveQueryAccount(cfg, "director-asocapitales")).toMatchObject({
+      accountId: "director-asocapitales",
+      configured: true,
+      token: "director-secret",
+      origin: "https://us.itsquery.com",
+      stateFile: "/tmp/director-cache.json",
+    });
   });
 });

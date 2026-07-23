@@ -13,7 +13,10 @@ export type QueryChannelConfig = {
   reconnectMaxMs?: number;
   responseTimeoutMs?: number;
   stateFile?: string;
+  accounts?: Record<string, QueryAccountConfig>;
 };
+
+export type QueryAccountConfig = Omit<QueryChannelConfig, "accounts">;
 
 export type ResolvedQueryAccount = {
   accountId: string;
@@ -40,6 +43,8 @@ export type QueryAttachment = {
   kind?: "image" | "file" | "audio" | "video" | string;
   name?: string;
   mime_type?: string;
+  is_voice_note?: boolean;
+  voice?: boolean;
   size?: number;
   url: string;
 };

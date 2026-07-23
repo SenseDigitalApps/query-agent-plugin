@@ -18,6 +18,7 @@
     "prepack": "npm run build && npm test"
   },
   "dependencies": {
+    "node-edge-tts": "^1.2.10",
     "ws": "^8.18.3"
   },
   "devDependencies": {

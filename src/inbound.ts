@@ -18,6 +18,25 @@ function uniqueNonEmpty(values: Array<string | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
 
+function messageRequestsAudio(event: QueryUserMessageEvent): boolean {
+  const content = event.content.toLowerCase();
+  const asksForAudio =
+    /\b(audio|voz|nota de voz|voice note|voice|habl[aá]me|responde(?:me)? en voz|m[aá]ndame .*voz)\b/i.test(
+      content,
+    );
+  const hasInboundAudio = (event.data?.attachments ?? []).some((attachment) => {
+    const mimeType = attachment.mime_type?.toLowerCase() ?? "";
+    return attachment.kind === "audio" || mimeType.startsWith("audio/");
+  });
+  return asksForAudio || hasInboundAudio;
+}
+
+function bodyForAgent(event: QueryUserMessageEvent): string {
+  const rawBody = event.content.trim() || "[Attachment]";
+  if (!messageRequestsAudio(event)) return rawBody;
+  return `${rawBody}\n\n[Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]`;
+}
+
 export async function dispatchQueryMessage(params: {
   cfg: QueryConfig;
   account: ResolvedQueryAccount;
@@ -35,6 +54,7 @@ export async function dispatchQueryMessage(params: {
     peer: { kind: "direct", id: peerId },
   });
   const rawBody = event.content.trim() || "[Attachment]";
+  const agentBody = bodyForAgent(event);
   const attachments = event.data?.attachments ?? [];
   const ctxPayload = buildChannelInboundEventContext({
     channel: CHANNEL_ID,
@@ -55,9 +75,9 @@ export async function dispatchQueryMessage(params: {
     },
     message: {
       body: rawBody,
-      bodyForAgent: rawBody,
+      bodyForAgent: agentBody,
       rawBody,
-      commandBody: rawBody,
+      commandBody: agentBody,
     },
     media: attachments.map((attachment) => ({
       url: attachment.url,
@@ -92,7 +112,7 @@ export async function dispatchQueryMessage(params: {
       deliver: async (payload) => {
         if (payload.text?.trim()) {
           texts.push(payload.text.trim());
-          params.onProgress?.("OpenClaw generó parte de la respuesta");
+          params.onProgress?.("El agente generó parte de la respuesta");
         }
         mediaUrls.push(...(payload.mediaUrls ?? []));
         if (payload.mediaUrl) mediaUrls.push(payload.mediaUrl);

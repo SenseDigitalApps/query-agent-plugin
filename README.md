@@ -9,7 +9,7 @@ un mensaje reenviado por Django no ejecute dos veces las herramientas del agente
 
 - OpenClaw `2026.7.1-2` o posterior.
 - Node.js `22.22.3+`, `24.15+` o `25.9+`, dentro de los rangos aceptados por
-  OpenClaw.
+  el runtime.
 - La URL de conexión generada al crear/configurar el agente en Query.
 
 ## Instalación local
@@ -65,8 +65,57 @@ Si no se configura `channels.query.token`, el plugin intenta
 escribe el token en sus logs.
 
 Para dirigir este canal a un agente distinto del predeterminado se usa el
-sistema normal de bindings de OpenClaw, con `channel: "query"` y
+sistema normal de bindings del runtime, con `channel: "query"` y
 `accountId: "default"`.
+
+### Multiples agentes Query
+
+Para conectar varios bots Query a varios agentes OpenClaw en el mismo gateway,
+usa `channels.query.accounts`. Cada cuenta mantiene su propio WebSocket,
+reconexion, cache durable por `client_msg_id` y estado.
+
+```json5
+{
+  channels: {
+    query: {
+      enabled: true,
+      accounts: {
+        query: {
+          url: "wss://apius.itsquery.com/ws/openclaw-agent/3/?token=SECRETO",
+          origin: "https://us.itsquery.com",
+          stateFile: "/home/ubuntu/.openclaw/workspace/tenants/query/state/query-plugin-response-cache.json",
+        },
+        "director-asocapitales": {
+          url: "wss://apiasocapitales.itsquery.com/ws/openclaw-agent/1/?token=SECRETO",
+          origin: "https://us.itsquery.com",
+          stateFile: "/home/ubuntu/.openclaw/workspace/tenants/asocapitales/state/query-plugin-response-cache.json",
+        },
+      },
+    },
+  },
+  bindings: [
+    {
+      type: "route",
+      agentId: "query",
+      match: { channel: "query", accountId: "query" },
+    },
+    {
+      type: "route",
+      agentId: "director",
+      match: { channel: "query", accountId: "director-asocapitales" },
+    },
+  ],
+}
+```
+
+El bloque de configuracion que entrega Query describe el contrato WebSocket.
+Para OpenClaw, los campos importantes son:
+
+- `connection.url`: va en `channels.query.url` si hay una sola cuenta, o en
+  `channels.query.accounts.<accountId>.url` si hay varios agentes.
+- `identity.agent`: va en el binding `agentId`.
+- `identity.name`: sirve como nombre humano; no enruta por si solo.
+- `protocol`: es informativo; Query no negocia `Sec-WebSocket-Protocol`.
 
 ## Verificación
 
@@ -98,7 +147,7 @@ reconecta con espera exponencial de 0.5 a 15 segundos. Además envía un ping ca
   `<OPENCLAW_STATE_DIR>/query-channel/default/responses.json`.
 - El archivo se escribe de forma atómica y con permisos restringidos.
 - `responseTimeoutMs` vale `0` de forma predeterminada (sin timeout artificial).
-- Los adjuntos entrantes se entregan al contexto multimedia de OpenClaw; las
+- Los adjuntos entrantes se entregan al contexto multimedia del agente; las
   URLs multimedia devueltas por el agente regresan como adjuntos de Query.
 
 ## Desarrollo
