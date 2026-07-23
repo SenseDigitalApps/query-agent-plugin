@@ -3,7 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { QuerySocketMonitor } from "./socket.js";
+import { QuerySocketMonitor, sendQueryOutboundEvent } from "./socket.js";
 import type { QueryOutboundEvent, ResolvedQueryAccount } from "./types.js";
 
 const cleanupTasks: Array<() => Promise<void>> = [];
@@ -16,6 +16,21 @@ function receive(socket: WebSocket): Promise<QueryOutboundEvent> {
   return new Promise((resolve, reject) => {
     socket.once("message", (data) => resolve(JSON.parse(data.toString()) as QueryOutboundEvent));
     socket.once("error", reject);
+  });
+}
+
+function waitFor(predicate: () => boolean): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const startedAt = Date.now();
+    const timer = setInterval(() => {
+      if (predicate()) {
+        clearInterval(timer);
+        resolve();
+      } else if (Date.now() - startedAt > 2_000) {
+        clearInterval(timer);
+        reject(new Error("Timed out waiting for condition."));
+      }
+    }, 10);
   });
 }
 
@@ -97,6 +112,67 @@ describe("QuerySocketMonitor", () => {
       client_msg_id: "msg-7",
     });
     expect(dispatchMessage).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+    await monitor.stop();
+  });
+
+  it("sends outbound messages over the active account socket", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-socket-outbound-"));
+    const server = new WebSocketServer({ port: 0 });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const controller = new AbortController();
+    cleanupTasks.push(async () => {
+      controller.abort();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const account: ResolvedQueryAccount = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      url: `ws://127.0.0.1:${address.port}/ws/openclaw-agent/test/`,
+      token: "bot-secret",
+      heartbeatMs: 5_000,
+      reconnectMinMs: 100,
+      reconnectMaxMs: 1_000,
+      responseTimeoutMs: 0,
+      stateFile: join(directory, "responses.json"),
+    };
+    let status = { accountId: "default" } as never;
+    const monitor = new QuerySocketMonitor({
+      cfg: { channels: { query: {} } } as never,
+      account,
+      runtime: { error: vi.fn() } as never,
+      abortSignal: controller.signal,
+      getStatus: () => status,
+      setStatus: (next) => {
+        status = next as never;
+      },
+      dispatchMessage: vi.fn(),
+    });
+
+    const connection = new Promise<WebSocket>((resolve) => server.once("connection", resolve));
+    await monitor.start();
+    const socket = await connection;
+    await waitFor(() => (status as { running?: boolean }).running === true);
+
+    sendQueryOutboundEvent("default", {
+      type: "message",
+      role: "assistant",
+      content: "push listo",
+      client_msg_id: "outbound-1",
+      data: { source: "test" },
+    });
+
+    await expect(receive(socket)).resolves.toMatchObject({
+      type: "message",
+      role: "assistant",
+      content: "push listo",
+      client_msg_id: "outbound-1",
+    });
 
     controller.abort();
     await monitor.stop();

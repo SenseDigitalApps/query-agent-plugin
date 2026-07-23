@@ -36,6 +36,10 @@
             "maximum": 55000,
             "default": 25000
           },
+          "origin": {
+            "type": "string",
+            "description": "Optional WebSocket Origin header required by some Query deployments."
+          },
           "reconnectMinMs": {
             "type": "integer",
             "minimum": 100,
@@ -71,6 +75,10 @@
         },
         "heartbeatMs": {
           "label": "Heartbeat interval (ms)",
+          "advanced": true
+        },
+        "origin": {
+          "label": "WebSocket Origin",
           "advanced": true
         },
         "reconnectMinMs": {

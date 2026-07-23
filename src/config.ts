@@ -42,6 +42,7 @@ export function resolveQueryAccount(
     url,
     token,
     heartbeatMs: integerInRange(section?.heartbeatMs, DEFAULT_HEARTBEAT_MS, 5_000, 55_000),
+    origin: section?.origin?.trim() || undefined,
     reconnectMinMs,
     reconnectMaxMs,
     responseTimeoutMs: integerInRange(section?.responseTimeoutMs, 0, 0, 3_600_000),

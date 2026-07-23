@@ -8,9 +8,52 @@ import { inspectQueryAccount, resolveQueryAccount } from "./config.js";
 import {
   CHANNEL_ID,
   DEFAULT_ACCOUNT_ID,
+  type QueryOutboundEvent,
   type QueryConfig,
   type ResolvedQueryAccount,
 } from "./types.js";
+
+function newOutboundClientMsgId(deliveryQueueId?: string): string {
+  if (deliveryQueueId?.trim()) return deliveryQueueId.trim();
+  return `openclaw-outbound-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+async function sendOutboundEvent(params: {
+  accountId?: string | null;
+  to: string;
+  text: string;
+  threadId?: string | number | null;
+  deliveryQueueId?: string;
+  data?: Record<string, unknown>;
+}) {
+  const { sendQueryOutboundEvent } = await import("./socket.js");
+  const accountId = params.accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const clientMsgId = newOutboundClientMsgId(params.deliveryQueueId);
+  const event: QueryOutboundEvent = {
+    type: "message",
+    role: "assistant",
+    content: params.text,
+    client_msg_id: clientMsgId,
+    data: {
+      source: "openclaw_outbound",
+      to: params.to,
+      ...(params.threadId === undefined || params.threadId === null
+        ? {}
+        : { thread_id: String(params.threadId) }),
+      ...(params.data ?? {}),
+    },
+  };
+  sendQueryOutboundEvent(accountId, event);
+  return {
+    channel: CHANNEL_ID,
+    messageId: clientMsgId,
+    chatId: params.to,
+    conversationId:
+      params.threadId === undefined || params.threadId === null ? params.to : String(params.threadId),
+    timestamp: Date.now(),
+    meta: { accountId },
+  };
+}
 
 export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
   createChatChannelPlugin<ResolvedQueryAccount>({
@@ -88,4 +131,47 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
       },
     } as ChannelPlugin<ResolvedQueryAccount>),
     threading: { topLevelReplyToMode: "off" },
+    outbound: {
+      deliveryMode: "direct",
+      deliveryCapabilities: {
+        durableFinal: {
+          text: true,
+          media: true,
+          thread: true,
+          batch: false,
+        },
+      },
+      resolveTarget: ({ to }) => {
+        const target = to?.trim();
+        if (!target) return { ok: false, error: new Error("Query outbound target is required.") };
+        return { ok: true, to: target };
+      },
+      sendText: async (ctx) =>
+        sendOutboundEvent({
+          accountId: ctx.accountId,
+          to: ctx.to,
+          text: ctx.text,
+          threadId: ctx.threadId,
+          deliveryQueueId: ctx.deliveryQueueId,
+        }),
+      sendMedia: async (ctx) =>
+        sendOutboundEvent({
+          accountId: ctx.accountId,
+          to: ctx.to,
+          text: ctx.text,
+          threadId: ctx.threadId,
+          deliveryQueueId: ctx.deliveryQueueId,
+          data: ctx.mediaUrl
+            ? {
+                attachments: [
+                  {
+                    kind: "file",
+                    name: ctx.mediaUrl.split("/").pop() || "attachment",
+                    url: ctx.mediaUrl,
+                  },
+                ],
+              }
+            : undefined,
+        }),
+    },
   });

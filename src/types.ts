@@ -8,6 +8,7 @@ export type QueryChannelConfig = {
   url?: string;
   token?: string;
   heartbeatMs?: number;
+  origin?: string;
   reconnectMinMs?: number;
   reconnectMaxMs?: number;
   responseTimeoutMs?: number;
@@ -21,6 +22,7 @@ export type ResolvedQueryAccount = {
   url: string;
   token: string;
   heartbeatMs: number;
+  origin?: string;
   reconnectMinMs: number;
   reconnectMaxMs: number;
   responseTimeoutMs: number;

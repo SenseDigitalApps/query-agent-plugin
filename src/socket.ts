@@ -88,12 +88,20 @@ export class QuerySocketMonitor {
 
   async start(): Promise<void> {
     await this.store.load();
+    activeMonitors.set(this.options.account.accountId, this);
     this.runTask = this.runLoop();
   }
 
   async stop(): Promise<void> {
+    if (activeMonitors.get(this.options.account.accountId) === this) {
+      activeMonitors.delete(this.options.account.accountId);
+    }
     this.socket?.close(1000, "OpenClaw gateway stopping");
     await this.runTask;
+  }
+
+  sendOutboundEvent(event: QueryOutboundEvent): void {
+    this.send(event);
   }
 
   private async runLoop(): Promise<void> {
@@ -124,7 +132,10 @@ export class QuerySocketMonitor {
     return new Promise((resolve, reject) => {
       let settled = false;
       let lastPongAt = Date.now();
-      const socket = new WebSocket(url, { handshakeTimeout: 15_000 });
+      const socket = new WebSocket(url, {
+        handshakeTimeout: 15_000,
+        ...(account.origin ? { origin: account.origin } : {}),
+      });
       this.socket = socket;
 
       const heartbeat = setInterval(() => {
@@ -191,9 +202,13 @@ export class QuerySocketMonitor {
   }
 
   private async handleUserMessage(event: QueryUserMessageEvent): Promise<void> {
+    const receivedAt = Date.now();
     const cached = this.store.get(event.client_msg_id);
     if (cached) {
       this.send(cachedResponseEvent(cached));
+      this.options.log?.info?.(
+        `[${this.options.account.accountId}] ${event.client_msg_id}: query_cached_terminal_sent total_ms=${Date.now() - receivedAt}`,
+      );
       return;
     }
     if (this.inFlight.has(event.client_msg_id)) {
@@ -205,10 +220,16 @@ export class QuerySocketMonitor {
           stage: "agent",
         }),
       );
+      this.options.log?.info?.(
+        `[${this.options.account.accountId}] ${event.client_msg_id}: query_duplicate_inflight_activity_sent total_ms=${Date.now() - receivedAt}`,
+      );
       return;
     }
 
     this.inFlight.add(event.client_msg_id);
+    this.options.log?.info?.(
+      `[${this.options.account.accountId}] ${event.client_msg_id}: query_received attachments=${event.data?.attachments?.length ?? 0}`,
+    );
     this.send(
       activityEvent({
         clientMsgId: event.client_msg_id,
@@ -218,9 +239,17 @@ export class QuerySocketMonitor {
         progress: 0,
       }),
     );
+    const activityAt = Date.now();
+    this.options.log?.info?.(
+      `[${this.options.account.accountId}] ${event.client_msg_id}: query_activity_sent activity_ms=${activityAt - receivedAt}`,
+    );
     this.patchStatus({ lastInboundAt: Date.now() });
 
     try {
+      const dispatchAt = Date.now();
+      this.options.log?.info?.(
+        `[${this.options.account.accountId}] ${event.client_msg_id}: query_gateway_dispatch dispatch_ms=${dispatchAt - receivedAt}`,
+      );
       const result = await withTimeout(
         (this.options.dispatchMessage ?? dispatchQueryMessage)({
           cfg: this.options.cfg,
@@ -234,6 +263,10 @@ export class QuerySocketMonitor {
           },
         }),
         this.options.account.responseTimeoutMs,
+      );
+      const agentDoneAt = Date.now();
+      this.options.log?.info?.(
+        `[${this.options.account.accountId}] ${event.client_msg_id}: query_agent_done agent_ms=${agentDoneAt - dispatchAt} total_ms=${agentDoneAt - receivedAt}`,
       );
       const response: CachedResponse = {
         clientMsgId: event.client_msg_id,
@@ -251,6 +284,9 @@ export class QuerySocketMonitor {
       await this.store.set(response);
       this.patchStatus({ lastOutboundAt: Date.now(), lastError: undefined });
       this.send(cachedResponseEvent(response));
+      this.options.log?.info?.(
+        `[${this.options.account.accountId}] ${event.client_msg_id}: query_terminal_sent total_ms=${Date.now() - receivedAt}`,
+      );
     } catch (error) {
       const existing = this.store.get(event.client_msg_id);
       if (existing) {
@@ -267,6 +303,9 @@ export class QuerySocketMonitor {
       this.patchStatus({ lastOutboundAt: Date.now(), lastError: String(error) });
       this.options.runtime.error?.(`query: failed processing ${event.client_msg_id}: ${String(error)}`);
       this.send(cachedResponseEvent(response));
+      this.options.log?.info?.(
+        `[${this.options.account.accountId}] ${event.client_msg_id}: query_error_terminal_sent total_ms=${Date.now() - receivedAt}`,
+      );
     } finally {
       this.inFlight.delete(event.client_msg_id);
     }
@@ -282,4 +321,14 @@ export class QuerySocketMonitor {
   private patchStatus(patch: Partial<ChannelAccountSnapshot>): void {
     this.options.setStatus({ ...this.options.getStatus(), ...patch });
   }
+}
+
+const activeMonitors = new Map<string, QuerySocketMonitor>();
+
+export function sendQueryOutboundEvent(accountId: string, event: QueryOutboundEvent): void {
+  const monitor = activeMonitors.get(accountId);
+  if (!monitor) {
+    throw new Error(`Query account ${accountId} is not running.`);
+  }
+  monitor.sendOutboundEvent(event);
 }

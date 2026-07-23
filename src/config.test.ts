@@ -34,4 +34,16 @@ describe("Query account configuration", () => {
     } as never);
     expect(explicit.token).toBe("explicit-secret");
   });
+
+  it("accepts an optional websocket origin", () => {
+    const account = resolveQueryAccount({
+      channels: {
+        query: {
+          url: "wss://query.test/ws/?token=url-secret",
+          origin: "https://us.itsquery.com",
+        },
+      },
+    } as never);
+    expect(account.origin).toBe("https://us.itsquery.com");
+  });
 });
