@@ -54,38 +54,69 @@ export type QuerySessionReadyEvent = {
   role?: "system";
   content?: string;
   data: {
-    protocol: "query-openclaw.v1" | string;
+    protocol: "query-openclaw.v1" | "query-openclaw.v2" | string;
     bot_id?: string | number;
     display_name?: string;
     thread_id?: string | number;
+    general_thread_id?: string | number;
+    multi_thread?: boolean;
   };
 };
+
+export type QueryThreadType = "general" | "topic" | "private";
 
 export type QueryUserMessageEvent = {
   type: "message";
   role: "user";
   content: string;
   client_msg_id: string;
+  thread_id?: string | number;
   event_id?: string | number;
   data?: {
     attachments?: QueryAttachment[];
+    thread_id?: string | number;
+    thread_type?: QueryThreadType;
+    thread_name?: string;
+    sender?: {
+      id?: string | number;
+      name?: string;
+      type?: "member" | "support" | string;
+      private_thread_id?: string | number | null;
+    };
     [key: string]: unknown;
   };
 };
 
-export type QueryInboundEvent = QuerySessionReadyEvent | QueryUserMessageEvent;
+export type QueryScheduleCancelEvent = {
+  type: "schedule.cancel";
+  role: "system";
+  content?: string;
+  client_msg_id?: string;
+  thread_id?: string | number;
+  data: {
+    external_ids: string[];
+    reason?: string;
+  };
+};
+
+export type QueryInboundEvent =
+  | QuerySessionReadyEvent
+  | QueryUserMessageEvent
+  | QueryScheduleCancelEvent;
 
 export type QueryActivityState = "queued" | "working" | "done" | "error";
 
 export type QueryOutboundEvent = {
-  type: "activity" | "message" | "error";
-  role: "assistant";
+  type: "activity" | "message" | "error" | "schedule.sync";
+  role: "assistant" | "system";
   content: string;
   client_msg_id: string;
+  thread_id: string;
   data: Record<string, unknown>;
 };
 
 export type CachedResponse = {
+  threadId: string;
   clientMsgId: string;
   type: "message" | "error";
   content: string;

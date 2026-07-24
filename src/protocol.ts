@@ -4,6 +4,7 @@ import type {
   QueryInboundEvent,
   QueryOutboundEvent,
   QuerySessionReadyEvent,
+  QueryScheduleCancelEvent,
   QueryUserMessageEvent,
 } from "./types.js";
 
@@ -23,6 +24,14 @@ export function parseQueryEvent(raw: string): QueryInboundEvent | null {
   }
   if (value.type === "session.ready" && isRecord(value.data)) {
     return value as QuerySessionReadyEvent;
+  }
+  if (
+    value.type === "schedule.cancel" &&
+    value.role === "system" &&
+    isRecord(value.data) &&
+    Array.isArray(value.data.external_ids)
+  ) {
+    return value as QueryScheduleCancelEvent;
   }
   if (
     value.type === "message" &&
@@ -50,6 +59,7 @@ export function buildSocketUrl(url: string, token: string): string {
 }
 
 export function activityEvent(params: {
+  threadId: string;
   clientMsgId: string;
   state: QueryActivityState;
   label: string;
@@ -57,12 +67,13 @@ export function activityEvent(params: {
   stage?: string;
   progress?: number;
 }): QueryOutboundEvent {
-  const { clientMsgId, ...data } = params;
+  const { threadId, clientMsgId, ...data } = params;
   return {
     type: "activity",
     role: "assistant",
     content: "",
     client_msg_id: clientMsgId,
+    thread_id: threadId,
     data: Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined)),
   };
 }
@@ -73,6 +84,7 @@ export function cachedResponseEvent(response: CachedResponse): QueryOutboundEven
     role: "assistant",
     content: response.content,
     client_msg_id: response.clientMsgId,
+    thread_id: response.threadId,
     data: response.data,
   };
 }

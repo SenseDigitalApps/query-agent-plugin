@@ -17,10 +17,10 @@ un mensaje reenviado por Django no ejecute dos veces las herramientas del agente
 En PowerShell:
 
 ```powershell
-cd C:\Users\julia\Repos\queryapp\query-agent-plugin
+cd "C:\Users\julia\Repos\- Query-assets\query-agent-plugin"
 npm install
 npm run build
-openclaw plugins install -l C:\Users\julia\Repos\queryapp\query-agent-plugin
+openclaw plugins install -l "C:\Users\julia\Repos\- Query-assets\query-agent-plugin"
 openclaw plugins enable query
 ```
 
@@ -117,6 +117,36 @@ Para OpenClaw, los campos importantes son:
 - `identity.name`: sirve como nombre humano; no enruta por si solo.
 - `protocol`: es informativo; Query no negocia `Sec-WebSocket-Protocol`.
 
+### Canales y privacidad (protocolo v2)
+
+Una cuenta Query mantiene un solo WebSocket por agente, pero puede transportar
+muchos canales. El plugin usa `thread_id` como clave de sesión y de
+idempotencia:
+
+- `general`: contexto compartido por quienes tienen acceso al agente;
+- `topic`: contexto compartido por los miembros autorizados del canal;
+- `private`: contexto exclusivo del usuario dueño y del soporte visible que
+  haya entrado explícitamente.
+
+Cada evento entrante debe incluir `thread_id`; cada actividad y respuesta lo
+devuelve junto con `client_msg_id`. El plugin nunca cae silenciosamente al canal
+General si no reconoce el hilo. El protocolo v1 continúa aceptándose durante el
+despliegue, pero no ofrece aislamiento multihilo.
+
+Query conserva la fuente de verdad de permisos, historial, autoría y
+notificaciones. El plugin recibe el autor real y el tipo/nombre del canal para
+construir el turno del agente, pero no decide quién puede leer o escribir.
+
+### Tareas programadas
+
+Los cambios del servicio cron de OpenClaw se sincronizan con Query mediante
+`schedule.sync`. Query materializa una entrega por usuario/hilo y puede enviar
+`schedule.cancel` cuando se revoca el acceso de su último destinatario.
+
+Las tareas personales creadas desde un canal compartido deben dirigirse al
+`private_thread_id` del solicitante. Una cancelación queda registrada en Query
+y se reenvía si el plugin estaba desconectado.
+
 ## Verificación
 
 ```powershell
@@ -143,7 +173,8 @@ reconecta con espera exponencial de 0.5 a 15 segundos. Además envía un ping ca
 - Cada respuesta conserva el `client_msg_id` original.
 - Un mensaje duplicado recibe la respuesta ya calculada, sin volver a ejecutar
   al agente.
-- Las últimas 2.000 respuestas se guardan durante hasta 30 días en
+- Las últimas 2.000 respuestas por `thread_id + client_msg_id` se guardan
+  durante hasta 30 días en
   `<OPENCLAW_STATE_DIR>/query-channel/default/responses.json`.
 - El archivo se escribe de forma atómica y con permisos restringidos.
 - `responseTimeoutMs` vale `0` de forma predeterminada (sin timeout artificial).

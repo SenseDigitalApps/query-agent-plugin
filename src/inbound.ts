@@ -33,8 +33,20 @@ function messageRequestsAudio(event: QueryUserMessageEvent): boolean {
 
 function bodyForAgent(event: QueryUserMessageEvent): string {
   const rawBody = event.content.trim() || "[Attachment]";
-  if (!messageRequestsAudio(event)) return rawBody;
-  return `${rawBody}\n\n[Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]`;
+  const context = [
+    `Canal Query: ${event.data?.thread_name || event.thread_id || "desconocido"}`,
+    `Tipo: ${event.data?.thread_type || "desconocido"}`,
+    event.data?.sender?.private_thread_id
+      ? `Canal privado del remitente: ${event.data.sender.private_thread_id}`
+      : "",
+    "Si creas una tarea programada para una persona, configura la entrega al canal privado indicado; no uses un canal compartido como destino individual.",
+  ]
+    .filter(Boolean)
+    .join(". ");
+  const audioHint = messageRequestsAudio(event)
+    ? "\n\n[Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]"
+    : "";
+  return `${rawBody}\n\n[Contexto de Query: ${context}]${audioHint}`;
 }
 
 export async function dispatchQueryMessage(params: {
@@ -47,11 +59,19 @@ export async function dispatchQueryMessage(params: {
   const core = getQueryRuntime();
   const { cfg, account, event, threadId } = params;
   const peerId = threadId || account.accountId;
+  const threadType = event.data?.thread_type;
+  const sender = event.data?.sender;
+  const senderId =
+    sender?.id === undefined || sender?.id === null
+      ? "query-user"
+      : String(sender.id);
+  const senderName = sender?.name?.trim() || "Query user";
+  const conversationKind = threadType === "private" ? "direct" : "group";
   const route = core.channel.routing.resolveAgentRoute({
     cfg,
     channel: CHANNEL_ID,
     accountId: account.accountId,
-    peer: { kind: "direct", id: peerId },
+    peer: { kind: conversationKind, id: peerId },
   });
   const rawBody = event.content.trim() || "[Attachment]";
   const agentBody = bodyForAgent(event);
@@ -62,8 +82,12 @@ export async function dispatchQueryMessage(params: {
     messageId: event.client_msg_id,
     timestamp: Date.now(),
     from: `query:${peerId}`,
-    sender: { id: "query-user", name: "Query user" },
-    conversation: { kind: "direct", id: peerId, label: "Query" },
+    sender: { id: senderId, name: senderName },
+    conversation: {
+      kind: conversationKind,
+      id: peerId,
+      label: event.data?.thread_name?.trim() || "Query",
+    },
     route: {
       agentId: route.agentId,
       accountId: route.accountId,

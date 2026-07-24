@@ -28,7 +28,7 @@ import type {
 const require = createRequire(import.meta.url);
 const QUERY_REPLY_AUDIO = process.env.QUERY_REPLY_AUDIO ?? "1";
 const QUERY_REPLY_AUDIO_MODE = process.env.QUERY_REPLY_AUDIO_MODE ?? "requested";
-const QUERY_TTS_BIN = process.env.QUERY_TTS_BIN ?? require.resolve("node-edge-tts/bin.js");
+const QUERY_TTS_BIN = process.env.QUERY_TTS_BIN;
 const QUERY_TTS_VOICE = process.env.QUERY_TTS_VOICE ?? "es-CO-GonzaloNeural";
 const QUERY_TTS_LANG = process.env.QUERY_TTS_LANG ?? "es-CO";
 const QUERY_TTS_RATE = process.env.QUERY_TTS_RATE ?? "+15%";
@@ -139,11 +139,12 @@ function textForSpeech(text: string): string {
 }
 
 function runTextToSpeech(text: string, outputPath: string): Promise<void> {
+  const ttsBin = QUERY_TTS_BIN ?? require.resolve("node-edge-tts/bin.js");
   return new Promise((resolve, reject) => {
     const child = spawn(
       "node",
       [
-        QUERY_TTS_BIN,
+        ttsBin,
         "--text",
         text,
         "--filepath",
@@ -187,13 +188,13 @@ function runTextToSpeech(text: string, outputPath: string): Promise<void> {
 export class QuerySocketMonitor {
   private readonly store: ResponseStore;
   private socket?: WebSocket;
-  private sessionThreadId: string;
+  private legacyGeneralThreadId: string;
   private readonly inFlight = new Set<string>();
   private runTask?: Promise<void>;
 
   constructor(private readonly options: QuerySocketOptions) {
     const { account } = options;
-    this.sessionThreadId = account.accountId;
+    this.legacyGeneralThreadId = account.accountId;
     this.store = new ResponseStore(
       account.stateFile ?? defaultResponseStorePath(account.accountId),
     );
@@ -303,12 +304,22 @@ export class QuerySocketMonitor {
       return;
     }
     if (event.type === "session.ready") {
-      if (event.data.protocol !== "query-openclaw.v1") {
+      if (
+        event.data.protocol !== "query-openclaw.v1" &&
+        event.data.protocol !== "query-openclaw.v2"
+      ) {
         throw new Error(`Unsupported Query protocol: ${event.data.protocol}`);
       }
-      if (event.data.thread_id !== undefined) {
-        this.sessionThreadId = String(event.data.thread_id);
+      const generalThreadId =
+        event.data.general_thread_id ?? event.data.thread_id;
+      if (generalThreadId !== undefined) {
+        this.legacyGeneralThreadId = String(generalThreadId);
       }
+      return;
+    }
+    if (event.type === "schedule.cancel") {
+      const { cancelQuerySchedules } = await import("./cron-sync.js");
+      await cancelQuerySchedules(event.data.external_ids, this.options.log);
       return;
     }
     await this.handleUserMessage(event);
@@ -316,7 +327,14 @@ export class QuerySocketMonitor {
 
   private async handleUserMessage(event: QueryUserMessageEvent): Promise<void> {
     const receivedAt = Date.now();
-    const cached = this.store.get(event.client_msg_id);
+    const threadId = String(
+      event.thread_id ?? event.data?.thread_id ?? this.legacyGeneralThreadId,
+    ).trim();
+    if (!threadId) {
+      throw new Error("Query message is missing thread_id.");
+    }
+    const turnKey = `${threadId}\u0000${event.client_msg_id}`;
+    const cached = this.store.get(threadId, event.client_msg_id);
     if (cached) {
       this.send(cachedResponseEvent(cached));
       this.options.log?.info?.(
@@ -324,9 +342,10 @@ export class QuerySocketMonitor {
       );
       return;
     }
-    if (this.inFlight.has(event.client_msg_id)) {
+    if (this.inFlight.has(turnKey)) {
       this.send(
         activityEvent({
+          threadId,
           clientMsgId: event.client_msg_id,
           state: "working",
           label: "El agente sigue procesando el mensaje",
@@ -339,12 +358,13 @@ export class QuerySocketMonitor {
       return;
     }
 
-    this.inFlight.add(event.client_msg_id);
+    this.inFlight.add(turnKey);
     this.options.log?.info?.(
       `[${this.options.account.accountId}] ${event.client_msg_id}: query_received attachments=${event.data?.attachments?.length ?? 0}`,
     );
     this.send(
       activityEvent({
+        threadId,
         clientMsgId: event.client_msg_id,
         state: "working",
         label: "El agente recibió el mensaje",
@@ -368,7 +388,7 @@ export class QuerySocketMonitor {
           cfg: this.options.cfg,
           account: this.options.account,
           event,
-          threadId: this.sessionThreadId,
+          threadId,
           onProgress: (detail) => {
             this.options.log?.debug?.(
               `[${this.options.account.accountId}] ${event.client_msg_id}: ${detail}`,
@@ -393,6 +413,7 @@ export class QuerySocketMonitor {
         );
       }
       const response: CachedResponse = {
+        threadId,
         clientMsgId: event.client_msg_id,
         type: "message",
         content: result.text,
@@ -408,11 +429,12 @@ export class QuerySocketMonitor {
         `[${this.options.account.accountId}] ${event.client_msg_id}: query_terminal_sent total_ms=${Date.now() - receivedAt}`,
       );
     } catch (error) {
-      const existing = this.store.get(event.client_msg_id);
+      const existing = this.store.get(threadId, event.client_msg_id);
       if (existing) {
         throw error;
       }
       const response: CachedResponse = {
+        threadId,
         clientMsgId: event.client_msg_id,
         type: "error",
         content: "El agente no pudo procesar este mensaje.",
@@ -427,7 +449,7 @@ export class QuerySocketMonitor {
         `[${this.options.account.accountId}] ${event.client_msg_id}: query_error_terminal_sent total_ms=${Date.now() - receivedAt}`,
       );
     } finally {
-      this.inFlight.delete(event.client_msg_id);
+      this.inFlight.delete(turnKey);
     }
   }
 

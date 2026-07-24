@@ -28,6 +28,10 @@ export class ResponseStore {
     this.filePath = filePath;
   }
 
+  private key(threadId: string, clientMsgId: string): string {
+    return `${threadId}\u0000${clientMsgId}`;
+  }
+
   async load(now = Date.now()): Promise<void> {
     let document: StoreDocument;
     try {
@@ -48,19 +52,25 @@ export class ResponseStore {
         typeof response.clientMsgId === "string" &&
         now - response.completedAt <= MAX_AGE_MS
       ) {
-        this.responses.set(response.clientMsgId, response);
+        const threadId =
+          typeof response.threadId === "string" && response.threadId
+            ? response.threadId
+            : "legacy";
+        response.threadId = threadId;
+        this.responses.set(this.key(threadId, response.clientMsgId), response);
       }
     }
     this.prune(now);
   }
 
-  get(clientMsgId: string): CachedResponse | undefined {
-    return this.responses.get(clientMsgId);
+  get(threadId: string, clientMsgId: string): CachedResponse | undefined {
+    return this.responses.get(this.key(threadId, clientMsgId));
   }
 
   async set(response: CachedResponse): Promise<void> {
-    this.responses.delete(response.clientMsgId);
-    this.responses.set(response.clientMsgId, response);
+    const key = this.key(response.threadId, response.clientMsgId);
+    this.responses.delete(key);
+    this.responses.set(key, response);
     this.prune(Date.now());
     this.writeChain = this.writeChain.then(() => this.persist());
     await this.writeChain;

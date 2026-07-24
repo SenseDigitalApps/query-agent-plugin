@@ -35,6 +35,7 @@ async function sendOutboundEvent(params: {
     role: "assistant",
     content: params.text,
     client_msg_id: clientMsgId,
+    thread_id: String(params.threadId ?? params.to),
     data: {
       source: "openclaw_outbound",
       to: params.to,
@@ -69,7 +70,7 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
           blurb: "Connect OpenClaw to Query web and Flutter messaging.",
         },
         capabilities: {
-          chatTypes: ["direct"],
+          chatTypes: ["direct", "group"],
           media: true,
         },
         config: {
@@ -126,7 +127,7 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
         },
       }),
       capabilities: {
-        chatTypes: ["direct"],
+        chatTypes: ["direct", "group"],
         media: true,
       },
       gateway: {

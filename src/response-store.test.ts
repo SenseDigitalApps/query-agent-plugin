@@ -20,6 +20,7 @@ describe("ResponseStore", () => {
     const first = new ResponseStore(filePath);
     await first.load();
     await first.set({
+      threadId: "thread-1",
       clientMsgId: "msg-1",
       type: "message",
       content: "Hola desde El agente",
@@ -29,10 +30,40 @@ describe("ResponseStore", () => {
 
     const second = new ResponseStore(filePath);
     await second.load();
-    expect(second.get("msg-1")).toMatchObject({
+    expect(second.get("thread-1", "msg-1")).toMatchObject({
       type: "message",
       content: "Hola desde El agente",
     });
+  });
+
+  it("isolates identical client ids across Query threads", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-response-store-"));
+    temporaryDirectories.push(directory);
+    const store = new ResponseStore(join(directory, "responses.json"));
+    await store.load();
+    await store.set({
+      threadId: "private-1",
+      clientMsgId: "same-id",
+      type: "message",
+      content: "Respuesta privada uno",
+      data: {},
+      completedAt: Date.now(),
+    });
+    await store.set({
+      threadId: "private-2",
+      clientMsgId: "same-id",
+      type: "message",
+      content: "Respuesta privada dos",
+      data: {},
+      completedAt: Date.now(),
+    });
+
+    expect(store.get("private-1", "same-id")?.content).toBe(
+      "Respuesta privada uno",
+    );
+    expect(store.get("private-2", "same-id")?.content).toBe(
+      "Respuesta privada dos",
+    );
   });
 
   it("requires an absolute state path", () => {

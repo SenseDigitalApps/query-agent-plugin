@@ -1,6 +1,7 @@
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { queryPlugin } from "./src/channel.js";
 import { setQueryRuntime } from "./src/runtime.js";
+import { registerQueryCronSync } from "./src/cron-sync.js";
 
 export default defineChannelPluginEntry({
   id: "query",
@@ -8,4 +9,5 @@ export default defineChannelPluginEntry({
   description: "Query web and Flutter messaging channel",
   plugin: queryPlugin,
   setRuntime: setQueryRuntime,
+  registerFull: registerQueryCronSync,
 });

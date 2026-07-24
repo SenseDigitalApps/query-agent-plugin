@@ -8,14 +8,14 @@ const VIDEO_EXTENSIONS = new Set(["m4v", "mov", "mp4", "webm"]);
 const MAX_INLINE_MEDIA_BYTES = 2 * 1024 * 1024;
 
 function extensionForMediaUrl(mediaUrl: string): string {
-  const clean = mediaUrl.split(/[?#]/, 1)[0] ?? mediaUrl;
+  const clean = (mediaUrl.split(/[?#]/, 1)[0] ?? mediaUrl).replace(/\\/g, "/");
   const filename = clean.split("/").pop() ?? "";
   const extension = filename.includes(".") ? filename.split(".").pop() : "";
   return extension?.toLowerCase() ?? "";
 }
 
 function filenameForMediaUrl(mediaUrl: string): string {
-  const clean = mediaUrl.split(/[?#]/, 1)[0] ?? mediaUrl;
+  const clean = (mediaUrl.split(/[?#]/, 1)[0] ?? mediaUrl).replace(/\\/g, "/");
   return clean.split("/").pop() || "attachment";
 }
 
@@ -112,6 +112,12 @@ export async function queryAttachmentForMediaSource(
 
 function isLocalMediaPath(mediaUrl: string): boolean {
   if (!isAbsolute(mediaUrl)) return false;
-  if (/^[a-z][a-z0-9+.-]*:/i.test(mediaUrl)) return false;
-  return mediaUrl.includes("/.openclaw/media/outbound/");
+  if (
+    /^[a-z][a-z0-9+.-]*:/i.test(mediaUrl) &&
+    !/^[a-z]:[\\/]/i.test(mediaUrl)
+  )
+    return false;
+  return mediaUrl
+    .replace(/\\/g, "/")
+    .includes("/.openclaw/media/outbound/");
 }
