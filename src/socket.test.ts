@@ -59,7 +59,26 @@ describe("QuerySocketMonitor", () => {
       responseTimeoutMs: 0,
       stateFile: join(directory, "responses.json"),
     };
-    const dispatchMessage = vi.fn(async () => ({ text: "¡Hola!", mediaUrls: [] }));
+    const dispatchMessage = vi.fn(
+      async (params: {
+        onActivity?: (activity: {
+          label: string;
+          stage?: string;
+          toolName?: string;
+          progress?: number;
+        }) => void;
+      }) => {
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        params.onActivity?.({
+          label: "Consultando inventario",
+          stage: "tool",
+          toolName: "inventario",
+          progress: 40,
+        });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { text: "¡Hola!", mediaUrls: [] };
+      },
+    );
     let status = { accountId: "default" } as never;
     const monitor = new QuerySocketMonitor({
       cfg: { channels: { query: {} } } as never,
@@ -98,6 +117,16 @@ describe("QuerySocketMonitor", () => {
       type: "activity",
       client_msg_id: "msg-7",
       data: { state: "working", stage: "received" },
+    });
+    await expect(receive(socket)).resolves.toMatchObject({
+      type: "activity",
+      client_msg_id: "msg-7",
+      data: {
+        label: "Consultando inventario",
+        stage: "tool",
+        tool_name: "inventario",
+        progress: 40,
+      },
     });
     await expect(receive(socket)).resolves.toMatchObject({
       type: "message",

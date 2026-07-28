@@ -99,7 +99,9 @@ describe("Query inbound body", () => {
       const materialized = await materializeInboundAudioAttachments(event, { mediaDir });
       const attachment = materialized.data?.attachments?.[0];
       expect(attachment?.local_path).toMatch(
-        new RegExp(`^${mediaDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}/voice-m4a-.*nota-query\\.m4a$`),
+        new RegExp(
+          `^${mediaDir.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")}[\\\\/]voice-m4a-.*nota-query\\.m4a$`,
+        ),
       );
       expect(await readFile(attachment?.local_path ?? "")).toEqual(audioBytes);
 

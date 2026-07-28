@@ -1,9 +1,18 @@
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import {
+  onAgentEvent,
+  type AgentEventPayload,
+} from "openclaw/plugin-sdk/agent-harness-runtime";
 import { createHash } from "node:crypto";
 import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join } from "node:path";
-import type { QueryConfig, QueryUserMessageEvent, ResolvedQueryAccount } from "./types.js";
+import type {
+  QueryAgentActivity,
+  QueryConfig,
+  QueryUserMessageEvent,
+  ResolvedQueryAccount,
+} from "./types.js";
 import { CHANNEL_ID } from "./types.js";
 import { getQueryRuntime } from "./runtime.js";
 
@@ -11,6 +20,62 @@ export type QueryAgentResult = {
   text: string;
   mediaUrls: string[];
 };
+
+function boundedText(value: unknown, maxLength = 80): string | undefined {
+  if (typeof value !== "string") return undefined;
+  const text = value.trim();
+  return text ? text.slice(0, maxLength) : undefined;
+}
+
+function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | undefined {
+  const phase = boundedText(event.data.phase ?? event.data.state, 32)?.toLowerCase();
+  const toolName = boundedText(
+    event.data.toolName ?? event.data.tool_name ?? event.data.name ?? event.data.tool,
+    64,
+  );
+  const rawProgress = Number(event.data.progress);
+  const progress = Number.isFinite(rawProgress)
+    ? Math.max(0, Math.min(100, rawProgress))
+    : undefined;
+
+  if (event.stream === "lifecycle") {
+    if (phase === "start") {
+      return { label: "Analizando la solicitud", stage: "agent", progress: 5 };
+    }
+    if (phase === "finishing") {
+      return { label: "Preparando la respuesta", stage: "response", progress: 90 };
+    }
+    if (phase === "fallback_step") {
+      return { label: "Buscando una alternativa", stage: "agent" };
+    }
+    return undefined;
+  }
+  if (event.stream === "tool") {
+    const finished = phase === "end" || phase === "done" || phase === "complete";
+    return {
+      label: toolName
+        ? finished
+          ? `${toolName} completado`
+          : `Usando ${toolName}`
+        : finished
+          ? "Consulta completada"
+          : "Consultando herramientas",
+      stage: "tool",
+      toolName,
+      progress,
+    };
+  }
+  if (event.stream === "compaction") {
+    return { label: "Organizando el contexto", stage: "context" };
+  }
+  if (event.stream === "assistant") {
+    return { label: "Redactando la respuesta", stage: "response", progress: 85 };
+  }
+  if (event.stream === "thinking" || event.stream === "plan") {
+    return { label: "Analizando la información", stage: "thinking" };
+  }
+  return undefined;
+}
 
 type QueryLog = {
   debug?: (message: string) => void;
@@ -258,6 +323,7 @@ export async function dispatchQueryMessage(params: {
   event: QueryUserMessageEvent;
   threadId: string;
   onProgress?: (detail: string) => void;
+  onActivity?: (activity: QueryAgentActivity) => void;
   log?: QueryLog;
 }): Promise<QueryAgentResult> {
   const core = getQueryRuntime();
@@ -328,38 +394,62 @@ export async function dispatchQueryMessage(params: {
     agentId: route.agentId,
   });
 
-  await core.channel.inbound.dispatchReply({
-    cfg,
-    channel: CHANNEL_ID,
-    accountId: account.accountId,
-    agentId: route.agentId,
-    routeSessionKey: route.sessionKey,
-    storePath,
-    ctxPayload,
-    recordInboundSession: core.channel.session.recordInboundSession,
-    dispatchReplyWithBufferedBlockDispatcher:
-      core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
-    delivery: {
-      deliver: async (payload) => {
-        if (payload.text?.trim()) {
-          texts.push(payload.text.trim());
-          params.onProgress?.("El agente generó parte de la respuesta");
-        }
-        mediaUrls.push(...(payload.mediaUrls ?? []));
-        if (payload.mediaUrl) mediaUrls.push(payload.mediaUrl);
-      },
-      onError: (error, info) => {
-        params.onProgress?.(`Error de entrega ${info.kind}: ${String(error)}`);
-      },
-    },
-    replyPipeline: {},
-    record: {
-      onRecordError: (error) => {
-        params.onProgress?.(`No se pudo registrar la sesión: ${String(error)}`);
-      },
-    },
-    messageId: event.client_msg_id,
+  let runId: string | undefined;
+  const unsubscribe = onAgentEvent((agentEvent) => {
+    if (agentEvent.sessionKey !== route.sessionKey) return;
+    if (agentEvent.agentId && agentEvent.agentId !== route.agentId) return;
+    const phase = boundedText(agentEvent.data.phase, 32)?.toLowerCase();
+    if (!runId) {
+      if (agentEvent.stream !== "lifecycle" || phase !== "start") return;
+      runId = agentEvent.runId;
+    }
+    if (agentEvent.runId !== runId) return;
+    const activity = activityFromAgentEvent(agentEvent);
+    if (activity) params.onActivity?.({ ...activity, runId });
   });
+
+  try {
+    await core.channel.inbound.dispatchReply({
+      cfg,
+      channel: CHANNEL_ID,
+      accountId: account.accountId,
+      agentId: route.agentId,
+      routeSessionKey: route.sessionKey,
+      storePath,
+      ctxPayload,
+      recordInboundSession: core.channel.session.recordInboundSession,
+      dispatchReplyWithBufferedBlockDispatcher:
+        core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
+      delivery: {
+        deliver: async (payload) => {
+          if (payload.text?.trim()) {
+            texts.push(payload.text.trim());
+            params.onProgress?.("El agente generó parte de la respuesta");
+            params.onActivity?.({
+              label: "Preparando la respuesta",
+              stage: "response",
+              progress: 90,
+              runId,
+            });
+          }
+          mediaUrls.push(...(payload.mediaUrls ?? []));
+          if (payload.mediaUrl) mediaUrls.push(payload.mediaUrl);
+        },
+        onError: (error, info) => {
+          params.onProgress?.(`Error de entrega ${info.kind}: ${String(error)}`);
+        },
+      },
+      replyPipeline: {},
+      record: {
+        onRecordError: (error) => {
+          params.onProgress?.(`No se pudo registrar la sesión: ${String(error)}`);
+        },
+      },
+      messageId: event.client_msg_id,
+    });
+  } finally {
+    unsubscribe();
+  }
 
   return {
     text: texts.join("\n\n").trim(),

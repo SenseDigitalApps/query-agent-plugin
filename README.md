@@ -161,6 +161,7 @@ Al enviar `hola` desde React o Flutter, el flujo esperado es:
 Query REST/WS -> plugin: message(client_msg_id)
 plugin -> Query: activity(state=working)       inmediato
 plugin -> OpenClaw: turno del agente
+plugin -> Query: activity/tool/heartbeat       mientras sigue trabajando
 plugin -> Query: message(client_msg_id)        respuesta terminal
 ```
 
@@ -178,6 +179,10 @@ reconecta con espera exponencial de 0.5 a 15 segundos. Además envía un ping ca
   `<OPENCLAW_STATE_DIR>/query-channel/default/responses.json`.
 - El archivo se escribe de forma atómica y con permisos restringidos.
 - `responseTimeoutMs` vale `0` de forma predeterminada (sin timeout artificial).
+- El plugin envía estados operativos seguros y un heartbeat de actividad cada
+  20 segundos. Puede ajustarse con `QUERY_ACTIVITY_HEARTBEAT_MS` (mínimo 5000).
+- No se exponen pensamientos ni razonamiento interno: solo etapas genéricas,
+  herramientas utilizadas y progreso disponible.
 - Los adjuntos entrantes se entregan al contexto multimedia del agente; las
   URLs multimedia devueltas por el agente regresan como adjuntos de Query.
 

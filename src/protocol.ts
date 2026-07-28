@@ -66,15 +66,33 @@ export function activityEvent(params: {
   detail?: string;
   stage?: string;
   progress?: number;
+  toolName?: string;
+  runId?: string;
+  heartbeat?: boolean;
+  elapsedMs?: number;
 }): QueryOutboundEvent {
-  const { threadId, clientMsgId, ...data } = params;
+  const {
+    threadId,
+    clientMsgId,
+    toolName,
+    runId,
+    elapsedMs,
+    ...data
+  } = params;
   return {
     type: "activity",
     role: "assistant",
     content: "",
     client_msg_id: clientMsgId,
     thread_id: threadId,
-    data: Object.fromEntries(Object.entries(data).filter(([, value]) => value !== undefined)),
+    data: Object.fromEntries(
+      Object.entries({
+        ...data,
+        tool_name: toolName,
+        run_id: runId,
+        elapsed_ms: elapsedMs,
+      }).filter(([, value]) => value !== undefined),
+    ),
   };
 }
 

@@ -32,6 +32,10 @@ const QUERY_TTS_BIN = process.env.QUERY_TTS_BIN;
 const QUERY_TTS_VOICE = process.env.QUERY_TTS_VOICE ?? "es-CO-GonzaloNeural";
 const QUERY_TTS_LANG = process.env.QUERY_TTS_LANG ?? "es-CO";
 const QUERY_TTS_RATE = process.env.QUERY_TTS_RATE ?? "+15%";
+const QUERY_ACTIVITY_HEARTBEAT_MS = Math.max(
+  5_000,
+  Number(process.env.QUERY_ACTIVITY_HEARTBEAT_MS) || 20_000,
+);
 
 export type QuerySocketOptions = {
   cfg: QueryConfig;
@@ -397,6 +401,52 @@ export class QuerySocketMonitor {
     );
     this.patchStatus({ lastInboundAt: Date.now() });
 
+    let lastActivityLabel = "El agente está trabajando";
+    const emitTurnActivity = (
+      activity: {
+        label: string;
+        detail?: string;
+        stage?: string;
+        toolName?: string;
+        progress?: number;
+        runId?: string;
+      },
+      heartbeat = false,
+    ) => {
+      lastActivityLabel = activity.label || lastActivityLabel;
+      try {
+        this.send(
+          activityEvent({
+            threadId,
+            clientMsgId: event.client_msg_id,
+            state: "working",
+            label: lastActivityLabel,
+            detail: activity.detail,
+            stage: activity.stage,
+            toolName: activity.toolName,
+            progress: activity.progress,
+            runId: activity.runId,
+            heartbeat,
+            elapsedMs: Date.now() - receivedAt,
+          }),
+        );
+      } catch (error) {
+        this.options.log?.debug?.(
+          `[${this.options.account.accountId}] ${event.client_msg_id}: activity delivery deferred: ${String(error)}`,
+        );
+      }
+    };
+    const activityHeartbeat = setInterval(() => {
+      emitTurnActivity(
+        {
+          label: lastActivityLabel,
+          stage: "heartbeat",
+        },
+        true,
+      );
+    }, QUERY_ACTIVITY_HEARTBEAT_MS);
+    activityHeartbeat.unref?.();
+
     try {
       const dispatchAt = Date.now();
       this.options.log?.info?.(
@@ -413,6 +463,7 @@ export class QuerySocketMonitor {
               `[${this.options.account.accountId}] ${event.client_msg_id}: ${detail}`,
             );
           },
+          onActivity: (activity) => emitTurnActivity(activity),
           log: this.options.log,
         }),
         this.options.account.responseTimeoutMs,
@@ -479,6 +530,7 @@ export class QuerySocketMonitor {
         `[${this.options.account.accountId}] ${event.client_msg_id}: query_error_terminal_sent total_ms=${Date.now() - receivedAt}`,
       );
     } finally {
+      clearInterval(activityHeartbeat);
       this.inFlight.delete(turnKey);
     }
   }

@@ -113,6 +113,16 @@ export type QueryInboundEvent =
 
 export type QueryActivityState = "queued" | "working" | "done" | "error";
 
+export type QueryAgentActivity = {
+  state?: QueryActivityState;
+  label: string;
+  detail?: string;
+  stage?: string;
+  toolName?: string;
+  progress?: number;
+  runId?: string;
+};
+
 export type QueryOutboundEvent = {
   type: "activity" | "message" | "error" | "schedule.sync";
   role: "assistant" | "system";
