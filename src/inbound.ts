@@ -1,4 +1,8 @@
 import { buildChannelInboundEventContext } from "openclaw/plugin-sdk/channel-inbound";
+import { createHash } from "node:crypto";
+import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { homedir } from "node:os";
+import { basename, extname, isAbsolute, join } from "node:path";
 import type { QueryConfig, QueryUserMessageEvent, ResolvedQueryAccount } from "./types.js";
 import { CHANNEL_ID } from "./types.js";
 import { getQueryRuntime } from "./runtime.js";
@@ -7,6 +11,16 @@ export type QueryAgentResult = {
   text: string;
   mediaUrls: string[];
 };
+
+type QueryLog = {
+  debug?: (message: string) => void;
+  info?: (message: string) => void;
+  warn?: (message: string) => void;
+  error?: (message: string) => void;
+};
+
+const DEFAULT_INBOUND_MEDIA_DIR =
+  process.env.QUERY_INBOUND_MEDIA_DIR ?? join(homedir(), ".openclaw", "media", "inbound");
 
 function mediaKind(kind: string | undefined) {
   if (kind === "image" || kind === "audio" || kind === "video") return kind;
@@ -40,6 +54,147 @@ function attachmentTranscript(attachment: {
   );
 }
 
+function attachmentDuration(attachment: {
+  duration?: number;
+  duration_seconds?: number;
+  duration_ms?: number;
+}): string {
+  const seconds =
+    attachment.duration_seconds ??
+    attachment.duration ??
+    (attachment.duration_ms === undefined ? undefined : attachment.duration_ms / 1000);
+  return typeof seconds === "number" && Number.isFinite(seconds) && seconds > 0
+    ? `${Number(seconds.toFixed(2))}s`
+    : "";
+}
+
+function originalFilename(attachment: { name?: string; url: string }, index: number): string {
+  const cleanName = attachment.name?.trim();
+  if (cleanName) return cleanName;
+  try {
+    const parsed = new URL(attachment.url);
+    const fromUrl = basename(parsed.pathname);
+    if (fromUrl) return fromUrl;
+  } catch {
+    const cleanPath = attachment.url.split(/[?#]/, 1)[0]?.replace(/\\/g, "/") ?? "";
+    const fromPath = cleanPath.split("/").pop();
+    if (fromPath) return fromPath;
+  }
+  return `audio-${index + 1}`;
+}
+
+function safeFilename(filename: string): string {
+  const extension = extname(filename).slice(0, 16);
+  const stem = basename(filename, extension)
+    .normalize("NFKD")
+    .replace(/[^\w.-]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 80);
+  return `${stem || "audio"}${extension || ".bin"}`;
+}
+
+function stableInboundAudioPath(params: {
+  event: QueryUserMessageEvent;
+  attachment: { id?: string | number; name?: string; url: string };
+  index: number;
+  mediaDir: string;
+}): string {
+  const filename = safeFilename(originalFilename(params.attachment, params.index));
+  const sourceKey = [
+    params.event.client_msg_id,
+    params.attachment.id === undefined ? "" : String(params.attachment.id),
+    params.attachment.url,
+    params.index,
+  ].join("|");
+  const digest = createHash("sha256").update(sourceKey).digest("hex").slice(0, 12);
+  return join(params.mediaDir, `${params.event.client_msg_id}-${digest}-${filename}`);
+}
+
+function isDataUrl(value: string): boolean {
+  return /^data:/i.test(value);
+}
+
+function isHttpUrl(value: string): boolean {
+  return /^https?:\/\//i.test(value);
+}
+
+function isLocalPath(value: string): boolean {
+  if (!isAbsolute(value)) return false;
+  return !/^[a-z][a-z0-9+.-]*:/i.test(value) || /^[a-z]:[\\/]/i.test(value);
+}
+
+async function bytesForAttachmentUrl(url: string): Promise<Buffer> {
+  if (isDataUrl(url)) {
+    const match = /^data:([^;,]+)?(;base64)?,(.*)$/is.exec(url);
+    if (!match) throw new Error("Invalid data URL");
+    const payload = decodeURIComponent(match[3] ?? "");
+    return match[2] ? Buffer.from(payload, "base64") : Buffer.from(payload, "utf8");
+  }
+  if (isLocalPath(url)) {
+    return readFile(url);
+  }
+  if (isHttpUrl(url)) {
+    const response = await fetch(url);
+    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+    return Buffer.from(await response.arrayBuffer());
+  }
+  throw new Error(`Unsupported media URL: ${url.slice(0, 80)}`);
+}
+
+export async function materializeInboundAudioAttachments(
+  event: QueryUserMessageEvent,
+  options: { mediaDir?: string; log?: QueryLog } = {},
+): Promise<QueryUserMessageEvent> {
+  const attachments = event.data?.attachments ?? [];
+  if (attachments.length === 0 || !attachments.some(isAudioAttachment)) return event;
+
+  const mediaDir = options.mediaDir ?? DEFAULT_INBOUND_MEDIA_DIR;
+  await mkdir(mediaDir, { recursive: true });
+  const enrichedAttachments = await Promise.all(
+    attachments.map(async (attachment, index) => {
+      if (!isAudioAttachment(attachment)) return attachment;
+      if (attachment.local_path) return attachment;
+
+      const localPath = stableInboundAudioPath({ event, attachment, index, mediaDir });
+      try {
+        try {
+          const existing = await stat(localPath);
+          if (existing.isFile() && existing.size > 0) {
+            options.log?.debug?.(
+              `query_inbound_audio_materialized_existing msg=${event.client_msg_id} path=${localPath} bytes=${existing.size}`,
+            );
+            return { ...attachment, local_path: localPath, size: attachment.size ?? existing.size };
+          }
+        } catch {
+          // File does not exist yet.
+        }
+
+        const bytes = await bytesForAttachmentUrl(attachment.url);
+        await writeFile(localPath, bytes, { flag: "wx" }).catch(async (error: unknown) => {
+          if ((error as { code?: string }).code !== "EEXIST") throw error;
+        });
+        options.log?.info?.(
+          `query_inbound_audio_materialized msg=${event.client_msg_id} attachment=${attachment.id ?? index} path=${localPath} bytes=${bytes.length}`,
+        );
+        return { ...attachment, local_path: localPath, size: attachment.size ?? bytes.length };
+      } catch (error) {
+        options.log?.warn?.(
+          `query_inbound_audio_materialize_failed msg=${event.client_msg_id} attachment=${attachment.id ?? index} url=${attachment.url} error=${String(error)}`,
+        );
+        return attachment;
+      }
+    }),
+  );
+
+  return {
+    ...event,
+    data: {
+      ...event.data,
+      attachments: enrichedAttachments,
+    },
+  };
+}
+
 function messageRequestsAudio(event: QueryUserMessageEvent): boolean {
   const content = event.content.toLowerCase();
   const asksForAudio =
@@ -59,10 +214,25 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
   const rawBody = rawBodyForAgent(event);
   const audioLines = audioAttachments(event).flatMap((attachment, index) => {
     const transcript = attachmentTranscript(attachment);
-    const label = attachment.name?.trim() || `audio ${index + 1}`;
-    if (transcript) return [`Nota de voz (${label}) transcrita: ${transcript}`];
+    const filename = originalFilename(attachment, index);
+    const duration = attachmentDuration(attachment);
+    const fields = [
+      `AudioAttachment ${index + 1}:`,
+      `Filename: ${filename}`,
+      `MediaType: ${attachment.mime_type || "audio/unknown"}`,
+      attachment.local_path ? `LocalMediaPath: ${attachment.local_path}` : "",
+      `MediaPath: ${attachment.url}`,
+      isHttpUrl(attachment.url) ? `MediaUrl: ${attachment.url}` : "",
+      duration ? `Duration: ${duration}` : "",
+      transcript ? `Transcript: [system-generated] ${transcript}` : "",
+      "Instruction: usa este audio como entrada directa del usuario. Si LocalMediaPath existe, úsalo primero; si no, usa MediaUrl/MediaPath como fallback. No busques transcripts internos ni JSONL de sesión para entender este audio.",
+    ].filter(Boolean);
+    if (transcript) return [fields.join("\n")];
     return [
-      `Nota de voz (${label}) adjunta sin texto. Debes usar el audio adjunto como entrada del usuario; si no puedes acceder a su contenido, dilo claramente antes de actuar.`,
+      [
+        ...fields,
+        "Transcript: no disponible; debes acceder al archivo local o a la URL remota para interpretar la nota de voz.",
+      ].join("\n"),
     ];
   });
   const context = [
@@ -88,9 +258,11 @@ export async function dispatchQueryMessage(params: {
   event: QueryUserMessageEvent;
   threadId: string;
   onProgress?: (detail: string) => void;
+  log?: QueryLog;
 }): Promise<QueryAgentResult> {
   const core = getQueryRuntime();
-  const { cfg, account, event, threadId } = params;
+  const { cfg, account, threadId } = params;
+  const event = await materializeInboundAudioAttachments(params.event, { log: params.log });
   const peerId = threadId || account.accountId;
   const threadType = event.data?.thread_type;
   const sender = event.data?.sender;
@@ -137,9 +309,11 @@ export async function dispatchQueryMessage(params: {
       commandBody: agentBody,
     },
     media: attachments.map((attachment) => ({
+      path: isAudioAttachment(attachment) ? attachment.local_path : undefined,
       url: attachment.url,
       contentType: attachment.mime_type,
       kind: mediaKind(attachment.kind),
+      transcribed: isAudioAttachment(attachment) ? Boolean(attachmentTranscript(attachment)) : undefined,
       messageId: attachment.id === undefined ? undefined : String(attachment.id),
     })),
     access: {

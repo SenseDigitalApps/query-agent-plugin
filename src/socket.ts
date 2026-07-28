@@ -413,6 +413,7 @@ export class QuerySocketMonitor {
               `[${this.options.account.accountId}] ${event.client_msg_id}: ${detail}`,
             );
           },
+          log: this.options.log,
         }),
         this.options.account.responseTimeoutMs,
       );
