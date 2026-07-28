@@ -103,6 +103,25 @@ function eventRequestsAudio(event: QueryUserMessageEvent): boolean {
   return asksForAudio || hasInboundAudio;
 }
 
+function shouldSendAudioOnly(event: QueryUserMessageEvent): boolean {
+  return eventRequestsAudio(event);
+}
+
+function isAudioAttachment(attachment: QueryAttachment): boolean {
+  const mimeType = attachment.mime_type?.toLowerCase() ?? "";
+  return attachment.kind === "audio" || mimeType.startsWith("audio/");
+}
+
+function oneVoiceNote(attachments: QueryAttachment[]): QueryAttachment[] {
+  let keptAudio = false;
+  return attachments.filter((attachment) => {
+    if (!isAudioAttachment(attachment)) return true;
+    if (keptAudio) return false;
+    keptAudio = true;
+    return true;
+  });
+}
+
 async function buildAssistantAudioAttachment(
   event: QueryUserMessageEvent,
   text: string,
@@ -401,24 +420,34 @@ export class QuerySocketMonitor {
       this.options.log?.info?.(
         `[${this.options.account.accountId}] ${event.client_msg_id}: query_agent_done agent_ms=${agentDoneAt - dispatchAt} total_ms=${agentDoneAt - receivedAt}`,
       );
-      const mediaAttachments = await Promise.all(
+      let mediaAttachments = await Promise.all(
         result.mediaUrls.map((url) => queryAttachmentForMediaSource(url)),
       );
       try {
-        const assistantAudio = await buildAssistantAudioAttachment(event, result.text);
+        const alreadyHasAudio = mediaAttachments.some(isAudioAttachment);
+        const assistantAudio = alreadyHasAudio
+          ? undefined
+          : await buildAssistantAudioAttachment(event, result.text);
         if (assistantAudio) mediaAttachments.push(assistantAudio);
       } catch (error) {
         this.options.log?.warn?.(
           `[${this.options.account.accountId}] ${event.client_msg_id}: query_assistant_audio_failed error=${String(error)}`,
         );
       }
+      mediaAttachments = oneVoiceNote(mediaAttachments);
+      const hasAudioAttachment = mediaAttachments.some(isAudioAttachment);
+      const responseText =
+        hasAudioAttachment && shouldSendAudioOnly(event)
+          ? ""
+          : result.text.trim();
       const response: CachedResponse = {
         threadId,
         clientMsgId: event.client_msg_id,
         type: "message",
-        content: result.text,
+        content: responseText,
         data: {
           attachments: mediaAttachments,
+          ...(responseText ? { caption: responseText, text: responseText } : {}),
         },
         completedAt: Date.now(),
       };

@@ -18,27 +18,60 @@ function uniqueNonEmpty(values: Array<string | undefined>): string[] {
   return [...new Set(values.map((value) => value?.trim()).filter(Boolean) as string[])];
 }
 
+function isAudioAttachment(attachment: { kind?: string; mime_type?: string }): boolean {
+  const mimeType = attachment.mime_type?.toLowerCase() ?? "";
+  return attachment.kind === "audio" || mimeType.startsWith("audio/");
+}
+
+function audioAttachments(event: QueryUserMessageEvent) {
+  return (event.data?.attachments ?? []).filter(isAudioAttachment);
+}
+
+function attachmentTranscript(attachment: {
+  transcript?: string;
+  transcription?: string;
+  text?: string;
+}): string {
+  return (
+    attachment.transcript?.trim() ||
+    attachment.transcription?.trim() ||
+    attachment.text?.trim() ||
+    ""
+  );
+}
+
 function messageRequestsAudio(event: QueryUserMessageEvent): boolean {
   const content = event.content.toLowerCase();
   const asksForAudio =
     /\b(audio|voz|nota de voz|voice note|voice|habl[aá]me|responde(?:me)? en voz|m[aá]ndame .*voz)\b/i.test(
       content,
     );
-  const hasInboundAudio = (event.data?.attachments ?? []).some((attachment) => {
-    const mimeType = attachment.mime_type?.toLowerCase() ?? "";
-    return attachment.kind === "audio" || mimeType.startsWith("audio/");
-  });
-  return asksForAudio || hasInboundAudio;
+  return asksForAudio || audioAttachments(event).length > 0;
 }
 
-function bodyForAgent(event: QueryUserMessageEvent): string {
-  const rawBody = event.content.trim() || "[Attachment]";
+export function rawBodyForAgent(event: QueryUserMessageEvent): string {
+  if (event.content.trim()) return event.content.trim();
+  if (audioAttachments(event).length > 0) return "[Nota de voz adjunta]";
+  return "[Adjunto]";
+}
+
+export function bodyForAgent(event: QueryUserMessageEvent): string {
+  const rawBody = rawBodyForAgent(event);
+  const audioLines = audioAttachments(event).flatMap((attachment, index) => {
+    const transcript = attachmentTranscript(attachment);
+    const label = attachment.name?.trim() || `audio ${index + 1}`;
+    if (transcript) return [`Nota de voz (${label}) transcrita: ${transcript}`];
+    return [
+      `Nota de voz (${label}) adjunta sin texto. Debes usar el audio adjunto como entrada del usuario; si no puedes acceder a su contenido, dilo claramente antes de actuar.`,
+    ];
+  });
   const context = [
     `Canal Query: ${event.data?.thread_name || event.thread_id || "desconocido"}`,
     `Tipo: ${event.data?.thread_type || "desconocido"}`,
     event.data?.sender?.private_thread_id
       ? `Canal privado del remitente: ${event.data.sender.private_thread_id}`
       : "",
+    ...audioLines,
     "Si creas una tarea programada para una persona, configura la entrega al canal privado indicado; no uses un canal compartido como destino individual.",
   ]
     .filter(Boolean)
@@ -73,7 +106,7 @@ export async function dispatchQueryMessage(params: {
     accountId: account.accountId,
     peer: { kind: conversationKind, id: peerId },
   });
-  const rawBody = event.content.trim() || "[Attachment]";
+  const rawBody = rawBodyForAgent(event);
   const agentBody = bodyForAgent(event);
   const attachments = event.data?.attachments ?? [];
   const ctxPayload = buildChannelInboundEventContext({

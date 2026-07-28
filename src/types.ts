@@ -43,6 +43,9 @@ export type QueryAttachment = {
   kind?: "image" | "file" | "audio" | "video" | string;
   name?: string;
   mime_type?: string;
+  transcript?: string;
+  transcription?: string;
+  text?: string;
   is_voice_note?: boolean;
   voice?: boolean;
   size?: number;
