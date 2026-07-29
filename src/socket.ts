@@ -21,6 +21,7 @@ import {
   queryUploadUrlFor,
   uploadArtifactToQuery,
 } from "./query-upload.js";
+import { rememberDelegatedAuth } from "./delegated-store.js";
 import { defaultResponseStorePath, ResponseStore } from "./response-store.js";
 import type {
   CachedResponse,
@@ -383,6 +384,9 @@ export class QuerySocketMonitor {
     if (!threadId) {
       throw new Error("Query message is missing thread_id.");
     }
+    // La credencial del turno queda disponible para las herramientas Query, que
+    // se ejecutan despues y fuera de este contexto.
+    rememberDelegatedAuth(threadId, event.data?.delegated_auth, this.options.account.url);
     const turnKey = `${threadId}\u0000${event.client_msg_id}`;
     const cached = this.store.get(threadId, event.client_msg_id);
     if (cached) {

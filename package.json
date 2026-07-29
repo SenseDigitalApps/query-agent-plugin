@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "node-edge-tts": "^1.2.10",
+    "typebox": "^1.3.3",
     "ws": "^8.18.3"
   },
   "devDependencies": {
@@ -36,7 +37,8 @@
   },
   "openclaw": {
     "extensions": [
-      "./dist/index.js"
+      "./dist/index.js",
+      "./dist/tools-entry.js"
     ],
     "setupEntry": "./dist/setup-entry.js",
     "compat": {
