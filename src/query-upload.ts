@@ -70,16 +70,58 @@ async function readArtifact(path: string): Promise<{ blob: Blob; size: number }>
   return { blob: await openAsBlob(path), size: stats.size };
 }
 
+/**
+ * Endpoint de ingesta para envios que no nacen de un turno (notificaciones,
+ * cron): no hay persona delegante, asi que se autentica con la credencial de
+ * emparejamiento del propio agente.
+ */
+export function queryOutboundUploadUrlFor(socketUrl: string, botId: string | number): string {
+  const parsed = new URL(socketUrl);
+  parsed.protocol = parsed.protocol === "ws:" ? "http:" : "https:";
+  parsed.search = "";
+  parsed.hash = "";
+  parsed.pathname = `/api/v4/openclaw-agent/bots/${botId}/attachments/`;
+  return parsed.toString();
+}
+
+/** El bot id viaja en la propia ruta del WebSocket de emparejamiento. */
+export function botIdFromSocketUrl(socketUrl: string): string {
+  const match = new URL(socketUrl).pathname.match(/openclaw-agent\/(\d+)/);
+  return match?.[1] ?? "";
+}
+
+export async function uploadOutboundArtifactToQuery(params: {
+  uploadUrl: string;
+  token: string;
+  to: string;
+  path: string;
+  attachment: QueryAttachment;
+  fetchImpl?: typeof fetch;
+}): Promise<QueryAttachment> {
+  return uploadArtifactToQuery({
+    uploadUrl: params.uploadUrl,
+    token: params.token,
+    path: params.path,
+    attachment: params.attachment,
+    fetchImpl: params.fetchImpl,
+    tokenHeader: "X-Agent-Token",
+    extraFields: { to: params.to },
+  });
+}
+
 export async function uploadArtifactToQuery(params: {
   uploadUrl: string;
   token: string;
   path: string;
   attachment: QueryAttachment;
   fetchImpl?: typeof fetch;
+  /** Delegada por defecto; el envio outbound usa la credencial del agente. */
+  tokenHeader?: string;
+  extraFields?: Record<string, string>;
 }): Promise<QueryAttachment> {
   const { uploadUrl, token, path, attachment } = params;
   if (!token) {
-    throw new QueryUploadError("token_missing", "Query did not provide a delegated token.");
+    throw new QueryUploadError("token_missing", "Query did not provide a token.");
   }
   const { blob, size } = await readArtifact(path);
   const name = attachment.name || basename(path) || "artifact";
@@ -87,11 +129,14 @@ export async function uploadArtifactToQuery(params: {
   form.append("file", blob, name);
   form.append("kind", attachment.kind ?? "file");
   if (attachment.mime_type) form.append("mime_type", attachment.mime_type);
+  for (const [field, value] of Object.entries(params.extraFields ?? {})) {
+    form.append(field, value);
+  }
 
   const doFetch = params.fetchImpl ?? fetch;
   const response = await doFetch(uploadUrl, {
     method: "POST",
-    headers: { "X-Query-Delegated-Token": token },
+    headers: { [params.tokenHeader ?? "X-Query-Delegated-Token"]: token },
     body: form,
   });
   if (!response.ok) {

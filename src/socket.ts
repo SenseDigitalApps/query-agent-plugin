@@ -240,6 +240,10 @@ export class QuerySocketMonitor {
     );
   }
 
+  get account(): ResolvedQueryAccount {
+    return this.options.account;
+  }
+
   async start(): Promise<void> {
     await this.store.load();
     activeMonitors.set(this.options.account.accountId, this);
@@ -686,6 +690,13 @@ export class QuerySocketMonitor {
 }
 
 const activeMonitors = new Map<string, QuerySocketMonitor>();
+
+/** Cuenta viva de una sesion, para derivar el endpoint de subida y su token. */
+export function getQueryAccountForUpload(
+  accountId: string,
+): ResolvedQueryAccount | undefined {
+  return activeMonitors.get(accountId)?.account;
+}
 
 export function sendQueryOutboundEvent(accountId: string, event: QueryOutboundEvent): void {
   const monitor = activeMonitors.get(accountId);

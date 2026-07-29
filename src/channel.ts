@@ -5,7 +5,13 @@ import {
   type OpenClawConfig,
 } from "openclaw/plugin-sdk/channel-core";
 import { inspectQueryAccount, listQueryAccountIds, resolveQueryAccount } from "./config.js";
-import { queryAttachmentForMediaSource } from "./media.js";
+import { queryAttachmentForMediaSource, queryAttachmentForMediaUrl } from "./media.js";
+import {
+  botIdFromSocketUrl,
+  isLocalArtifactPath,
+  queryOutboundUploadUrlFor,
+  uploadOutboundArtifactToQuery,
+} from "./query-upload.js";
 import {
   CHANNEL_ID,
   DEFAULT_ACCOUNT_ID,
@@ -17,6 +23,38 @@ import {
 function newOutboundClientMsgId(deliveryQueueId?: string): string {
   if (deliveryQueueId?.trim()) return deliveryQueueId.trim();
   return `openclaw-outbound-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+/**
+ * Un envio outbound no nace de un turno, asi que no hay credencial delegada:
+ * el archivo se sube con la credencial de emparejamiento del agente y viaja con
+ * la url oficial. Mandar la ruta del workspace producia un enlace que Query no
+ * puede servir y que el navegador resolvia contra su propio dominio.
+ */
+async function resolveOutboundAttachment(
+  accountId: string | null | undefined,
+  to: string,
+  mediaUrl: string,
+  options: { audioAsVoice?: boolean; forceDocument?: boolean },
+) {
+  if (!isLocalArtifactPath(mediaUrl)) {
+    return queryAttachmentForMediaSource(mediaUrl, options);
+  }
+  const { getQueryAccountForUpload } = await import("./socket.js");
+  const account = getQueryAccountForUpload(accountId ?? DEFAULT_ACCOUNT_ID);
+  const botId = account ? botIdFromSocketUrl(account.url) : "";
+  if (!account || !botId) {
+    // Sin cuenta activa no hay a donde subir; se mantiene el comportamiento
+    // anterior en vez de perder el envio entero.
+    return queryAttachmentForMediaSource(mediaUrl, options);
+  }
+  return uploadOutboundArtifactToQuery({
+    uploadUrl: queryOutboundUploadUrlFor(account.url, botId),
+    token: account.token,
+    to,
+    path: mediaUrl,
+    attachment: queryAttachmentForMediaUrl(mediaUrl, options),
+  });
 }
 
 async function sendOutboundEvent(params: {
@@ -188,7 +226,7 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
         }),
       sendMedia: async (ctx) => {
         const attachment = ctx.mediaUrl
-          ? await queryAttachmentForMediaSource(ctx.mediaUrl, {
+          ? await resolveOutboundAttachment(ctx.accountId, ctx.to, ctx.mediaUrl, {
               audioAsVoice: ctx.audioAsVoice,
               forceDocument: ctx.forceDocument,
             })
