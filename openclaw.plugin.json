@@ -3,6 +3,7 @@
   "name": "Query",
   "description": "Connects OpenClaw to Query web and Flutter messaging over a persistent WebSocket.",
   "channels": ["query"],
+  "skills": ["skills"],
   "activation": {
     "onStartup": true
   },
