@@ -117,10 +117,6 @@ function eventRequestsAudio(event: QueryUserMessageEvent): boolean {
   return asksForAudio || hasInboundAudio;
 }
 
-function shouldSendAudioOnly(event: QueryUserMessageEvent): boolean {
-  return eventRequestsAudio(event);
-}
-
 function isAudioAttachment(attachment: QueryAttachment): boolean {
   const mimeType = attachment.mime_type?.toLowerCase() ?? "";
   return attachment.kind === "audio" || mimeType.startsWith("audio/");
@@ -516,11 +512,27 @@ export class QuerySocketMonitor {
         );
       }
       mediaAttachments = oneVoiceNote(mediaAttachments);
-      const hasAudioAttachment = mediaAttachments.some(isAudioAttachment);
-      const responseText =
-        hasAudioAttachment && shouldSendAudioOnly(event)
-          ? ""
-          : result.text.trim();
+      const responseText = result.text.trim();
+      if (!responseText && mediaAttachments.length === 0) {
+        const response: CachedResponse = {
+          threadId,
+          clientMsgId: event.client_msg_id,
+          type: "error",
+          content: "El agente terminó sin devolver contenido visible.",
+          data: { detail: "empty_agent_response" },
+          completedAt: Date.now(),
+        };
+        await this.store.set(response);
+        this.patchStatus({ lastOutboundAt: Date.now(), lastError: "empty_agent_response" });
+        this.options.runtime.error?.(
+          `query: empty visible response for ${event.client_msg_id}`,
+        );
+        this.send(cachedResponseEvent(response));
+        this.options.log?.info?.(
+          `[${this.options.account.accountId}] ${event.client_msg_id}: query_empty_terminal_guard_sent total_ms=${Date.now() - receivedAt}`,
+        );
+        return;
+      }
       const response: CachedResponse = {
         threadId,
         clientMsgId: event.client_msg_id,
@@ -633,7 +645,7 @@ export class QuerySocketMonitor {
     threadId: string,
     clientMsgId: string,
   ): Promise<QueryDelegatedAuth | undefined> {
-    const turnKey = `${threadId} ${clientMsgId}`;
+    const turnKey = `${threadId}\u0000${clientMsgId}`;
     const existing = this.pendingAuth.get(turnKey);
     if (existing) {
       // Ya hay una renovacion en vuelo para este turno: no se pide dos veces.
