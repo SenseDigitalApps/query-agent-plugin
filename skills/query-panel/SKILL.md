@@ -1,6 +1,6 @@
 ---
-name: query-panel-reader
-description: Read modules, field configuration and records from the Query panel on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, or asks to find, filter or open records. Discovery-first: never assume module or field names.
+name: query-panel
+description: Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Every write goes through a proposal that a human confirms; never write to Query by any other route. Discovery-first: never assume module or field names.
 ---
 
 # Query Panel Reader
@@ -67,8 +67,32 @@ El permiso que Query concede para consultar caduca a los 15 minutos. Si una
 herramienta responde `no_credential`, pide a la persona que te escriba un
 mensaje nuevo en ese canal y reintenta. No busques otra via ni pidas tokens.
 
-## Escribir no es parte de esto
+## Cambiar datos: siempre propuesta, nunca ejecucion
 
-Estas herramientas solo leen. Un cambio en los datos se propone y lo confirma
-una persona desde la interfaz de Query. Si te piden modificar algo, explica que
-dejaras la propuesta y que alguien con permiso debe aplicarla.
+`query_record_propose` es la **unica** via para tocar datos de Query. Sirve
+tanto para crear como para actualizar, y no aplica nada: deja la propuesta en el
+chat y una persona la confirma con un boton.
+
+Nunca escribas en Query por otro camino, aunque dispongas de otra herramienta,
+otro token o la API general. Si crees que hace falta escribir de otra forma,
+dilo y detente.
+
+Flujo:
+
+1. `query_module_describe` — consigue los slugs reales y los valores exactos que
+   admite cada campo. Un slug inventado hace fallar la propuesta entera.
+2. `query_records_search` o `query_record_get` — si vas a actualizar, mira antes
+   como esta el registro.
+3. `query_record_propose` — con `record_id` para actualizar, sin el para crear.
+   Incluye `intent`: una frase que explique por que, porque la lee la persona
+   que decide.
+4. Avisa que la propuesta quedo en el chat esperando aprobacion.
+
+Al terminar **no digas que el cambio quedo hecho**. No lo esta: esta esperando
+que alguien lo apruebe. Decir lo contrario hace que den por cerrado algo que
+sigue pendiente.
+
+Si Query rechaza la propuesta, la respuesta trae el motivo: campo inexistente,
+campo de solo lectura, valor fuera de las opciones permitidas o falta de
+permiso. Corrige con esa informacion y vuelve a proponer; no insistas con el
+mismo payload.

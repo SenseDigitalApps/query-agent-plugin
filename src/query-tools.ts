@@ -25,23 +25,53 @@ function queryApiUrl(socketUrl: string, path: string): string {
   return parsed.toString();
 }
 
+async function postQuery(
+  threadId: string,
+  path: string,
+  body: Record<string, unknown>,
+): Promise<unknown> {
+  const stored = getDelegatedAuth(threadId);
+  if (!stored) return noCredential();
+  const response = await fetch(queryApiUrl(stored.socketUrl, path), {
+    method: "POST",
+    headers: {
+      "X-Query-Delegated-Token": stored.auth.token,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(body),
+  });
+  const payload = await response.json().catch(() => undefined);
+  if (!response.ok) {
+    return {
+      ok: false,
+      error:
+        (payload as { error?: string } | undefined)?.error ??
+        `http_${response.status}`,
+      ...(payload && typeof payload === "object" ? payload : {}),
+    };
+  }
+  return payload;
+}
+
+function noCredential() {
+  const alive = threadsWithDelegatedAuth();
+  return {
+    ok: false,
+    error: "no_credential",
+    detail:
+      "No hay una credencial vigente para ese canal. Responde a un mensaje " +
+      "reciente de esa conversacion antes de consultar.",
+    ...(alive.length ? { canales_disponibles: alive } : {}),
+  };
+}
+
 async function callQuery(
   threadId: string,
   path: string,
   query: Record<string, string> = {},
 ): Promise<unknown> {
   const stored = getDelegatedAuth(threadId);
-  if (!stored) {
-    const alive = threadsWithDelegatedAuth();
-    return {
-      ok: false,
-      error: "no_credential",
-      detail:
-        "No hay una credencial vigente para ese canal. Responde a un mensaje " +
-        "reciente de esa conversacion antes de consultar.",
-      ...(alive.length ? { canales_disponibles: alive } : {}),
-    };
-  }
+  if (!stored) return noCredential();
   const url = new URL(queryApiUrl(stored.socketUrl, path));
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== "") url.searchParams.set(key, value);
@@ -125,6 +155,38 @@ export default defineToolPlugin({
           `modules/${encodeURIComponent(module)}/records/`,
           query,
         );
+      },
+    }),
+    tool({
+      name: "query_record_propose",
+      label: "Query: proponer un cambio",
+      description:
+        "Unica via para cambiar datos en Query. No aplica nada: deja la propuesta en el chat y una persona la confirma con un boton. Usala tanto para crear como para actualizar. Antes, consulta query_module_describe y usa los slugs y valores exactos que devuelva. Despues, dile a la persona que revise la propuesta en el chat; no afirmes que el cambio quedo hecho.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        module: Type.String({ description: "Modulo donde se hara el cambio." }),
+        record_id: Type.Optional(
+          Type.Integer({
+            description:
+              "Id del registro a actualizar. Omitelo para proponer uno nuevo.",
+          }),
+        ),
+        fields: Type.Record(Type.String(), Type.Unknown(), {
+          description:
+            "Valores por slug de campo, exactamente como los devuelve query_module_describe.",
+        }),
+        intent: Type.Optional(
+          Type.String({
+            description:
+              "Por que se propone, en una frase. Lo lee la persona que decide.",
+          }),
+        ),
+      }),
+      execute: async ({ thread_id, module, record_id, fields, intent }) => {
+        const base = `modules/${encodeURIComponent(module)}/records/`;
+        const path =
+          record_id === undefined ? `${base}propose/` : `${base}${record_id}/propose/`;
+        return postQuery(thread_id, path, { fields, intent });
       },
     }),
     tool({
