@@ -19,7 +19,27 @@ function filenameForMediaUrl(mediaUrl: string): string {
   return clean.split("/").pop() || "attachment";
 }
 
+// Artifacts que el agente genera y que no son audio, imagen ni video. Sin esto
+// llegan sin mime_type y la app no sabe como presentarlos.
+const DOCUMENT_MIME_TYPES: Record<string, string> = {
+  html: "text/html",
+  htm: "text/html",
+  csv: "text/csv",
+  json: "application/json",
+  md: "text/markdown",
+  txt: "text/plain",
+  pdf: "application/pdf",
+  xlsx: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+  xls: "application/vnd.ms-excel",
+  docx: "application/vnd.openxmlformats-officedocument.wordprocessingml.document",
+  doc: "application/msword",
+  pptx: "application/vnd.openxmlformats-officedocument.presentationml.presentation",
+  zip: "application/zip",
+};
+
 function mimeTypeForExtension(extension: string): string | undefined {
+  const document = DOCUMENT_MIME_TYPES[extension];
+  if (document) return document;
   switch (extension) {
     case "aac":
       return "audio/aac";

@@ -1,6 +1,7 @@
 import type {
   CachedResponse,
   QueryActivityState,
+  QueryAuthGrantedEvent,
   QueryInboundEvent,
   QueryOutboundEvent,
   QuerySessionReadyEvent,
@@ -24,6 +25,9 @@ export function parseQueryEvent(raw: string): QueryInboundEvent | null {
   }
   if (value.type === "session.ready" && isRecord(value.data)) {
     return value as QuerySessionReadyEvent;
+  }
+  if (value.type === "auth.granted" && isRecord(value.data)) {
+    return value as QueryAuthGrantedEvent;
   }
   if (
     value.type === "schedule.cancel" &&

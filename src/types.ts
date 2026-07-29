@@ -72,6 +72,33 @@ export type QuerySessionReadyEvent = {
 
 export type QueryThreadType = "general" | "topic" | "private";
 
+/** Credencial corta con la que el agente actua en nombre del usuario. */
+export type QueryDelegatedAuth = {
+  token: string;
+  expires_at?: string;
+  expires_in?: number;
+  scopes?: string[];
+};
+
+export type QueryTenant = {
+  schema?: string;
+  domain?: string;
+  subdomain?: string;
+  name?: string;
+};
+
+export type QueryAuthGrantedEvent = {
+  type: "auth.granted";
+  role?: "system";
+  content?: string;
+  client_msg_id?: string;
+  thread_id?: string | number;
+  data: {
+    tenant?: QueryTenant;
+    delegated_auth?: QueryDelegatedAuth;
+  };
+};
+
 export type QueryUserMessageEvent = {
   type: "message";
   role: "user";
@@ -84,8 +111,11 @@ export type QueryUserMessageEvent = {
     thread_id?: string | number;
     thread_type?: QueryThreadType;
     thread_name?: string;
+    tenant?: QueryTenant;
+    delegated_auth?: QueryDelegatedAuth;
     sender?: {
       id?: string | number;
+      user_id?: string | number;
       name?: string;
       type?: "member" | "support" | string;
       private_thread_id?: string | number | null;
@@ -109,7 +139,8 @@ export type QueryScheduleCancelEvent = {
 export type QueryInboundEvent =
   | QuerySessionReadyEvent
   | QueryUserMessageEvent
-  | QueryScheduleCancelEvent;
+  | QueryScheduleCancelEvent
+  | QueryAuthGrantedEvent;
 
 export type QueryActivityState = "queued" | "working" | "done" | "error";
 
@@ -124,7 +155,7 @@ export type QueryAgentActivity = {
 };
 
 export type QueryOutboundEvent = {
-  type: "activity" | "message" | "error" | "schedule.sync";
+  type: "activity" | "message" | "error" | "schedule.sync" | "auth.refresh";
   role: "assistant" | "system";
   content: string;
   client_msg_id: string;

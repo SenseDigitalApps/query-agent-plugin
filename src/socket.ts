@@ -14,18 +14,28 @@ import {
   parseQueryEvent,
   reconnectDelay,
 } from "./protocol.js";
-import { queryAttachmentForMediaSource } from "./media.js";
+import { queryAttachmentForMediaSource, queryAttachmentForMediaUrl } from "./media.js";
+import {
+  isLocalArtifactPath,
+  QueryUploadError,
+  queryUploadUrlFor,
+  uploadArtifactToQuery,
+} from "./query-upload.js";
 import { defaultResponseStorePath, ResponseStore } from "./response-store.js";
 import type {
   CachedResponse,
   QueryConfig,
   QueryAttachment,
+  QueryDelegatedAuth,
   QueryOutboundEvent,
   QueryUserMessageEvent,
   ResolvedQueryAccount,
 } from "./types.js";
 
 const require = createRequire(import.meta.url);
+// Renovar la credencial es un ida y vuelta por el socket ya abierto: si Query
+// no contesta en este plazo, se prefiere perder el adjunto a colgar el turno.
+const QUERY_AUTH_REFRESH_TIMEOUT_MS = 10_000;
 const QUERY_REPLY_AUDIO = process.env.QUERY_REPLY_AUDIO ?? "1";
 const QUERY_REPLY_AUDIO_MODE = process.env.QUERY_REPLY_AUDIO_MODE ?? "requested";
 const QUERY_TTS_BIN = process.env.QUERY_TTS_BIN;
@@ -214,6 +224,13 @@ export class QuerySocketMonitor {
   private legacyGeneralThreadId: string;
   private readonly inFlight = new Set<string>();
   private runTask?: Promise<void>;
+  // Renovaciones de credencial en curso, por turno. Una tarea larga puede
+  // terminar con el token del turno ya vencido y necesita uno nuevo justo
+  // cuando va a subir su resultado.
+  private readonly pendingAuth = new Map<
+    string,
+    { resolve: (auth?: QueryDelegatedAuth) => void; timer: NodeJS.Timeout }
+  >();
 
   constructor(private readonly options: QuerySocketOptions) {
     const { account } = options;
@@ -337,6 +354,16 @@ export class QuerySocketMonitor {
         event.data.general_thread_id ?? event.data.thread_id;
       if (generalThreadId !== undefined) {
         this.legacyGeneralThreadId = String(generalThreadId);
+      }
+      return;
+    }
+    if (event.type === "auth.granted") {
+      const turnKey = `${String(event.thread_id ?? "")} ${event.client_msg_id ?? ""}`;
+      const waiting = this.pendingAuth.get(turnKey);
+      if (waiting) {
+        this.pendingAuth.delete(turnKey);
+        clearTimeout(waiting.timer);
+        waiting.resolve(event.data?.delegated_auth);
       }
       return;
     }
@@ -472,8 +499,10 @@ export class QuerySocketMonitor {
       this.options.log?.info?.(
         `[${this.options.account.accountId}] ${event.client_msg_id}: query_agent_done agent_ms=${agentDoneAt - dispatchAt} total_ms=${agentDoneAt - receivedAt}`,
       );
-      let mediaAttachments = await Promise.all(
-        result.mediaUrls.map((url) => queryAttachmentForMediaSource(url)),
+      let mediaAttachments = await this.buildResponseAttachments(
+        event,
+        threadId,
+        result.mediaUrls,
       );
       try {
         const alreadyHasAudio = mediaAttachments.some(isAudioAttachment);
@@ -533,6 +562,115 @@ export class QuerySocketMonitor {
       clearInterval(activityHeartbeat);
       this.inFlight.delete(turnKey);
     }
+  }
+
+  /**
+   * Convierte lo que produjo el agente en adjuntos que Query puede servir.
+   *
+   * Un artifact local se sube y viaja con su URL oficial. Solo si Query no
+   * delego credencial (gateway antiguo) se cae al comportamiento anterior, que
+   * como mucho puede inlinear medios pequenos.
+   */
+  private async buildResponseAttachments(
+    event: QueryUserMessageEvent,
+    threadId: string,
+    mediaUrls: string[],
+  ): Promise<QueryAttachment[]> {
+    const attachments: QueryAttachment[] = [];
+    for (const mediaUrl of mediaUrls) {
+      const delegated = event.data?.delegated_auth;
+      if (!isLocalArtifactPath(mediaUrl) || !delegated?.token) {
+        attachments.push(await queryAttachmentForMediaSource(mediaUrl));
+        continue;
+      }
+      try {
+        attachments.push(
+          await this.uploadArtifact(event, threadId, mediaUrl, delegated),
+        );
+      } catch (error) {
+        // Se pierde el archivo, no el turno: el usuario recibe la respuesta y
+        // el fallo queda en el log en vez de un enlace que no abre.
+        this.options.log?.warn?.(
+          `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
+            `query_artifact_upload_failed path=${mediaUrl} error=${String(error)}`,
+        );
+      }
+    }
+    return attachments;
+  }
+
+  private async uploadArtifact(
+    event: QueryUserMessageEvent,
+    threadId: string,
+    mediaUrl: string,
+    delegated: QueryDelegatedAuth,
+  ): Promise<QueryAttachment> {
+    const uploadUrl = queryUploadUrlFor(this.options.account.url, threadId);
+    const attachment = queryAttachmentForMediaUrl(mediaUrl);
+    try {
+      return await uploadArtifactToQuery({
+        uploadUrl,
+        token: delegated.token,
+        path: mediaUrl,
+        attachment,
+      });
+    } catch (error) {
+      if (!(error instanceof QueryUploadError) || !error.isExpiredCredential) {
+        throw error;
+      }
+      const renewed = await this.refreshDelegatedAuth(threadId, event.client_msg_id);
+      if (!renewed?.token) throw error;
+      return uploadArtifactToQuery({
+        uploadUrl,
+        token: renewed.token,
+        path: mediaUrl,
+        attachment,
+      });
+    }
+  }
+
+  private refreshDelegatedAuth(
+    threadId: string,
+    clientMsgId: string,
+  ): Promise<QueryDelegatedAuth | undefined> {
+    const turnKey = `${threadId} ${clientMsgId}`;
+    const existing = this.pendingAuth.get(turnKey);
+    if (existing) {
+      // Ya hay una renovacion en vuelo para este turno: no se pide dos veces.
+      return new Promise((resolve) => {
+        const previous = existing.resolve;
+        existing.resolve = (auth) => {
+          previous(auth);
+          resolve(auth);
+        };
+      });
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingAuth.delete(turnKey);
+        resolve(undefined);
+      }, QUERY_AUTH_REFRESH_TIMEOUT_MS);
+      timer.unref?.();
+      this.pendingAuth.set(turnKey, { resolve, timer });
+      try {
+        this.send({
+          type: "auth.refresh",
+          role: "system",
+          content: "",
+          client_msg_id: clientMsgId,
+          thread_id: threadId,
+          data: {},
+        });
+      } catch (error) {
+        this.pendingAuth.delete(turnKey);
+        clearTimeout(timer);
+        this.options.log?.warn?.(
+          `[${this.options.account.accountId}] ${clientMsgId}: ` +
+            `query_auth_refresh_failed error=${String(error)}`,
+        );
+        resolve(undefined);
+      }
+    });
   }
 
   private send(event: QueryOutboundEvent): void {
