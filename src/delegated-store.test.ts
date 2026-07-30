@@ -57,4 +57,14 @@ describe("delegated auth store", () => {
     rememberDelegatedAuth(60, { token: "nueva", expires_in: 900 }, SOCKET);
     expect(getDelegatedAuth(60)?.auth.token).toBe("nueva");
   });
+
+  it("keeps the client message id that can refresh tool credentials", () => {
+    rememberDelegatedAuth(
+      70,
+      { token: "turno", expires_in: 900 },
+      SOCKET,
+      "client-123",
+    );
+    expect(getDelegatedAuth(70)?.clientMsgId).toBe("client-123");
+  });
 });

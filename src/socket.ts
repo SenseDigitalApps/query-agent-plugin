@@ -386,7 +386,12 @@ export class QuerySocketMonitor {
     }
     // La credencial del turno queda disponible para las herramientas Query, que
     // se ejecutan despues y fuera de este contexto.
-    rememberDelegatedAuth(threadId, event.data?.delegated_auth, this.options.account.url);
+    rememberDelegatedAuth(
+      threadId,
+      event.data?.delegated_auth,
+      this.options.account.url,
+      event.client_msg_id,
+    );
     const turnKey = `${threadId}\u0000${event.client_msg_id}`;
     const cached = this.store.get(threadId, event.client_msg_id);
     if (cached) {
@@ -649,7 +654,7 @@ export class QuerySocketMonitor {
     }
   }
 
-  private refreshDelegatedAuth(
+  refreshDelegatedAuth(
     threadId: string,
     clientMsgId: string,
   ): Promise<QueryDelegatedAuth | undefined> {
@@ -720,4 +725,17 @@ export function sendQueryOutboundEvent(accountId: string, event: QueryOutboundEv
     throw new Error(`Query account ${accountId} is not running.`);
   }
   monitor.sendOutboundEvent(event);
+}
+
+export async function refreshQueryDelegatedAuth(
+  threadId: string | number,
+  socketUrl: string,
+  clientMsgId?: string,
+): Promise<QueryDelegatedAuth | undefined> {
+  if (!clientMsgId) return undefined;
+  const monitor = [...activeMonitors.values()].find(
+    (candidate) => candidate.account.url === socketUrl,
+  );
+  if (!monitor) return undefined;
+  return monitor.refreshDelegatedAuth(String(threadId), clientMsgId);
 }

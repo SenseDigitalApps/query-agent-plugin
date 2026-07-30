@@ -1,6 +1,11 @@
 import { Type } from "typebox";
 import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
-import { getDelegatedAuth, threadsWithDelegatedAuth } from "./delegated-store.js";
+import {
+  getDelegatedAuth,
+  peekDelegatedAuth,
+  rememberDelegatedAuth,
+  threadsWithDelegatedAuth,
+} from "./delegated-store.js";
 
 /**
  * Herramientas para consultar Query en nombre de la persona que escribe.
@@ -30,7 +35,7 @@ async function postQuery(
   path: string,
   body: Record<string, unknown>,
 ): Promise<unknown> {
-  const stored = getDelegatedAuth(threadId);
+  const stored = await delegatedAuthForTool(threadId);
   if (!stored) return noCredential();
   const response = await fetch(queryApiUrl(stored.socketUrl, path), {
     method: "POST",
@@ -70,7 +75,7 @@ async function callQuery(
   path: string,
   query: Record<string, string> = {},
 ): Promise<unknown> {
-  const stored = getDelegatedAuth(threadId);
+  const stored = await delegatedAuthForTool(threadId);
   if (!stored) return noCredential();
   const url = new URL(queryApiUrl(stored.socketUrl, path));
   for (const [key, value] of Object.entries(query)) {
@@ -89,6 +94,22 @@ async function callQuery(
     };
   }
   return body;
+}
+
+async function delegatedAuthForTool(threadId: string) {
+  const stale = peekDelegatedAuth(threadId);
+  const alive = getDelegatedAuth(threadId);
+  if (alive) return alive;
+  if (!stale?.clientMsgId) return undefined;
+  const { refreshQueryDelegatedAuth } = await import("./socket.js");
+  const refreshed = await refreshQueryDelegatedAuth(
+    threadId,
+    stale.socketUrl,
+    stale.clientMsgId,
+  );
+  if (!refreshed?.token) return undefined;
+  rememberDelegatedAuth(threadId, refreshed, stale.socketUrl, stale.clientMsgId);
+  return getDelegatedAuth(threadId);
 }
 
 export default defineToolPlugin({
