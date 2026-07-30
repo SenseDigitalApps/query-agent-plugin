@@ -236,7 +236,7 @@ export default defineToolPlugin({
       name: "query_record_propose",
       label: "Query: proponer un cambio",
       description:
-        "Unica via para cambiar datos en Query. No aplica nada: deja la propuesta en el chat y una persona la confirma con un boton. Usala tanto para crear como para actualizar. Antes, consulta query_module_describe y usa los slugs y valores exactos que devuelva. Despues, dile a la persona que revise la propuesta en el chat; no afirmes que el cambio quedo hecho.",
+        "Unica via para cambiar datos en Query. No aplica nada: deja la propuesta en el chat y una persona la confirma con un boton. Usala tanto para crear como para actualizar. Antes, consulta query_module_describe y usa los slugs exactos. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Despues, dile a la persona que revise la propuesta en el chat; no afirmes que el cambio quedo hecho.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         module: Type.String({ description: "Modulo donde se hara el cambio." }),
@@ -248,7 +248,7 @@ export default defineToolPlugin({
         ),
         fields: Type.Record(Type.String(), Type.Unknown(), {
           description:
-            "Valores por slug de campo, exactamente como los devuelve query_module_describe.",
+            "Valores por slug. En campos ref_ envia preferiblemente {id: ...}; si solo conoces el consecutivo usa {consecutivo: ...}. No inventes label, type ni module.",
         }),
         intent: Type.Optional(
           Type.String({

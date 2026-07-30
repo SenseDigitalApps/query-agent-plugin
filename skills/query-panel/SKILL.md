@@ -82,7 +82,10 @@ Flujo:
 1. `query_module_describe` — consigue los slugs reales y los valores exactos que
    admite cada campo. Un slug inventado hace fallar la propuesta entera.
 2. `query_records_search` o `query_record_get` — si vas a actualizar, mira antes
-   como esta el registro.
+   como esta el registro. Para llenar un campo relacional `ref_*`, busca tambien
+   el registro relacionado y usa `{"id": ...}`; si solo conoces el consecutivo,
+   usa `{"consecutivo": ...}`. No inventes `label`, `type`, `module` ni
+   `module_name`, porque Query construye y valida ese objeto.
 3. `query_record_propose` — con `record_id` para actualizar, sin el para crear.
    Incluye `intent`: una frase que explique por que, porque la lee la persona
    que decide.
