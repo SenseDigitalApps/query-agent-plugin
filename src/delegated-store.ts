@@ -28,7 +28,6 @@ type StoredAuth = {
 };
 
 const byThread = new Map<string, StoredAuth>();
-let loadedFromDisk = false;
 
 // Margen para no usar un token que caduca mientras viaja la peticion.
 const EXPIRY_MARGIN_MS = 5_000;
@@ -39,6 +38,21 @@ function stateFile(): string {
   if (configured) return configured;
   const root = process.env.OPENCLAW_STATE_DIR?.trim() || join(homedir(), ".openclaw");
   return join(root, "query-delegated-auth.json");
+}
+
+/**
+ * Metadatos seguros para correlacionar el proceso que recibe un mensaje con el
+ * que ejecuta una tool. No expone tokens ni el contenido de la credencial.
+ */
+export function delegatedAuthStoreDiagnostics(): {
+  stateFile: string;
+  keys: string[];
+} {
+  loadFromDisk();
+  return {
+    stateFile: stateFile(),
+    keys: [...byThread.keys()].sort(),
+  };
 }
 
 function expiryOf(auth: QueryDelegatedAuth): number {
@@ -61,20 +75,23 @@ function isStoredAuth(value: unknown): value is StoredAuth {
 }
 
 function loadFromDisk(): void {
-  if (loadedFromDisk) return;
-  loadedFromDisk = true;
   const file = stateFile();
-  if (!existsSync(file)) return;
+  if (!existsSync(file)) {
+    byThread.clear();
+    return;
+  }
   try {
     const parsed = JSON.parse(readFileSync(file, "utf8")) as {
       version?: number;
       records?: Record<string, unknown>;
     };
     if (parsed.version !== STORE_VERSION || !parsed.records) return;
+    const fromDisk = new Map<string, StoredAuth>();
     for (const [threadId, stored] of Object.entries(parsed.records)) {
-      if (isStoredAuth(stored)) byThread.set(threadId, stored);
+      if (isStoredAuth(stored)) fromDisk.set(threadId, stored);
     }
-    pruneExpired();
+    byThread.clear();
+    for (const [threadId, stored] of fromDisk) byThread.set(threadId, stored);
   } catch {
     // Un archivo corrupto no debe bloquear el chat; se reemplaza al guardar.
   }
@@ -160,10 +177,6 @@ export function forgetDelegatedAuth(threadId: string | number): void {
 /** Hilos con credencial viva; el agente los ve para saber que puede consultar. */
 export function threadsWithDelegatedAuth(): string[] {
   loadFromDisk();
-  const alive: string[] = [];
-  for (const [threadId] of byThread) {
-    if (getDelegatedAuth(threadId)) alive.push(threadId);
-  }
   if (pruneExpired()) persistToDisk();
-  return alive;
+  return [...byThread.keys()];
 }

@@ -21,7 +21,11 @@ import {
   queryUploadUrlFor,
   uploadArtifactToQuery,
 } from "./query-upload.js";
-import { rememberDelegatedAuth } from "./delegated-store.js";
+import {
+  delegatedAuthStoreDiagnostics,
+  peekDelegatedAuth,
+  rememberDelegatedAuth,
+} from "./delegated-store.js";
 import { defaultResponseStorePath, ResponseStore } from "./response-store.js";
 import type {
   CachedResponse,
@@ -378,12 +382,35 @@ export class QuerySocketMonitor {
 
   private async handleUserMessage(event: QueryUserMessageEvent): Promise<void> {
     const receivedAt = Date.now();
+    const threadSource =
+      event.thread_id !== undefined && event.thread_id !== null
+        ? "event.thread_id"
+        : event.data?.thread_id !== undefined && event.data.thread_id !== null
+          ? "event.data.thread_id"
+          : "session.ready";
     const threadId = String(
       event.thread_id ?? event.data?.thread_id ?? this.legacyGeneralThreadId,
     ).trim();
     if (!threadId) {
       throw new Error("Query message is missing thread_id.");
     }
+    const rawEvent = event as unknown as Record<string, unknown>;
+    const rawData =
+      event.data && typeof event.data === "object"
+        ? (event.data as Record<string, unknown>)
+        : {};
+    const createdById = rawEvent.created_by_id ?? rawData.created_by_id;
+    const delegatedAuthPresent = Boolean(event.data?.delegated_auth?.token);
+    const diagnosticsBefore = delegatedAuthStoreDiagnostics();
+    this.options.log?.info?.(
+      `[${this.options.account.accountId}] query_delegated_auth_inbound ` +
+        `pid=${process.pid} thread_id=${JSON.stringify(threadId)} ` +
+        `thread_source=${threadSource} client_msg_id=${JSON.stringify(event.client_msg_id)} ` +
+        `delegated_auth_present=${delegatedAuthPresent} ` +
+        `created_by_id_present=${createdById !== undefined && createdById !== null} ` +
+        `store_key=${JSON.stringify(threadId)} ` +
+        `store_file=${JSON.stringify(diagnosticsBefore.stateFile)}`,
+    );
     // La credencial del turno queda disponible para las herramientas Query, que
     // se ejecutan despues y fuera de este contexto.
     rememberDelegatedAuth(
@@ -391,6 +418,16 @@ export class QuerySocketMonitor {
       event.data?.delegated_auth,
       this.options.account.url,
       event.client_msg_id,
+    );
+    const stored = peekDelegatedAuth(threadId);
+    const diagnosticsAfter = delegatedAuthStoreDiagnostics();
+    this.options.log?.info?.(
+      `[${this.options.account.accountId}] query_delegated_auth_stored ` +
+        `pid=${process.pid} store_key=${JSON.stringify(threadId)} ` +
+        `stored=${Boolean(stored)} ` +
+        `client_msg_id_match=${stored?.clientMsgId === event.client_msg_id} ` +
+        `visible_keys=${JSON.stringify(diagnosticsAfter.keys)} ` +
+        `store_file=${JSON.stringify(diagnosticsAfter.stateFile)}`,
     );
     const turnKey = `${threadId}\u0000${event.client_msg_id}`;
     const cached = this.store.get(threadId, event.client_msg_id);

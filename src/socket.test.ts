@@ -3,6 +3,7 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
 import { afterEach, describe, expect, it, vi } from "vitest";
+import { forgetDelegatedAuth } from "./delegated-store.js";
 import { QuerySocketMonitor, sendQueryOutboundEvent } from "./socket.js";
 import type { QueryOutboundEvent, ResolvedQueryAccount } from "./types.js";
 
@@ -79,6 +80,7 @@ describe("QuerySocketMonitor", () => {
         return { text: "¡Hola!", mediaUrls: [] };
       },
     );
+    const logInfo = vi.fn();
     let status = { accountId: "default" } as never;
     const monitor = new QuerySocketMonitor({
       cfg: { channels: { query: {} } } as never,
@@ -90,6 +92,10 @@ describe("QuerySocketMonitor", () => {
         status = next as never;
       },
       dispatchMessage,
+      log: { info: logInfo },
+    });
+    cleanupTasks.push(async () => {
+      forgetDelegatedAuth("thread-7");
     });
 
     const connection = new Promise<WebSocket>((resolve) => server.once("connection", resolve));
@@ -108,8 +114,13 @@ describe("QuerySocketMonitor", () => {
       role: "user",
       content: "hola",
       client_msg_id: "msg-7",
+      thread_id: "thread-7",
       event_id: 7,
-      data: { attachments: [] },
+      data: {
+        attachments: [],
+        created_by_id: 99,
+        delegated_auth: { token: "delegated-secret", expires_in: 900 },
+      },
     });
     socket.send(userMessage);
 
@@ -141,6 +152,13 @@ describe("QuerySocketMonitor", () => {
       client_msg_id: "msg-7",
     });
     expect(dispatchMessage).toHaveBeenCalledTimes(1);
+    const diagnosticLog = logInfo.mock.calls.flat().join("\n");
+    expect(diagnosticLog).toContain("query_delegated_auth_inbound");
+    expect(diagnosticLog).toContain('thread_id="thread-7"');
+    expect(diagnosticLog).toContain("delegated_auth_present=true");
+    expect(diagnosticLog).toContain("created_by_id_present=true");
+    expect(diagnosticLog).toContain("query_delegated_auth_stored");
+    expect(diagnosticLog).not.toContain("delegated-secret");
 
     controller.abort();
     await monitor.stop();

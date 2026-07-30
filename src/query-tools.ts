@@ -1,6 +1,10 @@
 import { Type } from "typebox";
-import { defineToolPlugin } from "openclaw/plugin-sdk/tool-plugin";
 import {
+  defineToolPlugin,
+  type ToolPluginExecutionContext,
+} from "openclaw/plugin-sdk/tool-plugin";
+import {
+  delegatedAuthStoreDiagnostics,
   getDelegatedAuth,
   peekDelegatedAuth,
   rememberDelegatedAuth,
@@ -21,6 +25,8 @@ const THREAD_PARAM = Type.String({
     "Id del canal de Query en el que estas conversando (conversation.id del mensaje).",
 });
 
+type QueryToolLog = ToolPluginExecutionContext["api"]["logger"];
+
 function queryApiUrl(socketUrl: string, path: string): string {
   const parsed = new URL(socketUrl);
   parsed.protocol = parsed.protocol === "ws:" ? "http:" : "https:";
@@ -34,8 +40,10 @@ async function postQuery(
   threadId: string,
   path: string,
   body: Record<string, unknown>,
+  toolName: string,
+  log: QueryToolLog,
 ): Promise<unknown> {
-  const stored = await delegatedAuthForTool(threadId);
+  const stored = await delegatedAuthForTool(threadId, toolName, log);
   if (!stored) return noCredential();
   const response = await fetch(queryApiUrl(stored.socketUrl, path), {
     method: "POST",
@@ -73,9 +81,11 @@ function noCredential() {
 async function callQuery(
   threadId: string,
   path: string,
-  query: Record<string, string> = {},
+  query: Record<string, string>,
+  toolName: string,
+  log: QueryToolLog,
 ): Promise<unknown> {
-  const stored = await delegatedAuthForTool(threadId);
+  const stored = await delegatedAuthForTool(threadId, toolName, log);
   if (!stored) return noCredential();
   const url = new URL(queryApiUrl(stored.socketUrl, path));
   for (const [key, value] of Object.entries(query)) {
@@ -96,16 +106,41 @@ async function callQuery(
   return body;
 }
 
-async function delegatedAuthForTool(threadId: string) {
+async function delegatedAuthForTool(
+  threadId: string,
+  toolName: string,
+  log: QueryToolLog,
+) {
+  const lookupKey = String(threadId);
   const stale = peekDelegatedAuth(threadId);
   const alive = getDelegatedAuth(threadId);
+  const diagnostics = delegatedAuthStoreDiagnostics();
+  log.info(
+    `query_delegated_auth_resolve pid=${process.pid} ` +
+      `tool=${JSON.stringify(toolName)} requested_thread_id=${JSON.stringify(threadId)} ` +
+      `lookup_key=${JSON.stringify(lookupKey)} found=${Boolean(alive)} ` +
+      `stale_present=${Boolean(stale)} visible_keys=${JSON.stringify(diagnostics.keys)} ` +
+      `store_file=${JSON.stringify(diagnostics.stateFile)}`,
+  );
   if (alive) return alive;
-  if (!stale?.clientMsgId) return undefined;
+  if (!stale?.clientMsgId) {
+    log.warn(
+      `query_delegated_auth_missing pid=${process.pid} ` +
+        `tool=${JSON.stringify(toolName)} lookup_key=${JSON.stringify(lookupKey)} ` +
+        `refreshable=false`,
+    );
+    return undefined;
+  }
   const { refreshQueryDelegatedAuth } = await import("./socket.js");
   const refreshed = await refreshQueryDelegatedAuth(
     threadId,
     stale.socketUrl,
     stale.clientMsgId,
+  );
+  log.info(
+    `query_delegated_auth_refresh pid=${process.pid} ` +
+      `tool=${JSON.stringify(toolName)} lookup_key=${JSON.stringify(lookupKey)} ` +
+      `refreshed=${Boolean(refreshed?.token)}`,
   );
   if (!refreshed?.token) return undefined;
   rememberDelegatedAuth(threadId, refreshed, stale.socketUrl, stale.clientMsgId);
@@ -124,7 +159,14 @@ export default defineToolPlugin({
       description:
         "Punto de partida obligatorio: lista los modulos de Query que puede ver la persona con la que conversas, con su nombre tecnico, su nombre visible y sus permisos. Cada sistema tiene modulos distintos, asi que nunca supongas que existe uno; descubrelos aqui primero.",
       parameters: Type.Object({ thread_id: THREAD_PARAM }),
-      execute: async ({ thread_id }) => callQuery(thread_id, "modules/"),
+      execute: async ({ thread_id }, _config, context) =>
+        callQuery(
+          thread_id,
+          "modules/",
+          {},
+          "query_modules_list",
+          context.api.logger,
+        ),
     }),
     tool({
       name: "query_module_describe",
@@ -139,8 +181,14 @@ export default defineToolPlugin({
             "query_modules_list. No inventes nombres: cada sistema tiene los suyos.",
         }),
       }),
-      execute: async ({ thread_id, module }) =>
-        callQuery(thread_id, `modules/${encodeURIComponent(module)}/`),
+      execute: async ({ thread_id, module }, _config, context) =>
+        callQuery(
+          thread_id,
+          `modules/${encodeURIComponent(module)}/`,
+          {},
+          "query_module_describe",
+          context.api.logger,
+        ),
     }),
     tool({
       name: "query_records_search",
@@ -165,7 +213,11 @@ export default defineToolPlugin({
         page: Type.Optional(Type.Integer({ minimum: 1, default: 1 })),
         page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 20 })),
       }),
-      execute: async ({ thread_id, module, q, field, value, page, page_size }) => {
+      execute: async (
+        { thread_id, module, q, field, value, page, page_size },
+        _config,
+        context,
+      ) => {
         const query: Record<string, string> = {};
         if (q) query.q = q;
         if (field && value !== undefined) query[`field.${field}`] = value;
@@ -175,6 +227,8 @@ export default defineToolPlugin({
           thread_id,
           `modules/${encodeURIComponent(module)}/records/`,
           query,
+          "query_records_search",
+          context.api.logger,
         );
       },
     }),
@@ -203,11 +257,21 @@ export default defineToolPlugin({
           }),
         ),
       }),
-      execute: async ({ thread_id, module, record_id, fields, intent }) => {
+      execute: async (
+        { thread_id, module, record_id, fields, intent },
+        _config,
+        context,
+      ) => {
         const base = `modules/${encodeURIComponent(module)}/records/`;
         const path =
           record_id === undefined ? `${base}propose/` : `${base}${record_id}/propose/`;
-        return postQuery(thread_id, path, { fields, intent });
+        return postQuery(
+          thread_id,
+          path,
+          { fields, intent },
+          "query_record_propose",
+          context.api.logger,
+        );
       },
     }),
     tool({
@@ -220,10 +284,13 @@ export default defineToolPlugin({
         module: Type.String({ description: "Modulo al que pertenece el registro." }),
         record_id: Type.Integer({ description: "Id del registro." }),
       }),
-      execute: async ({ thread_id, module, record_id }) =>
+      execute: async ({ thread_id, module, record_id }, _config, context) =>
         callQuery(
           thread_id,
           `modules/${encodeURIComponent(module)}/records/${record_id}/`,
+          {},
+          "query_record_get",
+          context.api.logger,
         ),
     }),
   ],
