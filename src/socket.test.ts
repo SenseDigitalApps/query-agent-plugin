@@ -283,6 +283,16 @@ describe("QuerySocketMonitor", () => {
     const connection = new Promise<WebSocket>((resolve) => server.once("connection", resolve));
     await monitor.start();
     const socket = await connection;
+    // El canal queda en linea con la sesion abierta, no con el socket abierto:
+    // Query acepta la conexion incluso cuando va a rechazar la credencial.
+    socket.send(
+      JSON.stringify({
+        type: "session.ready",
+        role: "system",
+        content: "",
+        data: { protocol: "query-openclaw.v2", general_thread_id: "thread-1" },
+      }),
+    );
     await waitFor(() => (status as { running?: boolean }).running === true);
 
     sendQueryOutboundEvent("default", {
@@ -465,6 +475,123 @@ describe("QuerySocketMonitor", () => {
     expect(response.data.caption).toBe("Respuesta con una sola nota de voz.");
     expect(response.data.text).toBe("Respuesta con una sola nota de voz.");
     expect((response.data.attachments as unknown[])).toHaveLength(1);
+
+    controller.abort();
+    await monitor.stop();
+  });
+
+  it("keeps the channel down when Query accepts the socket and rejects the credential", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-socket-denied-"));
+    const server = new WebSocketServer({ port: 0 });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const controller = new AbortController();
+    cleanupTasks.push(async () => {
+      controller.abort();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    });
+    // Query acepta el handshake y solo despues cierra con 4401, que es lo que
+    // hace `deny_consumer` cuando el token de emparejamiento no coincide.
+    server.on("connection", (socket) => {
+      socket.close(4401, "agent_token_invalid");
+    });
+
+    const account: ResolvedQueryAccount = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      url: `ws://127.0.0.1:${address.port}/ws/openclaw-agent/test/`,
+      token: "token-viejo",
+      heartbeatMs: 5_000,
+      reconnectMinMs: 100,
+      reconnectMaxMs: 200,
+      responseTimeoutMs: 0,
+      stateFile: join(directory, "responses.json"),
+    };
+    let status = { accountId: "default" } as never;
+    const monitor = new QuerySocketMonitor({
+      cfg: { channels: { query: {} } } as never,
+      account,
+      runtime: { error: vi.fn() } as never,
+      abortSignal: controller.signal,
+      getStatus: () => status,
+      setStatus: (next) => {
+        status = next as never;
+      },
+      dispatchMessage: vi.fn(),
+      log: { warn: vi.fn() },
+    });
+
+    await monitor.start();
+    await waitFor(() => (status as { running?: boolean }).running === false);
+    expect((status as { lastError?: string }).lastError).toContain("4401");
+
+    controller.abort();
+    await monitor.stop();
+  });
+
+  it("treats an unsolicited clean close as a drop and reconnects", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-socket-restart-"));
+    const server = new WebSocketServer({ port: 0 });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const controller = new AbortController();
+    cleanupTasks.push(async () => {
+      controller.abort();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const sockets: WebSocket[] = [];
+    server.on("connection", (socket) => {
+      sockets.push(socket);
+      socket.send(
+        JSON.stringify({
+          type: "session.ready",
+          role: "system",
+          content: "",
+          data: { protocol: "query-openclaw.v2", general_thread_id: "thread-1" },
+        }),
+      );
+    });
+
+    const account: ResolvedQueryAccount = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      url: `ws://127.0.0.1:${address.port}/ws/openclaw-agent/test/`,
+      token: "bot-secret",
+      heartbeatMs: 5_000,
+      reconnectMinMs: 100,
+      reconnectMaxMs: 200,
+      responseTimeoutMs: 0,
+      stateFile: join(directory, "responses.json"),
+    };
+    let status = { accountId: "default" } as never;
+    const runningStates: Array<boolean | undefined> = [];
+    const monitor = new QuerySocketMonitor({
+      cfg: { channels: { query: {} } } as never,
+      account,
+      runtime: { error: vi.fn() } as never,
+      abortSignal: controller.signal,
+      getStatus: () => status,
+      setStatus: (next) => {
+        status = next as never;
+        runningStates.push((next as { running?: boolean }).running);
+      },
+      dispatchMessage: vi.fn(),
+      log: { warn: vi.fn() },
+    });
+
+    await monitor.start();
+    await waitFor(() => (status as { running?: boolean }).running === true);
+    // Daphne cierra con 1000 al reiniciarse: para el plugin es una caida.
+    sockets[0].close(1000, "server restart");
+
+    await waitFor(() => sockets.length === 2);
+    expect(runningStates).toContain(false);
+    await waitFor(() => (status as { running?: boolean }).running === true);
 
     controller.abort();
     await monitor.stop();

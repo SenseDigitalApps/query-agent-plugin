@@ -222,6 +222,10 @@ function runTextToSpeech(text: string, outputPath: string): Promise<void> {
 export class QuerySocketMonitor {
   private readonly store: ResponseStore;
   private socket?: WebSocket;
+  // Cierre pedido por nosotros. Sin esta marca no se puede distinguir un stop
+  // ordenado de un cierre limpio decidido por el servidor, y ambos terminaban
+  // tratandose como exito.
+  private stopping = false;
   private legacyGeneralThreadId: string;
   private readonly inFlight = new Set<string>();
   private runTask?: Promise<void>;
@@ -255,6 +259,7 @@ export class QuerySocketMonitor {
     if (activeMonitors.get(this.options.account.accountId) === this) {
       activeMonitors.delete(this.options.account.accountId);
     }
+    this.stopping = true;
     this.socket?.close(1000, "El agente se está deteniendo");
     await this.runTask;
   }
@@ -265,7 +270,7 @@ export class QuerySocketMonitor {
 
   private async runLoop(): Promise<void> {
     let attempt = 0;
-    while (!this.options.abortSignal.aborted) {
+    while (!this.options.abortSignal.aborted && !this.stopping) {
       try {
         await this.connectOnce();
         attempt = 0;
@@ -315,6 +320,7 @@ export class QuerySocketMonitor {
         error ? reject(error) : resolve();
       };
       const abort = () => {
+        this.stopping = true;
         socket.close(1000, "El agente se está deteniendo");
         finish();
       };
@@ -322,8 +328,13 @@ export class QuerySocketMonitor {
 
       socket.on("open", () => {
         lastPongAt = Date.now();
-        this.options.log?.info?.(`[${account.accountId}] connected to Query`);
-        this.patchStatus({ running: true, lastError: undefined });
+        // El socket abierto todavia no es una sesion: Query acepta y recien
+        // despues rechaza con 4401 si la credencial no coincide. Anunciar
+        // "conectado" aca hacia que un token vencido se viera como un canal
+        // sano. El estado se marca al recibir `session.ready`.
+        this.options.log?.debug?.(
+          `[${account.accountId}] socket open, waiting for session.ready`,
+        );
       });
       socket.on("pong", () => {
         lastPongAt = Date.now();
@@ -336,7 +347,10 @@ export class QuerySocketMonitor {
       socket.on("error", (error) => finish(error));
       socket.on("close", (code, reason) => {
         const suffix = reason.length ? `: ${reason.toString("utf8")}` : "";
-        if (abortSignal.aborted || code === 1000) finish();
+        // Un cierre limpio que no pedimos sigue siendo una caida: Daphne cierra
+        // con 1000 al reiniciarse. Tratarlo como exito salteaba el backoff (se
+        // reconectaba en bucle cerrado) y dejaba el canal marcado como vivo.
+        if (abortSignal.aborted || this.stopping) finish();
         else finish(new Error(`WebSocket closed with code ${code}${suffix}`));
       });
     });
@@ -360,6 +374,12 @@ export class QuerySocketMonitor {
       if (generalThreadId !== undefined) {
         this.legacyGeneralThreadId = String(generalThreadId);
       }
+      // Query acepto la credencial y abrio sesion: recien ahora el canal esta
+      // realmente en linea.
+      this.options.log?.info?.(
+        `[${this.options.account.accountId}] connected to Query`,
+      );
+      this.patchStatus({ running: true, lastError: undefined });
       return;
     }
     if (event.type === "auth.granted") {
