@@ -25,6 +25,15 @@ function newOutboundClientMsgId(deliveryQueueId?: string): string {
   return `openclaw-outbound-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`;
 }
 
+export function uploadTargetForOutbound(to: string, threadId?: string | number | null): string {
+  if (threadId !== undefined && threadId !== null && String(threadId).trim()) {
+    return String(threadId).trim();
+  }
+  const target = to.trim();
+  const channelMatch = target.match(/^channel:(\d+)$/i);
+  return channelMatch?.[1] ?? target;
+}
+
 /**
  * Un envio outbound no nace de un turno, asi que no hay credencial delegada:
  * el archivo se sube con la credencial de emparejamiento del agente y viaja con
@@ -34,6 +43,7 @@ function newOutboundClientMsgId(deliveryQueueId?: string): string {
 async function resolveOutboundAttachment(
   accountId: string | null | undefined,
   to: string,
+  threadId: string | number | null | undefined,
   mediaUrl: string,
   options: { audioAsVoice?: boolean; forceDocument?: boolean },
 ) {
@@ -51,7 +61,7 @@ async function resolveOutboundAttachment(
   return uploadOutboundArtifactToQuery({
     uploadUrl: queryOutboundUploadUrlFor(account.url, botId),
     token: account.token,
-    to,
+    to: uploadTargetForOutbound(to, threadId),
     path: mediaUrl,
     attachment: queryAttachmentForMediaUrl(mediaUrl, options),
   });
@@ -226,7 +236,7 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
         }),
       sendMedia: async (ctx) => {
         const attachment = ctx.mediaUrl
-          ? await resolveOutboundAttachment(ctx.accountId, ctx.to, ctx.mediaUrl, {
+          ? await resolveOutboundAttachment(ctx.accountId, ctx.to, ctx.threadId, ctx.mediaUrl, {
               audioAsVoice: ctx.audioAsVoice,
               forceDocument: ctx.forceDocument,
             })
