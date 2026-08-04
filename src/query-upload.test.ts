@@ -6,6 +6,7 @@ import { queryAttachmentForMediaUrl } from "./media.js";
 import {
   isLocalArtifactPath,
   QueryUploadError,
+  setQueryArtifactPinned,
   uploadOutboundArtifactToQuery,
   queryUploadUrlFor,
   uploadArtifactToQuery,
@@ -103,6 +104,8 @@ describe("uploadArtifactToQuery", () => {
           mime_type: "text/html",
           size: 20,
           url: "https://q.test/media/agent_chat/new-dashboard.html",
+          is_pinned: true,
+          expires_at: null,
         }),
         { status: 200, headers: { "content-type": "application/json" } },
       ),
@@ -111,6 +114,7 @@ describe("uploadArtifactToQuery", () => {
     const attachment = await uploadArtifactToQuery({
       uploadUrl: "https://q.test/api/v4/openclaw-agent/threads/4/attachments/",
       replaceAttachmentId: 27,
+      pinned: true,
       token: "delegado-vivo",
       path,
       attachment: queryAttachmentForMediaUrl(path),
@@ -125,9 +129,12 @@ describe("uploadArtifactToQuery", () => {
     expect((init.headers as Record<string, string>)["X-Query-Delegated-Token"]).toBe(
       "delegado-vivo",
     );
+    expect((init.body as FormData).get("pinned")).toBe("true");
     expect(attachment.id).toBe(27);
     expect(attachment.name).toBe("dashboard-v2.html");
     expect(attachment.url).toBe("https://q.test/media/agent_chat/new-dashboard.html");
+    expect(attachment.is_pinned).toBe(true);
+    expect(attachment.expires_at).toBeNull();
   });
 
   it("replaces outbound drafts with the agent token and preserves the target", async () => {
@@ -186,6 +193,44 @@ describe("uploadArtifactToQuery", () => {
     expect(failure).toBeInstanceOf(QueryUploadError);
     expect((failure as QueryUploadError).code).toBe("attachment_not_found");
     expect((failure as QueryUploadError).status).toBe(404);
+  });
+
+  it("pins an existing attachment without uploading the file again", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({
+          id: 44,
+          kind: "file",
+          name: "template.html",
+          mime_type: "text/html",
+          size: 100,
+          url: "https://q.test/media/template.html",
+          is_pinned: true,
+          expires_at: null,
+        }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+
+    const attachment = await setQueryArtifactPinned({
+      uploadUrl: "https://q.test/api/v4/openclaw-agent/threads/5/attachments/",
+      attachmentId: 44,
+      token: "delegado",
+      pinned: true,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+
+    const [requestUrl, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(requestUrl).toBe(
+      "https://q.test/api/v4/openclaw-agent/threads/5/attachments/44/",
+    );
+    expect(init.method).toBe("PATCH");
+    expect((init.headers as Record<string, string>)["X-Query-Delegated-Token"]).toBe(
+      "delegado",
+    );
+    expect(JSON.parse(init.body as string)).toEqual({ pinned: true });
+    expect(attachment.is_pinned).toBe(true);
+    expect(attachment.expires_at).toBeNull();
   });
 
   it("flags an expired credential so the caller can renew and retry", async () => {

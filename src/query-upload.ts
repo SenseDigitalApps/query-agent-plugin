@@ -112,6 +112,8 @@ export async function uploadOutboundArtifactToQuery(params: {
   attachment: QueryAttachment;
   /** Solo para drafts editables. Omitirlo crea un asset immutable nuevo. */
   replaceAttachmentId?: string | number;
+  /** Un template fijado queda excluido de la retencion automatica. */
+  pinned?: boolean;
   fetchImpl?: typeof fetch;
 }): Promise<QueryAttachment> {
   return uploadArtifactToQuery({
@@ -120,7 +122,69 @@ export async function uploadOutboundArtifactToQuery(params: {
     path: params.path,
     attachment: params.attachment,
     replaceAttachmentId: params.replaceAttachmentId,
+    pinned: params.pinned,
     fetchImpl: params.fetchImpl,
+    tokenHeader: "X-Agent-Token",
+    extraFields: { to: params.to },
+  });
+}
+
+export async function setQueryArtifactPinned(params: {
+  uploadUrl: string;
+  attachmentId: string | number;
+  token: string;
+  pinned: boolean;
+  tokenHeader?: string;
+  extraFields?: Record<string, string>;
+  fetchImpl?: typeof fetch;
+}): Promise<QueryAttachment> {
+  if (!params.token) {
+    throw new QueryUploadError("token_missing", "Query did not provide a token.");
+  }
+  const response = await (params.fetchImpl ?? fetch)(
+    queryReplaceUploadUrlFor(params.uploadUrl, params.attachmentId),
+    {
+      method: "PATCH",
+      headers: {
+        "content-type": "application/json",
+        [params.tokenHeader ?? "X-Query-Delegated-Token"]: params.token,
+      },
+      body: JSON.stringify({ pinned: params.pinned, ...(params.extraFields ?? {}) }),
+    },
+  );
+  if (!response.ok) {
+    let code = `http_${response.status}`;
+    let detail = "";
+    try {
+      const body = (await response.json()) as { error?: string; detail?: string };
+      if (body?.error) code = body.error;
+      detail = body?.detail ?? "";
+    } catch {
+      // El status sigue siendo evidencia suficiente si no hay JSON.
+    }
+    throw new QueryUploadError(
+      code,
+      detail || `Query rejected the retention change (${response.status}).`,
+      response.status,
+    );
+  }
+  const attachment = (await response.json()) as QueryAttachment;
+  if (!attachment?.url) {
+    throw new QueryUploadError("missing_url", "Query changed retention but returned no url.");
+  }
+  return attachment;
+}
+
+export function setOutboundQueryArtifactPinned(params: {
+  uploadUrl: string;
+  attachmentId: string | number;
+  token: string;
+  to: string;
+  pinned: boolean;
+  fetchImpl?: typeof fetch;
+}): Promise<QueryAttachment> {
+  return setQueryArtifactPinned({
+    ...params,
     tokenHeader: "X-Agent-Token",
     extraFields: { to: params.to },
   });
@@ -133,6 +197,8 @@ export async function uploadArtifactToQuery(params: {
   attachment: QueryAttachment;
   /** Solo para drafts editables. Omitirlo conserva el POST de creacion. */
   replaceAttachmentId?: string | number;
+  /** Fijado = sin vencimiento. Omitirlo conserva el estado en un replace. */
+  pinned?: boolean;
   fetchImpl?: typeof fetch;
   /** Delegada por defecto; el envio outbound usa la credencial del agente. */
   tokenHeader?: string;
@@ -148,6 +214,7 @@ export async function uploadArtifactToQuery(params: {
   form.append("file", blob, name);
   form.append("kind", attachment.kind ?? "file");
   if (attachment.mime_type) form.append("mime_type", attachment.mime_type);
+  if (params.pinned !== undefined) form.append("pinned", String(params.pinned));
   for (const [field, value] of Object.entries(params.extraFields ?? {})) {
     form.append(field, value);
   }
@@ -188,6 +255,8 @@ export async function uploadArtifactToQuery(params: {
     mime_type?: string;
     size?: number;
     url?: string;
+    is_pinned?: boolean;
+    expires_at?: string | null;
   };
   if (!uploaded?.url) {
     throw new QueryUploadError("missing_url", "Query accepted the file but returned no url.");
@@ -199,6 +268,9 @@ export async function uploadArtifactToQuery(params: {
     name: uploaded.name || name,
     mime_type: uploaded.mime_type || attachment.mime_type,
     size: uploaded.size ?? size,
+    is_pinned: uploaded.is_pinned ?? attachment.is_pinned,
+    expires_at:
+      "expires_at" in uploaded ? uploaded.expires_at : attachment.expires_at,
     url: uploaded.url,
   };
 }

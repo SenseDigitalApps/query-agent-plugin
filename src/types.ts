@@ -52,8 +52,10 @@ export type QueryAttachment = {
   duration_ms?: number;
   is_voice_note?: boolean;
   voice?: boolean;
-  size?: number;
-  url: string;
+    size?: number;
+    is_pinned?: boolean;
+    expires_at?: string | null;
+    url: string;
 };
 
 export type QuerySessionReadyEvent = {
