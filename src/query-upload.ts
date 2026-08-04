@@ -84,6 +84,20 @@ export function queryOutboundUploadUrlFor(socketUrl: string, botId: string | num
   return parsed.toString();
 }
 
+/** URL del recurso estable que representa un draft ya creado en Query. */
+export function queryReplaceUploadUrlFor(
+  uploadUrl: string,
+  attachmentId: string | number,
+): string {
+  const normalizedId = String(attachmentId).trim();
+  if (!normalizedId) {
+    throw new QueryUploadError("invalid_attachment_id", "Query attachment id is empty.");
+  }
+  const parsed = new URL(uploadUrl);
+  parsed.pathname = `${parsed.pathname.replace(/\/?$/, "/")}${encodeURIComponent(normalizedId)}/`;
+  return parsed.toString();
+}
+
 /** El bot id viaja en la propia ruta del WebSocket de emparejamiento. */
 export function botIdFromSocketUrl(socketUrl: string): string {
   const match = new URL(socketUrl).pathname.match(/openclaw-agent\/(\d+)/);
@@ -96,6 +110,8 @@ export async function uploadOutboundArtifactToQuery(params: {
   to: string;
   path: string;
   attachment: QueryAttachment;
+  /** Solo para drafts editables. Omitirlo crea un asset immutable nuevo. */
+  replaceAttachmentId?: string | number;
   fetchImpl?: typeof fetch;
 }): Promise<QueryAttachment> {
   return uploadArtifactToQuery({
@@ -103,6 +119,7 @@ export async function uploadOutboundArtifactToQuery(params: {
     token: params.token,
     path: params.path,
     attachment: params.attachment,
+    replaceAttachmentId: params.replaceAttachmentId,
     fetchImpl: params.fetchImpl,
     tokenHeader: "X-Agent-Token",
     extraFields: { to: params.to },
@@ -114,6 +131,8 @@ export async function uploadArtifactToQuery(params: {
   token: string;
   path: string;
   attachment: QueryAttachment;
+  /** Solo para drafts editables. Omitirlo conserva el POST de creacion. */
+  replaceAttachmentId?: string | number;
   fetchImpl?: typeof fetch;
   /** Delegada por defecto; el envio outbound usa la credencial del agente. */
   tokenHeader?: string;
@@ -134,8 +153,15 @@ export async function uploadArtifactToQuery(params: {
   }
 
   const doFetch = params.fetchImpl ?? fetch;
-  const response = await doFetch(uploadUrl, {
-    method: "POST",
+  const replacing =
+    params.replaceAttachmentId !== undefined &&
+    params.replaceAttachmentId !== null &&
+    String(params.replaceAttachmentId).trim() !== "";
+  const requestUrl = replacing
+    ? queryReplaceUploadUrlFor(uploadUrl, params.replaceAttachmentId as string | number)
+    : uploadUrl;
+  const response = await doFetch(requestUrl, {
+    method: replacing ? "PUT" : "POST",
     headers: { [params.tokenHeader ?? "X-Query-Delegated-Token"]: token },
     body: form,
   });

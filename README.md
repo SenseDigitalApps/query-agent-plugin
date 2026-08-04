@@ -186,6 +186,15 @@ reconecta con espera exponencial de 0.5 a 15 segundos. Además envía un ping ca
 - Los adjuntos entrantes se entregan al contexto multimedia del agente; las
   URLs multimedia devueltas por el agente regresan como adjuntos de Query.
 
+### Artifacts editables
+
+`uploadArtifactToQuery()` y `uploadOutboundArtifactToQuery()` aceptan el campo
+opcional `replaceAttachmentId`. Al enviarlo usan `PUT` y reemplazan el blob del
+adjunto conservando su ID; al omitirlo mantienen el `POST` de creación actual.
+El caller debe usar reemplazo únicamente para previews o drafts editables. Un
+artifact final, aprobado o publicado se congela y se vuelve a subir sin
+`replaceAttachmentId`, creando una versión nueva.
+
 ## Desarrollo
 
 ```powershell
