@@ -275,6 +275,33 @@ export function rawBodyForAgent(event: QueryUserMessageEvent): string {
   return "[Adjunto]";
 }
 
+/**
+ * Que paso con la propuesta cuando la persona la cerro escribiendo.
+ *
+ * Sin esta linea el agente sigue creyendo que su propuesta espera aprobacion y
+ * responde pidiendo que pulsen un boton que ya no esta.
+ */
+function resolvedActionLine(event: QueryUserMessageEvent): string {
+  const resolved = event.data?.resolved_action;
+  if (!resolved) return "";
+  const target = resolved.module_label ? ` en ${resolved.module_label}` : "";
+  if (resolved.status === "applied") {
+    if (resolved.decision === "cancel") {
+      return `Query descarto tu propuesta${target} porque la persona lo pidio en este mensaje. No la vuelvas a proponer salvo que te lo pidan`;
+    }
+    const record = resolved.record_id ? ` (registro ${resolved.record_id})` : "";
+    return `Query ya aplico tu propuesta${target}${record}: la persona la confirmo en este mensaje. Da el cambio por hecho y no vuelvas a proponerlo`;
+  }
+  if (resolved.status === "ambiguous") {
+    const count = resolved.pending?.length ?? 0;
+    return `La persona quiso ${resolved.decision === "cancel" ? "descartar" : "confirmar"} una propuesta, pero hay ${count} esperando y no se sabe cual. Preguntale cual antes de nada; siguen pendientes`;
+  }
+  if (resolved.status === "not_allowed") {
+    return `La persona quiso confirmar la propuesta${target} pero no tiene permiso para aplicarla. Dile que la apruebe alguien con ese permiso; sigue pendiente`;
+  }
+  return `Query intento cerrar tu propuesta${target} con este mensaje y no pudo (${resolved.error ?? "error"}). No des el cambio por hecho: cuentaselo a la persona`;
+}
+
 export function bodyForAgent(event: QueryUserMessageEvent): string {
   const rawBody = rawBodyForAgent(event);
   const audioLines = audioAttachments(event).flatMap((attachment, index) => {
@@ -306,6 +333,7 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
     event.data?.sender?.private_thread_id
       ? `Canal privado del remitente: ${event.data.sender.private_thread_id}`
       : "",
+    resolvedActionLine(event),
     ...audioLines,
     "Si creas una tarea programada para una persona, configura la entrega al canal privado indicado; no uses un canal compartido como destino individual.",
   ]

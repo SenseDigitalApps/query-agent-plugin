@@ -101,6 +101,28 @@ export type QueryAuthGrantedEvent = {
   };
 };
 
+/**
+ * Que hizo Query con una propuesta al leer el mensaje de la persona.
+ *
+ * La persona puede cerrar una propuesta escribiendo ("confirmo") en vez de
+ * pulsar el boton. Lo resuelve Query, no el agente; esto solo cuenta el
+ * resultado para no volver a decir que sigue pendiente algo ya aplicado.
+ */
+export type QueryResolvedAction = {
+  status: "applied" | "failed" | "ambiguous" | "not_allowed";
+  decision: "confirm" | "cancel";
+  action_id?: string;
+  action_type?: string;
+  module_label?: string;
+  record_id?: number | null;
+  error?: string;
+  pending?: Array<{
+    action_id: string;
+    module_label?: string;
+    intent?: string;
+  }>;
+};
+
 export type QueryUserMessageEvent = {
   type: "message";
   role: "user";
@@ -110,6 +132,7 @@ export type QueryUserMessageEvent = {
   event_id?: string | number;
   data?: {
     attachments?: QueryAttachment[];
+    resolved_action?: QueryResolvedAction;
     thread_id?: string | number;
     thread_type?: QueryThreadType;
     thread_name?: string;

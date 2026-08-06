@@ -62,10 +62,28 @@ pedírselo**.
 Estas consultas son de lectura. Si le pides que **modifique o cree** un
 registro, no lo hace directamente: deja una propuesta en el chat con el detalle
 de qué cambiaría, y aparece un botón para aplicarla o descartarla. Nada se
-guarda en Query hasta que una persona pulsa ese botón.
+guarda en Query hasta que una persona lo aprueba.
 
 Si no ves el botón y solo el texto de la propuesta, es que no tienes permiso
 para editar ese módulo; puede aplicarla alguien que sí lo tenga.
+
+### Aprobar sin buscar el botón
+
+No hace falta pulsarlo: si respondes **«confirmo»**, «aplícalo» o «apruébalo»,
+se aplica igual. Y con «descártalo» o «cancela» queda sin efecto. Lo lee Query,
+no el agente, así que sigue siendo tu decisión y queda registrada con tu
+mensaje como constancia.
+
+Dos cosas que **no** confirman, a propósito:
+
+- Pedir algo nuevo. «Crea un registro en incidencias» es un encargo, no un sí a
+  lo anterior.
+- Un «sí» suelto cuando el agente acaba de hacerte otra pregunta: ahí no se
+  sabe a cuál de las dos respondes. Dilo con todas las letras («confirmo») o
+  usa el botón.
+
+Si hay dos propuestas esperando, tampoco se toca ninguna: el agente te
+preguntará cuál.
 
 ## Dónde funciona
 

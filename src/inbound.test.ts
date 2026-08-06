@@ -8,7 +8,7 @@ import {
   materializeInboundAudioAttachments,
   rawBodyForAgent,
 } from "./inbound.js";
-import type { QueryUserMessageEvent } from "./types.js";
+import type { QueryResolvedAction, QueryUserMessageEvent } from "./types.js";
 
 describe("Query inbound body", () => {
   it("labels audio-only messages as voice notes instead of generic attachments", () => {
@@ -118,5 +118,78 @@ describe("Query inbound body", () => {
       await rm(mediaDir, { recursive: true, force: true });
       await new Promise<void>((resolve) => server.close(() => resolve()));
     }
+  });
+});
+
+describe("Query inbound resolved actions", () => {
+  const messageWith = (resolved: QueryResolvedAction): QueryUserMessageEvent => ({
+    type: "message",
+    role: "user",
+    content: "confirmo",
+    client_msg_id: "turn-1",
+    data: { thread_name: "General", resolved_action: resolved },
+  });
+
+  it("tells the agent the proposal is already applied so it stops asking for a button", () => {
+    const body = bodyForAgent(
+      messageWith({
+        status: "applied",
+        decision: "confirm",
+        action_id: "a1",
+        module_label: "Incidencias",
+        record_id: 42,
+      }),
+    );
+
+    expect(body).toContain("Query ya aplico tu propuesta en Incidencias (registro 42)");
+    expect(body).toContain("Da el cambio por hecho");
+  });
+
+  it("reports a discarded proposal as such", () => {
+    const body = bodyForAgent(
+      messageWith({ status: "applied", decision: "cancel", module_label: "Incidencias" }),
+    );
+
+    expect(body).toContain("Query descarto tu propuesta en Incidencias");
+  });
+
+  it("asks which one when several proposals are waiting", () => {
+    const body = bodyForAgent(
+      messageWith({
+        status: "ambiguous",
+        decision: "confirm",
+        pending: [
+          { action_id: "a1", module_label: "Incidencias" },
+          { action_id: "a2", module_label: "Tareas" },
+        ],
+      }),
+    );
+
+    expect(body).toContain("hay 2 esperando y no se sabe cual");
+  });
+
+  it("says the proposal is still pending when the person cannot apply it", () => {
+    const body = bodyForAgent(
+      messageWith({
+        status: "not_allowed",
+        decision: "confirm",
+        module_label: "Incidencias",
+      }),
+    );
+
+    expect(body).toContain("no tiene permiso para aplicarla");
+    expect(body).toContain("sigue pendiente");
+  });
+
+  it("says nothing about proposals when Query resolved none", () => {
+    const body = bodyForAgent({
+      type: "message",
+      role: "user",
+      content: "hola",
+      client_msg_id: "turn-2",
+      data: { thread_name: "General" },
+    });
+
+    expect(body).not.toContain("propuesta");
   });
 });
