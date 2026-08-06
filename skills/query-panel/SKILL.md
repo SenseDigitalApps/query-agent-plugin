@@ -91,6 +91,38 @@ Flujo:
    que decide.
 4. Avisa que la propuesta quedo en el chat esperando aprobacion.
 
+### Editar el titulo del registro
+
+El titulo visible de un registro **no** es un campo dentro de `fields` ni una
+llave de `json_data`. Viaja como parametro superior `title` en
+`query_record_propose`.
+
+Para renombrar un registro existente:
+
+1. Usa `query_records_search` o `query_record_get` para ubicar el registro y
+   confirmar su `record_id`.
+2. Llama `query_record_propose` con `record_id` y `title`.
+3. Si no vas a cambiar campos, puedes enviar `fields: {}` u omitir `fields`.
+4. Incluye `intent`, por ejemplo: `Actualizar el titulo visible del registro`.
+
+Ejemplo:
+
+```json
+{
+  "thread_id": "conversation-id",
+  "module": "obras",
+  "record_id": 123,
+  "title": "Nuevo titulo visible",
+  "fields": {},
+  "intent": "Actualizar el titulo visible del registro"
+}
+```
+
+No intentes editar el titulo usando `fields: {"title": "..."}` salvo que el
+modulo tenga un campo real con slug `title` descubierto por
+`query_module_describe`. En la mayoria de registros Query, eso es distinto del
+titulo visible.
+
 Al terminar **no digas que el cambio quedo hecho**. No lo esta: esta esperando
 que alguien lo apruebe. Decir lo contrario hace que den por cerrado algo que
 sigue pendiente.
