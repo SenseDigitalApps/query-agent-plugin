@@ -5,7 +5,7 @@ import { join } from "node:path";
 import { describe, expect, it } from "vitest";
 import {
   bodyForAgent,
-  materializeInboundAudioAttachments,
+  materializeInboundMediaAttachments,
   rawBodyForAgent,
 } from "./inbound.js";
 import type { QueryResolvedAction, QueryUserMessageEvent } from "./types.js";
@@ -96,7 +96,7 @@ describe("Query inbound body", () => {
         },
       };
 
-      const materialized = await materializeInboundAudioAttachments(event, { mediaDir });
+      const materialized = await materializeInboundMediaAttachments(event, { mediaDir });
       const attachment = materialized.data?.attachments?.[0];
       expect(attachment?.local_path).toMatch(
         new RegExp(
@@ -192,4 +192,81 @@ describe("Query inbound resolved actions", () => {
 
     expect(body).not.toContain("propuesta");
   });
+
+  it("materializes inbound images so OpenClaw can attach them", async () => {
+    // OpenClaw descarta toda imagen sin ruta local (`resolveAgentTurnAttachments`
+    // hace `if (!attachment.path) return false`), asi que una URL sola llegaba
+    // al modelo como `imagesCount: 0`.
+    const imageBytes = Buffer.from(
+      "89504e470d0a1a0a0000000d49484452000000010000000108060000001f15c489",
+      "hex",
+    );
+    const server = createServer((request, response) => {
+      if (!request.url?.startsWith("/captura.png")) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      response.writeHead(200, { "content-type": "image/png" });
+      response.end(imageBytes);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const mediaDir = await mkdtemp(join(tmpdir(), "query-inbound-image-"));
+    try {
+      const mediaUrl = `http://127.0.0.1:${address.port}/captura.png`;
+      const event: QueryUserMessageEvent = {
+        type: "message",
+        role: "user",
+        content: "mira este screenshot",
+        client_msg_id: "screenshot-1",
+        data: {
+          attachments: [
+            {
+              id: 42,
+              kind: "image",
+              name: "captura.png",
+              mime_type: "image/png",
+              url: mediaUrl,
+            },
+          ],
+        },
+      };
+
+      const materialized = await materializeInboundMediaAttachments(event, { mediaDir });
+      const attachment = materialized.data?.attachments?.[0];
+      expect(attachment?.local_path).toBeTruthy();
+      expect(await readFile(attachment?.local_path ?? "")).toEqual(imageBytes);
+    } finally {
+      await rm(mediaDir, { recursive: true, force: true });
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("leaves documents alone: only audio and images se bajan a disco", async () => {
+    const event: QueryUserMessageEvent = {
+      type: "message",
+      role: "user",
+      content: "te paso el contrato",
+      client_msg_id: "doc-1",
+      data: {
+        attachments: [
+          {
+            id: 7,
+            kind: "file",
+            name: "contrato.pdf",
+            mime_type: "application/pdf",
+            url: "http://127.0.0.1:1/contrato.pdf",
+          },
+        ],
+      },
+    };
+
+    const materialized = await materializeInboundMediaAttachments(event, {
+      mediaDir: "/tmp/no-deberia-usarse",
+    });
+    expect(materialized.data?.attachments?.[0]?.local_path).toBeUndefined();
+  });
+
 });

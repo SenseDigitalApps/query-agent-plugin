@@ -102,6 +102,26 @@ function isAudioAttachment(attachment: { kind?: string; mime_type?: string }): b
   return attachment.kind === "audio" || mimeType.startsWith("audio/");
 }
 
+function isImageAttachment(attachment: { kind?: string; mime_type?: string }): boolean {
+  const mimeType = attachment.mime_type?.toLowerCase() ?? "";
+  return attachment.kind === "image" || mimeType.startsWith("image/");
+}
+
+/**
+ * Adjuntos que hay que bajar a disco antes de pasarlos al agente.
+ *
+ * OpenClaw descarta cualquier imagen que no traiga una ruta local: en
+ * `resolveAgentTurnAttachments` hace `if (!attachment.path) return false`, y en
+ * el historial ademas rechaza las rutas remotas. Una URL, por publica que sea,
+ * nunca llega al modelo. El audio ya se bajaba por este mismo motivo.
+ */
+function needsLocalMaterialization(attachment: {
+  kind?: string;
+  mime_type?: string;
+}): boolean {
+  return isAudioAttachment(attachment) || isImageAttachment(attachment);
+}
+
 function audioAttachments(event: QueryUserMessageEvent) {
   return (event.data?.attachments ?? []).filter(isAudioAttachment);
 }
@@ -158,7 +178,7 @@ function safeFilename(filename: string): string {
   return `${stem || "audio"}${extension || ".bin"}`;
 }
 
-function stableInboundAudioPath(params: {
+function stableInboundMediaPath(params: {
   event: QueryUserMessageEvent;
   attachment: { id?: string | number; name?: string; url: string };
   index: number;
@@ -206,27 +226,27 @@ async function bytesForAttachmentUrl(url: string): Promise<Buffer> {
   throw new Error(`Unsupported media URL: ${url.slice(0, 80)}`);
 }
 
-export async function materializeInboundAudioAttachments(
+export async function materializeInboundMediaAttachments(
   event: QueryUserMessageEvent,
   options: { mediaDir?: string; log?: QueryLog } = {},
 ): Promise<QueryUserMessageEvent> {
   const attachments = event.data?.attachments ?? [];
-  if (attachments.length === 0 || !attachments.some(isAudioAttachment)) return event;
+  if (attachments.length === 0 || !attachments.some(needsLocalMaterialization)) return event;
 
   const mediaDir = options.mediaDir ?? DEFAULT_INBOUND_MEDIA_DIR;
   await mkdir(mediaDir, { recursive: true });
   const enrichedAttachments = await Promise.all(
     attachments.map(async (attachment, index) => {
-      if (!isAudioAttachment(attachment)) return attachment;
+      if (!needsLocalMaterialization(attachment)) return attachment;
       if (attachment.local_path) return attachment;
 
-      const localPath = stableInboundAudioPath({ event, attachment, index, mediaDir });
+      const localPath = stableInboundMediaPath({ event, attachment, index, mediaDir });
       try {
         try {
           const existing = await stat(localPath);
           if (existing.isFile() && existing.size > 0) {
             options.log?.debug?.(
-              `query_inbound_audio_materialized_existing msg=${event.client_msg_id} path=${localPath} bytes=${existing.size}`,
+              `query_inbound_media_materialized_existing msg=${event.client_msg_id} path=${localPath} bytes=${existing.size}`,
             );
             return { ...attachment, local_path: localPath, size: attachment.size ?? existing.size };
           }
@@ -239,12 +259,12 @@ export async function materializeInboundAudioAttachments(
           if ((error as { code?: string }).code !== "EEXIST") throw error;
         });
         options.log?.info?.(
-          `query_inbound_audio_materialized msg=${event.client_msg_id} attachment=${attachment.id ?? index} path=${localPath} bytes=${bytes.length}`,
+          `query_inbound_media_materialized msg=${event.client_msg_id} attachment=${attachment.id ?? index} path=${localPath} bytes=${bytes.length}`,
         );
         return { ...attachment, local_path: localPath, size: attachment.size ?? bytes.length };
       } catch (error) {
         options.log?.warn?.(
-          `query_inbound_audio_materialize_failed msg=${event.client_msg_id} attachment=${attachment.id ?? index} url=${attachment.url} error=${String(error)}`,
+          `query_inbound_media_materialize_failed msg=${event.client_msg_id} attachment=${attachment.id ?? index} url=${attachment.url} error=${String(error)}`,
         );
         return attachment;
       }
@@ -356,7 +376,7 @@ export async function dispatchQueryMessage(params: {
 }): Promise<QueryAgentResult> {
   const core = getQueryRuntime();
   const { cfg, account, threadId } = params;
-  const event = await materializeInboundAudioAttachments(params.event, { log: params.log });
+  const event = await materializeInboundMediaAttachments(params.event, { log: params.log });
   const peerId = threadId || account.accountId;
   const threadType = event.data?.thread_type;
   const sender = event.data?.sender;
@@ -403,7 +423,10 @@ export async function dispatchQueryMessage(params: {
       commandBody: agentBody,
     },
     media: attachments.map((attachment) => ({
-      path: isAudioAttachment(attachment) ? attachment.local_path : undefined,
+      // Vale para audio y para imagen: OpenClaw solo mira `path`. Sin ruta
+      // local, `resolveAgentTurnAttachments` descarta la imagen en silencio y
+      // el turno llega con `imagesCount: 0`.
+      path: attachment.local_path,
       url: attachment.url,
       contentType: attachment.mime_type,
       kind: mediaKind(attachment.kind),
