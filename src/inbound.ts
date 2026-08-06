@@ -110,20 +110,32 @@ function isImageAttachment(attachment: { kind?: string; mime_type?: string }): b
 /**
  * Adjuntos que hay que bajar a disco antes de pasarlos al agente.
  *
- * OpenClaw descarta cualquier imagen que no traiga una ruta local: en
+ * OpenClaw descarta cualquier adjunto que no traiga una ruta local: en
  * `resolveAgentTurnAttachments` hace `if (!attachment.path) return false`, y en
  * el historial ademas rechaza las rutas remotas. Una URL, por publica que sea,
- * nunca llega al modelo. El audio ya se bajaba por este mismo motivo.
+ * nunca llega al modelo.
+ *
+ * Vale para todo, no solo para medios. Un xlsx o un pdf enviados desde Query se
+ * caian por este mismo `if`, y como ademas no se mencionaban en el cuerpo el
+ * agente ni se enteraba de que existian: contestaba como si el mensaje hubiera
+ * llegado sin nada.
  */
-function needsLocalMaterialization(attachment: {
+function needsLocalMaterialization(_attachment: {
   kind?: string;
   mime_type?: string;
 }): boolean {
-  return isAudioAttachment(attachment) || isImageAttachment(attachment);
+  return true;
 }
 
 function audioAttachments(event: QueryUserMessageEvent) {
   return (event.data?.attachments ?? []).filter(isAudioAttachment);
+}
+
+/** Todo lo que no es audio ni imagen: hojas de calculo, pdf, csv, texto. */
+function documentAttachments(event: QueryUserMessageEvent) {
+  return (event.data?.attachments ?? []).filter(
+    (attachment) => !isAudioAttachment(attachment) && !isImageAttachment(attachment),
+  );
 }
 
 function attachmentTranscript(attachment: {
@@ -165,7 +177,9 @@ function originalFilename(attachment: { name?: string; url: string }, index: num
     const fromPath = cleanPath.split("/").pop();
     if (fromPath) return fromPath;
   }
-  return `audio-${index + 1}`;
+  // Neutro a proposito: esta funcion ya no sirve solo para notas de voz, y un
+  // xlsx llamado "audio-1" es peor que uno sin nombre.
+  return `adjunto-${index + 1}`;
 }
 
 function safeFilename(filename: string): string {
@@ -175,7 +189,7 @@ function safeFilename(filename: string): string {
     .replace(/[^\w.-]+/g, "-")
     .replace(/^-+|-+$/g, "")
     .slice(0, 80);
-  return `${stem || "audio"}${extension || ".bin"}`;
+  return `${stem || "adjunto"}${extension || ".bin"}`;
 }
 
 function stableInboundMediaPath(params: {
@@ -347,6 +361,27 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
       ].join("\n"),
     ];
   });
+  const documentLines = documentAttachments(event).map((attachment, index) => {
+    const filename = originalFilename(attachment, index);
+    return [
+      `DocumentAttachment ${index + 1}:`,
+      `Filename: ${filename}`,
+      `MediaType: ${attachment.mime_type || "application/octet-stream"}`,
+      attachment.local_path ? `LocalPath: ${attachment.local_path}` : "",
+      isHttpUrl(attachment.url) ? `MediaUrl: ${attachment.url}` : "",
+      // Sin esto el agente ve la ruta y responde describiendo el archivo por su
+      // nombre, sin abrirlo. Un xlsx es un zip de XML: hay que leerlo con
+      // codigo, no de corrido.
+      "Instruction: la persona te adjunto este archivo en este mensaje. Abrelo " +
+        "desde LocalPath para responder; si es xlsx u otro formato binario, " +
+        "leelo con codigo (openpyxl, pandas o equivalente) en vez de suponer su " +
+        "contenido. Si no puedes abrirlo, dilo claramente en vez de responder " +
+        "como si no hubiera llegado nada.",
+    ]
+      .filter(Boolean)
+      .join("\n");
+  });
+
   const context = [
     `Canal Query: ${event.data?.thread_name || event.thread_id || "desconocido"}`,
     `Tipo: ${event.data?.thread_type || "desconocido"}`,
@@ -355,6 +390,7 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
       : "",
     resolvedActionLine(event),
     ...audioLines,
+    ...documentLines,
     "Si creas una tarea programada para una persona, configura la entrega al canal privado indicado; no uses un canal compartido como destino individual.",
   ]
     .filter(Boolean)

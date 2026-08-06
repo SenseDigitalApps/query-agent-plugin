@@ -244,16 +244,75 @@ describe("Query inbound resolved actions", () => {
     }
   });
 
-  it("leaves documents alone: only audio and images se bajan a disco", async () => {
+  it("materializes documents too: sin ruta local OpenClaw los descarta igual", async () => {
+    // Mismo `if (!attachment.path) return false` que se comia las imagenes. Un
+    // xlsx enviado desde Query llegaba al agente como si el mensaje no trajera
+    // nada, y por eso contestaba sin haberlo abierto.
+    const sheetBytes = Buffer.from("504b0304140000000800", "hex");
+    const server = createServer((request, response) => {
+      if (!request.url?.startsWith("/extracto.xlsx")) {
+        response.writeHead(404);
+        response.end();
+        return;
+      }
+      response.writeHead(200, {
+        "content-type":
+          "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+      });
+      response.end(sheetBytes);
+    });
+    await new Promise<void>((resolve) => server.listen(0, "127.0.0.1", resolve));
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const mediaDir = await mkdtemp(join(tmpdir(), "query-inbound-doc-"));
+    try {
+      const event: QueryUserMessageEvent = {
+        type: "message",
+        role: "user",
+        content: "listo mira extractos de bancolombia",
+        client_msg_id: "xlsx-1",
+        data: {
+          attachments: [
+            {
+              id: 7,
+              kind: "file",
+              name: "16800013235_202607.xlsx",
+              mime_type:
+                "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+              url: `http://127.0.0.1:${address.port}/extracto.xlsx`,
+            },
+          ],
+        },
+      };
+
+      const materialized = await materializeInboundMediaAttachments(event, { mediaDir });
+      const attachment = materialized.data?.attachments?.[0];
+      expect(attachment?.local_path).toBeTruthy();
+      expect(await readFile(attachment?.local_path ?? "")).toEqual(sheetBytes);
+
+      // Bajarlo no basta: si no se nombra en el cuerpo, el agente no sabe que
+      // le llego un archivo ni donde buscarlo.
+      const body = bodyForAgent(materialized);
+      expect(body).toContain("DocumentAttachment 1:");
+      expect(body).toContain("Filename: 16800013235_202607.xlsx");
+      expect(body).toContain(`LocalPath: ${attachment?.local_path}`);
+      expect(body).toContain("leelo con codigo");
+    } finally {
+      await rm(mediaDir, { recursive: true, force: true });
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+    }
+  });
+
+  it("a document that fails to download still reaches the agent by url", async () => {
     const event: QueryUserMessageEvent = {
       type: "message",
       role: "user",
       content: "te paso el contrato",
-      client_msg_id: "doc-1",
+      client_msg_id: "doc-caido",
       data: {
         attachments: [
           {
-            id: 7,
+            id: 9,
             kind: "file",
             name: "contrato.pdf",
             mime_type: "application/pdf",
@@ -262,11 +321,46 @@ describe("Query inbound resolved actions", () => {
         ],
       },
     };
+    const mediaDir = await mkdtemp(join(tmpdir(), "query-inbound-doc-fail-"));
+    try {
+      const materialized = await materializeInboundMediaAttachments(event, { mediaDir });
+      expect(materialized.data?.attachments?.[0]?.local_path).toBeUndefined();
 
-    const materialized = await materializeInboundMediaAttachments(event, {
-      mediaDir: "/tmp/no-deberia-usarse",
+      const body = bodyForAgent(materialized);
+      expect(body).toContain("DocumentAttachment 1:");
+      expect(body).toContain("MediaUrl: http://127.0.0.1:1/contrato.pdf");
+      expect(body).not.toContain("LocalPath:");
+    } finally {
+      await rm(mediaDir, { recursive: true, force: true });
+    }
+  });
+
+  it("does not label an image or an audio as a document", () => {
+    const body = bodyForAgent({
+      type: "message",
+      role: "user",
+      content: "mira",
+      client_msg_id: "mixto-1",
+      data: {
+        attachments: [
+          {
+            kind: "image",
+            name: "captura.png",
+            mime_type: "image/png",
+            url: "https://example.test/captura.png",
+          },
+          {
+            kind: "audio",
+            name: "nota.ogg",
+            mime_type: "audio/ogg",
+            url: "https://example.test/nota.ogg",
+          },
+        ],
+      },
     });
-    expect(materialized.data?.attachments?.[0]?.local_path).toBeUndefined();
+
+    expect(body).not.toContain("DocumentAttachment");
+    expect(body).toContain("AudioAttachment 1:");
   });
 
 });
