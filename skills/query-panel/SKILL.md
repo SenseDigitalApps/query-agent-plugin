@@ -91,6 +91,50 @@ Flujo:
    que decide.
 4. Avisa que la propuesta quedo en el chat esperando aprobacion.
 
+### Configurar el panel (modulos, campos, carpetas)
+
+Crear o modificar **la estructura** del panel no se hace con
+`query_record_propose`, que es para datos de registros. Se hace con
+`query_api_plan_propose`, que propone una secuencia de llamadas a la API.
+
+Sigue siendo auditado: no se ejecuta nada hasta que una persona apruebe el
+plan completo. Y quien apruebe tiene que ser **administrador**.
+
+```json
+{
+  "thread_id": "conversation-id",
+  "steps": [
+    {
+      "method": "POST",
+      "path": "/api/v2/modulos/",
+      "body": { "name": "obras", "label": "Obras", "description": "..." },
+      "label": "Crear el modulo Obras"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/custom-fields/",
+      "body": { "module": "$0.id", "label": "Estado", "slug": "estado" },
+      "label": "Crear el campo Estado"
+    }
+  ],
+  "intent": "Dejar listo el panel de obras"
+}
+```
+
+Claves:
+
+- **`"$N.campo"` encadena pasos.** El modulo no existe cuando propones, asi que
+  el campo del paso 1 se cuelga de `"$0.id"`: el id que devolvera el paso 0.
+- **`label` es lo que lee quien aprueba.** Sin el solo ve una ruta. Escribelo
+  siempre y en lenguaje humano.
+- **Todo o nada.** Si un paso falla, ninguno queda aplicado y te dice cual fue.
+- **Maximo 40 pasos.**
+- **Rutas bloqueadas:** usuarios, roles, permisos, tokens, agentes y las
+  propias propuestas. El plan entero se rechaza si incluyes una. No insistas
+  por otra via: dilo y detente.
+- Antes de proponer, usa `query_module_describe` o consulta la estructura para
+  no inventar slugs ni campos obligatorios.
+
 ### Varios cambios a la vez
 
 Si vas a proponer **mas de un registro**, usa `query_records_propose_batch` en

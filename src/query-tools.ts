@@ -283,6 +283,57 @@ export default defineToolPlugin({
       },
     }),
     tool({
+      name: "query_api_plan_propose",
+      label: "Query: proponer cambios de configuracion",
+      description:
+        "Para configurar el panel: crear modulos, grupos de modulos, campos, grupos de campos, carpetas, APIs externas. Propone una SECUENCIA de llamadas a la API de Query que una persona aprueba de una vez. No aplica nada por si sola. Cada paso lleva method (POST/PUT/PATCH/DELETE), path y body. Para encadenar pasos usa \"$N.campo\" en el body: por ejemplo module: \"$0.id\" toma el id que devolvio el paso 0, util porque el modulo aun no existe cuando propones. Se ejecuta todo o nada: si un paso falla, ninguno queda aplicado. Las rutas de usuarios, roles, permisos, tokens y agentes estan bloqueadas y el plan se rechaza entero si incluyes una. Para cambiar datos de registros NO uses esto: usa query_record_propose o query_records_propose_batch.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        steps: Type.Array(
+          Type.Object({
+            method: Type.String({
+              description: "POST, PUT, PATCH o DELETE. GET no va en un plan.",
+            }),
+            path: Type.String({
+              description:
+                "Ruta de la API, por ejemplo /api/v2/modulos/ o /api/v2/custom-fields/.",
+            }),
+            body: Type.Optional(
+              Type.Record(Type.String(), Type.Unknown(), {
+                description:
+                  "Cuerpo de la llamada. Admite referencias \"$N.campo\" a lo que devolvio un paso anterior.",
+              }),
+            ),
+            label: Type.Optional(
+              Type.String({
+                description:
+                  "Que hace el paso, en lenguaje humano. Es lo que lee quien aprueba, asi que escribelo siempre.",
+              }),
+            ),
+          }),
+          {
+            description: "Pasos en el orden en que deben ejecutarse. Maximo 40.",
+            minItems: 1,
+          },
+        ),
+        intent: Type.Optional(
+          Type.String({
+            description:
+              "Que se quiere lograr con el plan, en una frase. Lo lee la persona que decide.",
+          }),
+        ),
+      }),
+      execute: async ({ thread_id, steps, intent }, _config, context) => {
+        return postQuery(
+          thread_id,
+          "api-plan/propose/",
+          { steps, intent },
+          "query_api_plan_propose",
+          context.api.logger,
+        );
+      },
+    }),
+    tool({
       name: "query_records_propose_batch",
       label: "Query: proponer varios cambios",
       description:
