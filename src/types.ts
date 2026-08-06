@@ -13,6 +13,9 @@ export type QueryChannelConfig = {
   reconnectMaxMs?: number;
   responseTimeoutMs?: number;
   stateFile?: string;
+  ttsVoice?: string;
+  ttsLang?: string;
+  ttsRate?: string;
   accounts?: Record<string, QueryAccountConfig>;
 };
 
@@ -30,6 +33,9 @@ export type ResolvedQueryAccount = {
   reconnectMaxMs: number;
   responseTimeoutMs: number;
   stateFile?: string;
+  ttsVoice?: string;
+  ttsLang?: string;
+  ttsRate?: string;
 };
 
 export type QueryConfig = OpenClawConfig & {

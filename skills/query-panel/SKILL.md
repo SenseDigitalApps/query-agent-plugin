@@ -31,7 +31,9 @@ que lo que ves es exactamente lo que ella ve. No es tu acceso: es el suyo.
    ver esta persona.
 2. `query_module_describe` — de que trata el modulo: sus grupos de campos, los
    campos de cada grupo, sus tipos, cuales son obligatorios, cuales son de solo
-   lectura y que opciones exactas admite cada campo de seleccion.
+   lectura y que opciones exactas admite cada campo de seleccion. En campos
+   `status`, si una opcion viene como `Etiqueta|color`, usa solo `Etiqueta` al
+   proponer valores; el sufijo despues de `|` es metadata visual del estado.
 3. `query_records_search` — busca con el slug real del campo y el valor exacto
    que devolvio el paso 2.
 4. `query_record_get` — abre un registro concreto cuando necesites todo su
@@ -91,7 +93,9 @@ dilo y detente.
 Flujo:
 
 1. `query_module_describe` — consigue los slugs reales y los valores exactos que
-   admite cada campo. Un slug inventado hace fallar la propuesta entera.
+   admite cada campo. Un slug inventado hace fallar la propuesta entera. En
+   campos `status`, si la opcion aparece como `Etiqueta|color`, propone solo
+   `Etiqueta`; el color no debe guardarse como valor del registro.
 2. `query_records_search` o `query_record_get` — si vas a actualizar, mira antes
    como esta el registro. Para llenar un campo relacional `ref_*`, busca tambien
    el registro relacionado y usa `{"id": ...}`; si solo conoces el consecutivo,

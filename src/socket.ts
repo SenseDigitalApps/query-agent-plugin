@@ -155,6 +155,7 @@ function oneVoiceNote(attachments: QueryAttachment[]): QueryAttachment[] {
 
 async function buildAssistantAudioAttachment(
   event: QueryUserMessageEvent,
+  account: ResolvedQueryAccount,
   text: string,
 ): Promise<QueryAttachment | undefined> {
   if (!eventRequestsAudio(event)) return undefined;
@@ -163,7 +164,7 @@ async function buildAssistantAudioAttachment(
   const directory = await mkdtemp(join(tmpdir(), "query-tts-"));
   const outputPath = join(directory, "reply.mp3");
   try {
-    await runTextToSpeech(speechText, outputPath);
+    await runTextToSpeech(speechText, outputPath, account);
     const bytes = await readFile(outputPath);
     return {
       id: `assistant-audio-${Date.now()}`,
@@ -188,8 +189,15 @@ function textForSpeech(text: string): string {
     .slice(0, 1400);
 }
 
-function runTextToSpeech(text: string, outputPath: string): Promise<void> {
+function runTextToSpeech(
+  text: string,
+  outputPath: string,
+  account: ResolvedQueryAccount,
+): Promise<void> {
   const ttsBin = QUERY_TTS_BIN ?? require.resolve("node-edge-tts/bin.js");
+  const voice = account.ttsVoice ?? QUERY_TTS_VOICE;
+  const lang = account.ttsLang ?? QUERY_TTS_LANG;
+  const rate = account.ttsRate ?? QUERY_TTS_RATE;
   return new Promise((resolve, reject) => {
     const child = spawn(
       "node",
@@ -200,11 +208,11 @@ function runTextToSpeech(text: string, outputPath: string): Promise<void> {
         "--filepath",
         outputPath,
         "--voice",
-        QUERY_TTS_VOICE,
+        voice,
         "--lang",
-        QUERY_TTS_LANG,
+        lang,
         "--rate",
-        QUERY_TTS_RATE,
+        rate,
         "--outputFormat",
         "audio-24khz-48kbitrate-mono-mp3",
         "--timeout",
@@ -594,9 +602,17 @@ export class QuerySocketMonitor {
       );
       try {
         const alreadyHasAudio = mediaAttachments.some(isAudioAttachment);
+        if (!alreadyHasAudio && eventRequestsAudio(event)) {
+          this.options.log?.info?.(
+            `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
+              `query_assistant_audio_voice voice=${JSON.stringify(this.options.account.ttsVoice ?? QUERY_TTS_VOICE)} ` +
+              `lang=${JSON.stringify(this.options.account.ttsLang ?? QUERY_TTS_LANG)} ` +
+              `rate=${JSON.stringify(this.options.account.ttsRate ?? QUERY_TTS_RATE)}`,
+          );
+        }
         const assistantAudio = alreadyHasAudio
           ? undefined
-          : await buildAssistantAudioAttachment(event, result.text);
+          : await buildAssistantAudioAttachment(event, this.options.account, result.text);
         if (assistantAudio) mediaAttachments.push(assistantAudio);
       } catch (error) {
         this.options.log?.warn?.(
