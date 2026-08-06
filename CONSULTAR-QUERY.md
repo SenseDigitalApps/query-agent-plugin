@@ -57,6 +57,19 @@ consultar **caduca a los 15 minutos** por seguridad.
 Se arregla solo: **escríbele un mensaje nuevo en ese canal y vuelve a
 pedírselo**.
 
+## Los recordatorios automáticos
+
+Si tienes una tarea programada —por ejemplo un resumen cada mañana— no le pasa
+lo anterior: pide su permiso sola al arrancar y consulta con **los permisos de
+quien creó la tarea**. Si la creaste tú, ve lo que tú ves; si la creó otra
+persona, lo que ve esa persona. Que alguien más responda en el canal no cambia
+eso: cada quien sigue viendo lo suyo.
+
+Si un recordatorio te dice que no pudo consultar, casi siempre es que quedó
+registrado sin dueño (por ejemplo, se creó antes de que esto existiera en un
+canal compartido). Se arregla volviéndolo a crear desde una conversación con la
+persona en cuyo nombre debe correr.
+
 ## Consultar sí, cambiar no
 
 Estas consultas son de lectura. Si le pides que **modifique o cree** un

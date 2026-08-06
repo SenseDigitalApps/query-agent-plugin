@@ -4,6 +4,7 @@ import type {
   PluginHookGatewayCronService,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { sendQueryOutboundEvent } from "./socket.js";
+import { getDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
 import { DEFAULT_ACCOUNT_ID, type QueryOutboundEvent } from "./types.js";
 
 type CronDelivery = {
@@ -60,6 +61,52 @@ function targetFrom(event: PluginHookCronChangedEvent): SyncedCron | undefined {
   };
 }
 
+/**
+ * Consigue la credencial de la tarea antes de que el agente use sus tools.
+ *
+ * Un cron no tiene turno humano detras, asi que el store esta vacio para ese
+ * hilo y cualquier consulta fallaria con ``no_credential``. Se pide aqui, al
+ * arrancar el turno, para que todo lo de abajo funcione igual que en una
+ * conversacion normal y ninguna tool tenga que saber que la origino un cron.
+ */
+async function primeScheduleCredential(
+  api: OpenClawPluginApi,
+  context: { jobId?: string; channel?: string; chatId?: string; channelId?: string },
+): Promise<void> {
+  // ``jobId`` solo viene en ejecuciones disparadas por cron; un turno normal ya
+  // trae su credencial con el mensaje y no debe tocar nada de esto.
+  const externalId = context.jobId?.trim();
+  if (!externalId) return;
+  if (context.channel && context.channel !== "query") return;
+  const threadId = (context.chatId ?? context.channelId ?? "").trim();
+  if (!threadId) return;
+  // Un reintento dentro de la misma ventana reusa la credencial que ya hay.
+  if (getDelegatedAuth(threadId)) return;
+
+  const synced = syncedCrons.get(externalId);
+  try {
+    const { requestQueryScheduleAuth } = await import("./socket.js");
+    const granted = await requestQueryScheduleAuth(
+      threadId,
+      externalId,
+      synced?.accountId,
+    );
+    if (!granted) {
+      api.logger.warn(
+        `query cron ${externalId}: Query no entrego credencial para el hilo ` +
+          `${threadId}. Vuelve a crear la tarea desde una conversacion con la ` +
+          `persona en cuyo nombre debe correr.`,
+      );
+      return;
+    }
+    rememberDelegatedAuth(threadId, granted.auth, granted.socketUrl);
+  } catch (error) {
+    api.logger.warn(
+      `query cron ${externalId}: fallo pidiendo credencial: ${String(error)}`,
+    );
+  }
+}
+
 export function registerQueryCronSync(
   api: OpenClawPluginApi,
   sendEvent: typeof sendQueryOutboundEvent = sendQueryOutboundEvent,
@@ -70,10 +117,25 @@ export function registerQueryCronSync(
   api.on("gateway_stop", () => {
     cronService = undefined;
   });
+  api.on("before_agent_start", async (_event, context) => {
+    await primeScheduleCredential(api, context ?? {});
+  });
   api.on("cron_changed", (event: PluginHookCronChangedEvent) => {
     if (!["added", "updated", "removed"].includes(event.action)) return;
     const target = targetFrom(event);
     if (!target) return;
+
+    // Query no acepta que le digamos de quien es la tarea: hay que probarlo con
+    // la credencial del turno en que se pidio. Aqui todavia existe, porque
+    // ``cron_changed`` se dispara mientras esa conversacion sigue viva. Si no
+    // esta, la tarea se registra igual pero sin identidad y no podra consultar.
+    const stored = getDelegatedAuth(target.threadId);
+    if (!stored) {
+      api.logger.warn(
+        `query cron ${event.jobId} se registro sin credencial: no podra ` +
+          `consultar Query hasta que se vuelva a crear desde una conversacion.`,
+      );
+    }
 
     const outbound: QueryOutboundEvent = {
       type: "schedule.sync",
@@ -85,6 +147,7 @@ export function registerQueryCronSync(
         action: event.action,
         external_id: event.jobId,
         job: event.job ?? null,
+        ...(stored ? { delegated_token: stored.auth.token } : {}),
       },
     };
     try {

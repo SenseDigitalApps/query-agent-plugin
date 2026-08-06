@@ -41,6 +41,22 @@ const require = createRequire(import.meta.url);
 // Renovar la credencial es un ida y vuelta por el socket ya abierto: si Query
 // no contesta en este plazo, se prefiere perder el adjunto a colgar el turno.
 const QUERY_AUTH_REFRESH_TIMEOUT_MS = 10_000;
+
+// Claves con las que se espera un auth.granted. Van por funcion y no escritas a
+// mano en cada sitio porque emisor y receptor tienen que construir exactamente
+// la misma: si divergen, la promesa nunca se resuelve y la espera muere por
+// timeout sin decir por que.
+// Escapado y no el byte crudo: un NUL literal en el fuente hace que git y
+// grep traten el archivo como binario.
+const AUTH_KEY_SEPARATOR = "\u0000";
+
+function turnAuthKey(threadId: string, clientMsgId: string): string {
+  return `${threadId}${AUTH_KEY_SEPARATOR}${clientMsgId}`;
+}
+
+function scheduleAuthKey(threadId: string, externalId: string): string {
+  return `${threadId}${AUTH_KEY_SEPARATOR}cron:${externalId}`;
+}
 const QUERY_REPLY_AUDIO = process.env.QUERY_REPLY_AUDIO ?? "1";
 const QUERY_REPLY_AUDIO_MODE = process.env.QUERY_REPLY_AUDIO_MODE ?? "requested";
 const QUERY_TTS_BIN = process.env.QUERY_TTS_BIN;
@@ -383,7 +399,13 @@ export class QuerySocketMonitor {
       return;
     }
     if (event.type === "auth.granted") {
-      const turnKey = `${String(event.thread_id ?? "")} ${event.client_msg_id ?? ""}`;
+      // Una credencial de tarea programada no pertenece a ningun turno, asi
+      // que se correlaciona por su external_id. Sin esto, dos crones del
+      // mismo canal compartirian la clave vacia y se robarian la respuesta.
+      const scheduleId = event.data?.external_id;
+      const turnKey = scheduleId
+        ? scheduleAuthKey(String(event.thread_id ?? ""), scheduleId)
+        : turnAuthKey(String(event.thread_id ?? ""), event.client_msg_id ?? "");
       const waiting = this.pendingAuth.get(turnKey);
       if (waiting) {
         this.pendingAuth.delete(turnKey);
@@ -711,11 +733,61 @@ export class QuerySocketMonitor {
     }
   }
 
+  /**
+   * Credencial de una tarea programada, a nombre de quien la creo.
+   *
+   * Un cron despierta sin que nadie escriba, asi que no hay turno del que colgar
+   * la delegacion ni ``client_msg_id`` que renovar. Query resuelve la autoria
+   * que quedo registrada con la tarea y devuelve una credencial corta.
+   */
+  requestScheduleAuth(
+    threadId: string,
+    externalId: string,
+  ): Promise<QueryDelegatedAuth | undefined> {
+    const key = scheduleAuthKey(threadId, externalId);
+    const existing = this.pendingAuth.get(key);
+    if (existing) {
+      return new Promise((resolve) => {
+        const previous = existing.resolve;
+        existing.resolve = (auth) => {
+          previous(auth);
+          resolve(auth);
+        };
+      });
+    }
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingAuth.delete(key);
+        resolve(undefined);
+      }, QUERY_AUTH_REFRESH_TIMEOUT_MS);
+      timer.unref?.();
+      this.pendingAuth.set(key, { resolve, timer });
+      try {
+        this.send({
+          type: "auth.request",
+          role: "system",
+          content: "",
+          client_msg_id: "",
+          thread_id: threadId,
+          data: { external_id: externalId },
+        });
+      } catch (error) {
+        this.pendingAuth.delete(key);
+        clearTimeout(timer);
+        this.options.log?.warn?.(
+          `[${this.options.account.accountId}] ${externalId}: ` +
+            `query_schedule_auth_failed error=${String(error)}`,
+        );
+        resolve(undefined);
+      }
+    });
+  }
+
   refreshDelegatedAuth(
     threadId: string,
     clientMsgId: string,
   ): Promise<QueryDelegatedAuth | undefined> {
-    const turnKey = `${threadId}\u0000${clientMsgId}`;
+    const turnKey = turnAuthKey(threadId, clientMsgId);
     const existing = this.pendingAuth.get(turnKey);
     if (existing) {
       // Ya hay una renovacion en vuelo para este turno: no se pide dos veces.
@@ -774,6 +846,31 @@ export function getQueryAccountForUpload(
   accountId: string,
 ): ResolvedQueryAccount | undefined {
   return activeMonitors.get(accountId)?.account;
+}
+
+/**
+ * Credencial para una tarea programada, a nombre de quien la creo.
+ *
+ * ``accountId`` puede faltar: el hook que arranca el turno de un cron conoce el
+ * canal y el job, pero no siempre de que cuenta de Query salio. Con una sola
+ * cuenta configurada -el caso normal- no hay ambiguedad y se usa esa; con
+ * varias se exige el dato en vez de adivinar y pedirle credencial al tenant
+ * equivocado.
+ */
+export async function requestQueryScheduleAuth(
+  threadId: string | number,
+  externalId: string,
+  accountId?: string,
+): Promise<{ auth: QueryDelegatedAuth; socketUrl: string } | undefined> {
+  if (!externalId) return undefined;
+  let monitor = accountId ? activeMonitors.get(accountId) : undefined;
+  if (!monitor) {
+    if (activeMonitors.size !== 1) return undefined;
+    monitor = [...activeMonitors.values()][0];
+  }
+  const auth = await monitor.requestScheduleAuth(String(threadId), externalId);
+  if (!auth?.token) return undefined;
+  return { auth, socketUrl: monitor.account.url };
 }
 
 export function sendQueryOutboundEvent(accountId: string, event: QueryOutboundEvent): void {

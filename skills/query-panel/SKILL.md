@@ -67,6 +67,17 @@ El permiso que Query concede para consultar caduca a los 15 minutos. Si una
 herramienta responde `no_credential`, pide a la persona que te escriba un
 mensaje nuevo en ese canal y reintenta. No busques otra via ni pidas tokens.
 
+## Cuando lo que corre es una tarea programada
+
+Un cron no tiene a nadie escribiendo, asi que no puede seguir el consejo de
+arriba: pedir "escribeme un mensaje" a las 8 de la manana no sirve de nada. Su
+credencial se pide sola al arrancar el turno y corre con los permisos de **quien
+creo la tarea**, no con los de quien haya escrito de ultimo en el canal.
+
+Si aun asi una consulta responde `no_credential`, la tarea se registro sin autor
+comprobable. No lo intentes por otra via: dilo en el reporte y pide que vuelvan
+a crearla desde una conversacion con la persona en cuyo nombre debe correr.
+
 ## Cambiar datos: siempre propuesta, nunca ejecucion
 
 `query_record_propose` es la **unica** via para tocar datos de Query. Sirve

@@ -98,6 +98,8 @@ export type QueryAuthGrantedEvent = {
   data: {
     tenant?: QueryTenant;
     delegated_auth?: QueryDelegatedAuth;
+    /** Presente cuando la credencial es de una tarea programada, no de un turno. */
+    external_id?: string;
   };
 };
 
@@ -180,7 +182,13 @@ export type QueryAgentActivity = {
 };
 
 export type QueryOutboundEvent = {
-  type: "activity" | "message" | "error" | "schedule.sync" | "auth.refresh";
+  type:
+    | "activity"
+    | "message"
+    | "error"
+    | "schedule.sync"
+    | "auth.refresh"
+    | "auth.request";
   role: "assistant" | "system";
   content: string;
   client_msg_id: string;
