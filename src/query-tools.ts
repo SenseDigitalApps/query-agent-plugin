@@ -246,10 +246,16 @@ export default defineToolPlugin({
               "Id del registro a actualizar. Omitelo para proponer uno nuevo.",
           }),
         ),
-        fields: Type.Record(Type.String(), Type.Unknown(), {
+        title: Type.Optional(
+          Type.String({
+            description:
+              "Titulo descriptivo del registro. En Query viaja fuera de fields.",
+          }),
+        ),
+        fields: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
           description:
             "Valores por slug. En campos ref_ envia preferiblemente {id: ...}; si solo conoces el consecutivo usa {consecutivo: ...}. No inventes label, type ni module.",
-        }),
+        })),
         intent: Type.Optional(
           Type.String({
             description:
@@ -258,17 +264,19 @@ export default defineToolPlugin({
         ),
       }),
       execute: async (
-        { thread_id, module, record_id, fields, intent },
+        { thread_id, module, record_id, title, fields, intent },
         _config,
         context,
       ) => {
         const base = `modules/${encodeURIComponent(module)}/records/`;
         const path =
           record_id === undefined ? `${base}propose/` : `${base}${record_id}/propose/`;
+        const body: Record<string, unknown> = { fields: fields ?? {}, intent };
+        if (title !== undefined) body.title = title;
         return postQuery(
           thread_id,
           path,
-          { fields, intent },
+          body,
           "query_record_propose",
           context.api.logger,
         );
