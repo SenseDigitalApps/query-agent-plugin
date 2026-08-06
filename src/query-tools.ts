@@ -283,6 +283,60 @@ export default defineToolPlugin({
       },
     }),
     tool({
+      name: "query_records_propose_batch",
+      label: "Query: proponer varios cambios",
+      description:
+        "Como query_record_propose pero para varios registros del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. Cada item puede traer record_id (actualizar) u omitirlo (crear). Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Despues, dile a la persona que revise la propuesta; no afirmes que los cambios quedaron hechos.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        module: Type.String({
+          description: "Modulo donde se haran los cambios. Uno solo por lote.",
+        }),
+        items: Type.Array(
+          Type.Object({
+            record_id: Type.Optional(
+              Type.Integer({
+                description:
+                  "Id del registro a actualizar. Omitelo para proponer uno nuevo.",
+              }),
+            ),
+            title: Type.Optional(
+              Type.String({
+                description:
+                  "Titulo descriptivo del registro. En Query viaja fuera de fields.",
+              }),
+            ),
+            fields: Type.Optional(
+              Type.Record(Type.String(), Type.Unknown(), {
+                description:
+                  "Valores por slug, igual que en query_record_propose. En campos ref_ envia {id: ...} o {consecutivo: ...}.",
+              }),
+            ),
+          }),
+          {
+            description:
+              "Registros del lote, maximo 50. Cada uno necesita fields, title o ambos.",
+            minItems: 1,
+          },
+        ),
+        intent: Type.Optional(
+          Type.String({
+            description:
+              "Por que se propone el lote, en una frase. Lo lee la persona que decide.",
+          }),
+        ),
+      }),
+      execute: async ({ thread_id, module, items, intent }, _config, context) => {
+        return postQuery(
+          thread_id,
+          `modules/${encodeURIComponent(module)}/records/propose-batch/`,
+          { items, intent },
+          "query_records_propose_batch",
+          context.api.logger,
+        );
+      },
+    }),
+    tool({
       name: "query_record_get",
       label: "Query: ver registro",
       description:

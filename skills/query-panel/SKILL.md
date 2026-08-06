@@ -91,6 +91,40 @@ Flujo:
    que decide.
 4. Avisa que la propuesta quedo en el chat esperando aprobacion.
 
+### Varios cambios a la vez
+
+Si vas a proponer **mas de un registro**, usa `query_records_propose_batch` en
+lugar de llamar varias veces a `query_record_propose`.
+
+No es una optimizacion tecnica: diez llamadas sueltas dejan diez tarjetas y
+obligan a la persona a aprobar diez veces algo que para ella fue una sola
+orden. Con el lote queda una tarjeta y una aprobacion.
+
+```json
+{
+  "thread_id": "conversation-id",
+  "module": "obras",
+  "items": [
+    { "record_id": 12, "fields": { "estado": "Cerrado" } },
+    { "record_id": 15, "fields": { "estado": "Cerrado" } },
+    { "title": "Obra nueva", "fields": { "estado": "Abierto" } }
+  ],
+  "intent": "Cerrar las obras entregadas y abrir la de marzo"
+}
+```
+
+Reglas del lote:
+
+- Todos los items van al **mismo modulo**. Si necesitas tocar dos modulos, son
+  dos lotes.
+- Cada item lleva `record_id` para actualizar, u omitelo para crear.
+- Maximo 50 items.
+- **Si un item esta mal, Query rechaza el lote completo** y no queda ninguna
+  tarjeta. Revisa los slugs con `query_module_describe` antes de enviarlo. La
+  respuesta te dice el `index` de cada item con problema para que lo corrijas.
+- Al confirmar se aplica **todo o nada**: si un registro cambio desde que
+  propusiste, no se escribe ninguno y te lo informa.
+
 ### Editar el titulo del registro
 
 El titulo visible de un registro **no** es un campo dentro de `fields` ni una
