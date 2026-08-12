@@ -283,6 +283,33 @@ export default defineToolPlugin({
       },
     }),
     tool({
+      name: "query_record_delete_propose",
+      label: "Query: proponer eliminar un registro",
+      description:
+        "Unica via para eliminar un registro de Query. No borra nada: deja la propuesta en el chat y una persona la confirma en un modal que le muestra que va a desaparecer. Exige que esa persona tenga permiso de eliminar en el modulo (miralo en query_modules_list: permissions.delete); si no lo tiene, Query rechaza la propuesta. Un borrado no se puede deshacer, asi que identifica el registro con query_records_search o query_record_get antes y explica en intent por que se elimina. Despues, dile a la persona que revise la propuesta; no afirmes que el registro quedo eliminado.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        module: Type.String({ description: "Modulo al que pertenece el registro." }),
+        record_id: Type.Integer({
+          description: "Id del registro que se propone eliminar.",
+        }),
+        intent: Type.Optional(
+          Type.String({
+            description:
+              "Por que se propone eliminarlo, en una frase. Lo lee la persona que decide.",
+          }),
+        ),
+      }),
+      execute: async ({ thread_id, module, record_id, intent }, _config, context) =>
+        postQuery(
+          thread_id,
+          `modules/${encodeURIComponent(module)}/records/${record_id}/propose-delete/`,
+          { intent },
+          "query_record_delete_propose",
+          context.api.logger,
+        ),
+    }),
+    tool({
       name: "query_api_plan_propose",
       label: "Query: proponer cambios de configuracion",
       description:
@@ -337,7 +364,7 @@ export default defineToolPlugin({
       name: "query_records_propose_batch",
       label: "Query: proponer varios cambios",
       description:
-        "Como query_record_propose pero para varios registros del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. Cada item puede traer record_id (actualizar) u omitirlo (crear). Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Despues, dile a la persona que revise la propuesta; no afirmes que los cambios quedaron hechos.",
+        "Como query_record_propose pero para varios registros del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. Cada item puede traer record_id (actualizar), omitirlo (crear) o llevar delete: true con su record_id (eliminar ese registro). Un lote con borrados exige que la persona tenga permiso de eliminar en el modulo, se pinta en rojo y pide una confirmacion aparte. Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Despues, dile a la persona que revise la propuesta; no afirmes que los cambios quedaron hechos.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         module: Type.String({
@@ -363,10 +390,16 @@ export default defineToolPlugin({
                   "Valores por slug, igual que en query_record_propose. En campos ref_ envia {id: ...} o {consecutivo: ...}.",
               }),
             ),
+            delete: Type.Optional(
+              Type.Boolean({
+                description:
+                  "true para ELIMINAR ese registro en vez de escribirlo. Exige record_id y no lleva fields ni title. El borrado no se puede deshacer.",
+              }),
+            ),
           }),
           {
             description:
-              "Registros del lote, maximo 50. Cada uno necesita fields, title o ambos.",
+              "Registros del lote, maximo 50. Cada uno necesita fields, title o ambos, salvo los de delete: true, que solo llevan record_id.",
             minItems: 1,
           },
         ),

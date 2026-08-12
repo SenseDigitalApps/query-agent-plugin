@@ -176,13 +176,45 @@ Reglas del lote:
 
 - Todos los items van al **mismo modulo**. Si necesitas tocar dos modulos, son
   dos lotes.
-- Cada item lleva `record_id` para actualizar, u omitelo para crear.
+- Cada item lleva `record_id` para actualizar, u omitelo para crear. Con
+  `"delete": true` y su `record_id`, ese item **elimina** el registro.
+- Un lote que borra exige que quien apruebe tenga permiso de **eliminar** en el
+  modulo, se pinta en rojo y pide una confirmacion aparte que enumera lo que va
+  a desaparecer.
 - Maximo 50 items.
 - **Si un item esta mal, Query rechaza el lote completo** y no queda ninguna
   tarjeta. Revisa los slugs con `query_module_describe` antes de enviarlo. La
   respuesta te dice el `index` de cada item con problema para que lo corrijas.
 - Al confirmar se aplica **todo o nada**: si un registro cambio desde que
   propusiste, no se escribe ninguno y te lo informa.
+
+### Eliminar un registro
+
+Borrar es la unica operacion que no se puede deshacer, asi que va por su propia
+herramienta: `query_record_delete_propose`. Tampoco borra nada por si sola —deja
+la propuesta y una persona la confirma en un modal que le enumera que registro
+desaparece— pero exige mas que las demas:
+
+- Quien apruebe necesita permiso de **eliminar** en ese modulo, no el de editar.
+  Miralo en `query_modules_list` (`permissions.delete`) antes de proponer.
+- Ubica el registro con `query_records_search` o `query_record_get` y confirma
+  que es el correcto. Un id equivocado aqui no tiene vuelta atras.
+- Escribe siempre `intent` explicando por que se elimina: es lo que lee quien
+  decide, y en un borrado es lo unico que justifica el clic.
+- Si son varios registros del mismo modulo, usa `query_records_propose_batch`
+  con `"delete": true` en cada item, para que sea una sola decision.
+
+```json
+{
+  "thread_id": "conversation-id",
+  "module": "obras",
+  "record_id": 12,
+  "intent": "Duplicado de la obra 15, cargado dos veces el 3 de marzo"
+}
+```
+
+Nunca des por hecho el borrado en tu respuesta: di que la propuesta quedo en el
+chat esperando aprobacion.
 
 ### Editar el titulo del registro
 

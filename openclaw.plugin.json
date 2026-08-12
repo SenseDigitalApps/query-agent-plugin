@@ -192,6 +192,7 @@
       "query_module_describe",
       "query_records_search",
       "query_record_propose",
+      "query_record_delete_propose",
       "query_record_get",
       "query_api_plan_propose",
       "query_records_propose_batch"
