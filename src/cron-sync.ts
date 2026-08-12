@@ -5,7 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { sendQueryOutboundEvent } from "./socket.js";
 import { getDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
-import { DEFAULT_ACCOUNT_ID, type QueryOutboundEvent } from "./types.js";
+import type { QueryOutboundEvent } from "./types.js";
 
 type CronDelivery = {
   channel?: string;
@@ -21,6 +21,11 @@ type SyncedCron = {
 
 const syncedCrons = new Map<string, SyncedCron>();
 let cronService: PluginHookGatewayCronService | undefined;
+
+function explicitQueryAccountId(delivery: CronDelivery): string | undefined {
+  const accountId = delivery.accountId?.trim();
+  return accountId || undefined;
+}
 
 export async function cancelQuerySchedules(
   externalIds: string[],
@@ -55,8 +60,10 @@ function targetFrom(event: PluginHookCronChangedEvent): SyncedCron | undefined {
   if (target === undefined || target === null || String(target).trim() === "") {
     return undefined;
   }
+  const accountId = explicitQueryAccountId(delivery);
+  if (!accountId) return undefined;
   return {
-    accountId: delivery.accountId?.trim() || DEFAULT_ACCOUNT_ID,
+    accountId,
     threadId: String(target),
   };
 }
@@ -122,6 +129,21 @@ export function registerQueryCronSync(
   });
   api.on("cron_changed", (event: PluginHookCronChangedEvent) => {
     if (!["added", "updated", "removed"].includes(event.action)) return;
+    const delivery = (
+      event.job as
+        | (NonNullable<PluginHookCronChangedEvent["job"]> & { delivery?: CronDelivery })
+        | undefined
+    )?.delivery;
+    if (
+      delivery?.channel === "query" &&
+      !explicitQueryAccountId(delivery) &&
+      (delivery.threadId ?? delivery.to) !== undefined
+    ) {
+      api.logger.warn(
+        `query cron ${event.jobId} tiene delivery Query sin accountId; ` +
+          `no se sincroniza para evitar enrutarlo por una cuenta equivocada.`,
+      );
+    }
     const target = targetFrom(event);
     if (!target) return;
 

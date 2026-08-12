@@ -62,6 +62,28 @@ describe("Query cron sync", () => {
     );
   });
 
+  it("refuses to sync Query cron delivery without an explicit accountId", () => {
+    const { api, hooks } = fakeApi();
+    const send = vi.fn();
+    registerQueryCronSync(api as never, send);
+
+    hooks.get("cron_changed")?.({
+      action: "added",
+      jobId: "cron-ambiguous-1",
+      job: {
+        delivery: {
+          channel: "query",
+          threadId: "private-42",
+        },
+      },
+    });
+
+    expect(send).not.toHaveBeenCalled();
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("delivery Query sin accountId"),
+    );
+  });
+
   it("deduplicates cancellation ids received from Query", async () => {
     const { api, hooks } = fakeApi();
     const remove = vi.fn(async () => undefined);
