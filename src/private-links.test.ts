@@ -75,6 +75,23 @@ describe("rewritePrivateArtifactLinks", () => {
     expect(result.attachments).toHaveLength(1);
   });
 
+  it("leaves public Query media URLs untouched", async () => {
+    const publicUrl = "https://apius.itsquery.com/media/public/agent_chat/24/reporte.html";
+    const upload = vi.fn(async () => {
+      throw new Error("public URLs should not be uploaded");
+    });
+
+    const result = await rewritePrivateArtifactLinks({
+      text: `Listo: ${publicUrl}`,
+      upload,
+    });
+
+    expect(upload).not.toHaveBeenCalled();
+    expect(result.text).toBe(`Listo: ${publicUrl}`);
+    expect(result.attachments).toHaveLength(0);
+    expect(result.blockedUrls).toHaveLength(0);
+  });
+
   it("removes unresolved private links instead of leaking them", async () => {
     const result = await rewritePrivateArtifactLinks({
       text: "Mira http://127.0.0.1:8787/no-existe.html",

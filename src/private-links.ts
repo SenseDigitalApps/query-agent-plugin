@@ -127,6 +127,16 @@ export async function localArtifactPathForPrivateUrl(rawUrl: string): Promise<st
   return undefined;
 }
 
+export function shouldRewritePrivateArtifactUrl(rawUrl: string): boolean {
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return false;
+  }
+  return ["http:", "https:"].includes(parsed.protocol) && isPrivateHostname(parsed.hostname);
+}
+
 export async function rewritePrivateArtifactLinks(params: {
   text: string;
   upload: (path: string, sourceUrl: string) => Promise<QueryAttachment>;
@@ -145,6 +155,7 @@ export async function rewritePrivateArtifactLinks(params: {
     const suffix = token.match(TRAILING_URL_PUNCTUATION_RE)?.[0] ?? "";
     const sourceUrl = suffix ? token.slice(0, -suffix.length) : token;
     if (!sourceUrl || replacements.has(token)) continue;
+    if (!shouldRewritePrivateArtifactUrl(sourceUrl)) continue;
     const path = await localArtifactPathForPrivateUrl(sourceUrl);
     if (!path) {
       blockedUrls.push(sourceUrl);
