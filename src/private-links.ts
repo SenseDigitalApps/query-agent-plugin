@@ -4,6 +4,8 @@ import { basename, delimiter, isAbsolute, join, normalize } from "node:path";
 import type { QueryAttachment } from "./types.js";
 
 const PRIVATE_LINK_RE = /\bhttps?:\/\/[^\s<>"')\]]+/gi;
+const LOCAL_ABSOLUTE_PATH_RE =
+  /\/(?:home|tmp|var|mnt|opt|srv|Users|private\/var)\/[^\s<>"')\]]+/g;
 const TRAILING_URL_PUNCTUATION_RE = /[.,!?;:]+$/;
 const MAX_ARTIFACT_SEARCH_DIRS = 8_000;
 const ARTIFACT_FILENAME_RE =
@@ -127,6 +129,31 @@ export async function localArtifactPathForPrivateUrl(rawUrl: string): Promise<st
   return undefined;
 }
 
+async function localArtifactPathForLocalPath(rawPath: string): Promise<string | undefined> {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(rawPath);
+  } catch {
+    decoded = rawPath;
+  }
+  if (!isAbsolute(decoded)) return undefined;
+  return existingFile(decoded);
+}
+
+async function localArtifactPathForUrl(rawUrl: string): Promise<string | undefined> {
+  const privateUrlPath = await localArtifactPathForPrivateUrl(rawUrl);
+  if (privateUrlPath) return privateUrlPath;
+
+  let parsed: URL;
+  try {
+    parsed = new URL(rawUrl);
+  } catch {
+    return undefined;
+  }
+  if (!["http:", "https:"].includes(parsed.protocol)) return undefined;
+  return localArtifactPathForLocalPath(parsed.pathname);
+}
+
 export function shouldRewritePrivateArtifactUrl(rawUrl: string): boolean {
   let parsed: URL;
   try {
@@ -137,12 +164,31 @@ export function shouldRewritePrivateArtifactUrl(rawUrl: string): boolean {
   return ["http:", "https:"].includes(parsed.protocol) && isPrivateHostname(parsed.hostname);
 }
 
+function privateArtifactLinkCandidates(text: string): string[] {
+  const urls = Array.from(text.matchAll(PRIVATE_LINK_RE), (match) => ({
+    token: match[0],
+    index: match.index ?? -1,
+  }));
+  const localPaths = Array.from(text.matchAll(LOCAL_ABSOLUTE_PATH_RE), (match) => {
+    const index = match.index ?? -1;
+    const isInsideUrl = urls.some((url) => {
+      const urlEnd = url.index + url.token.length;
+      return index >= url.index && index < urlEnd;
+    });
+    return isInsideUrl ? undefined : { token: match[0], index };
+  }).filter((match): match is { token: string; index: number } => Boolean(match));
+
+  return [...urls, ...localPaths]
+    .sort((left, right) => left.index - right.index)
+    .map((match) => match.token);
+}
+
 export async function rewritePrivateArtifactLinks(params: {
   text: string;
   upload: (path: string, sourceUrl: string) => Promise<QueryAttachment>;
   onBlocked?: (sourceUrl: string) => void;
 }): Promise<{ text: string; attachments: QueryAttachment[]; blockedUrls: string[] }> {
-  const matches = Array.from(params.text.matchAll(PRIVATE_LINK_RE));
+  const matches = privateArtifactLinkCandidates(params.text);
   if (matches.length === 0) return { text: params.text, attachments: [], blockedUrls: [] };
 
   let rewritten = params.text;
@@ -151,12 +197,18 @@ export async function rewritePrivateArtifactLinks(params: {
   const blockedUrls: string[] = [];
 
   for (const match of matches) {
-    const token = match[0];
+    const token = match;
     const suffix = token.match(TRAILING_URL_PUNCTUATION_RE)?.[0] ?? "";
     const sourceUrl = suffix ? token.slice(0, -suffix.length) : token;
     if (!sourceUrl || replacements.has(token)) continue;
-    if (!shouldRewritePrivateArtifactUrl(sourceUrl)) continue;
-    const path = await localArtifactPathForPrivateUrl(sourceUrl);
+    const isUrl = /^https?:\/\//i.test(sourceUrl);
+    const isPrivateUrl = isUrl && shouldRewritePrivateArtifactUrl(sourceUrl);
+    const isLocalPath = isAbsolute(sourceUrl);
+    if (!isUrl && !isLocalPath) continue;
+    const path = isLocalPath
+      ? await localArtifactPathForLocalPath(sourceUrl)
+      : await localArtifactPathForUrl(sourceUrl);
+    if (!isPrivateUrl && isUrl && !path) continue;
     if (!path) {
       blockedUrls.push(sourceUrl);
       params.onBlocked?.(sourceUrl);

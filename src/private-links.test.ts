@@ -92,6 +92,48 @@ describe("rewritePrivateArtifactLinks", () => {
     expect(result.blockedUrls).toHaveLength(0);
   });
 
+  it("uploads local absolute paths embedded in Markdown links", async () => {
+    const { path } = await tempArtifact("estado-resultados.pdf");
+    const upload = vi.fn(async () => ({
+      kind: "file",
+      name: "estado-resultados.pdf",
+      url: "https://apius.itsquery.com/media/public/agent_chat/estado-resultados.pdf",
+    }));
+
+    const result = await rewritePrivateArtifactLinks({
+      text: `Archivo: [estado-resultados.pdf](${path})`,
+      upload,
+    });
+
+    expect(upload).toHaveBeenCalledWith(path, path);
+    expect(result.text).toBe(
+      "Archivo: [estado-resultados.pdf](https://apius.itsquery.com/media/public/agent_chat/estado-resultados.pdf)",
+    );
+    expect(result.attachments).toHaveLength(1);
+  });
+
+  it("uploads public URLs that accidentally contain a server-local absolute path", async () => {
+    const { path } = await tempArtifact("estado-resultados-query-junio-julio-2026.pdf");
+    const leakedUrl = `https://us.itsquery.com${path}`;
+    const upload = vi.fn(async () => ({
+      kind: "file",
+      name: "estado-resultados-query-junio-julio-2026.pdf",
+      url: "https://apius.itsquery.com/media/public/agent_chat/estado-resultados-query-junio-julio-2026.pdf",
+    }));
+
+    const result = await rewritePrivateArtifactLinks({
+      text: `Mira ${leakedUrl}`,
+      upload,
+    });
+
+    expect(upload).toHaveBeenCalledWith(path, leakedUrl);
+    expect(result.text).toBe(
+      "Mira https://apius.itsquery.com/media/public/agent_chat/estado-resultados-query-junio-julio-2026.pdf",
+    );
+    expect(result.text).not.toContain("https://us.itsquery.com/home");
+    expect(result.attachments).toHaveLength(1);
+  });
+
   it("removes unresolved private links instead of leaking them", async () => {
     const result = await rewritePrivateArtifactLinks({
       text: "Mira http://127.0.0.1:8787/no-existe.html",
