@@ -86,6 +86,12 @@ a crearla desde una conversacion con la persona en cuyo nombre debe correr.
 tanto para crear como para actualizar, y no aplica nada: deja la propuesta en el
 chat y una persona la confirma con un boton.
 
+No uses propuestas de registros para **entregar archivos generados**. Si creaste
+un HTML, PDF, imagen, hoja de calculo, demo, reporte visual o cualquier artifact
+local, eso no es un registro de negocio: envialo como respuesta normal para que
+el canal Query lo suba como attachment/public asset. Nunca crees un registro
+solo para mandar un link o una ruta local del archivo generado.
+
 Nunca escribas en Query por otro camino, aunque dispongas de otra herramienta,
 otro token o la API general. Si crees que hace falta escribir de otra forma,
 dilo y detente.

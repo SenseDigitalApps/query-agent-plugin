@@ -25,6 +25,9 @@ const THREAD_PARAM = Type.String({
     "Id del canal de Query en el que estas conversando (conversation.id del mensaje).",
 });
 
+const LOCAL_GENERATED_ARTIFACT_RE =
+  /(?:^|[\s"'([{])(?:https?:\/\/[^\s<>"')\]]*)?\/(?:home|tmp|var|mnt|opt|srv|Users|private\/var)\/[^\s<>"')\]]+\.(?:html?|pdf|csv|json|md|txt|xlsx?|docx?|pptx?|zip|png|jpe?g|gif|webp|mp4|mov|m4v|webm)(?:[.,!?;:]?)(?:$|[\s"')\]}])/i;
+
 type QueryToolLog = ToolPluginExecutionContext["api"]["logger"];
 
 function queryApiUrl(socketUrl: string, path: string): string {
@@ -75,6 +78,22 @@ function noCredential() {
       "No hay una credencial vigente para ese canal. Responde a un mensaje " +
       "reciente de esa conversacion antes de consultar.",
     ...(alive.length ? { canales_disponibles: alive } : {}),
+  };
+}
+
+export function containsGeneratedArtifactReference(value: unknown): boolean {
+  if (value === undefined || value === null) return false;
+  const text = typeof value === "string" ? value : JSON.stringify(value);
+  return LOCAL_GENERATED_ARTIFACT_RE.test(text);
+}
+
+function generatedArtifactAsRecordError() {
+  return {
+    ok: false,
+    error: "artifact_delivery_not_record",
+    detail:
+      "No crees ni actualices registros de Query para entregar HTML, PDF u otros artifacts generados desde rutas locales. " +
+      "Envia una respuesta normal con la ruta local o preview del archivo; el canal Query lo subira como attachment/public asset.",
   };
 }
 
@@ -236,7 +255,7 @@ export default defineToolPlugin({
       name: "query_record_propose",
       label: "Query: proponer un cambio",
       description:
-        "Unica via para cambiar datos en Query. No aplica nada: deja la propuesta en el chat y una persona la confirma con un boton. Usala tanto para crear como para actualizar. Antes, consulta query_module_describe y usa los slugs exactos. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Despues, dile a la persona que revise la propuesta en el chat; no afirmes que el cambio quedo hecho.",
+        "Unica via para cambiar datos en Query. No aplica nada: deja la propuesta en el chat y una persona la confirma con un boton. Usala tanto para crear como para actualizar registros reales. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: esos se envian como attachments/public assets en una respuesta normal. Antes, consulta query_module_describe y usa los slugs exactos. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Despues, dile a la persona que revise la propuesta en el chat; no afirmes que el cambio quedo hecho.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         module: Type.String({ description: "Modulo donde se hara el cambio." }),
@@ -268,6 +287,9 @@ export default defineToolPlugin({
         _config,
         context,
       ) => {
+        if (containsGeneratedArtifactReference({ title, fields, intent })) {
+          return generatedArtifactAsRecordError();
+        }
         const base = `modules/${encodeURIComponent(module)}/records/`;
         const path =
           record_id === undefined ? `${base}propose/` : `${base}${record_id}/propose/`;
@@ -364,7 +386,7 @@ export default defineToolPlugin({
       name: "query_records_propose_batch",
       label: "Query: proponer varios cambios",
       description:
-        "Como query_record_propose pero para varios registros del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. Cada item puede traer record_id (actualizar), omitirlo (crear) o llevar delete: true con su record_id (eliminar ese registro). Un lote con borrados exige que la persona tenga permiso de eliminar en el modulo, se pinta en rojo y pide una confirmacion aparte. Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Despues, dile a la persona que revise la propuesta; no afirmes que los cambios quedaron hechos.",
+        "Como query_record_propose pero para varios registros reales del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: esos se envian como attachments/public assets en una respuesta normal. Cada item puede traer record_id (actualizar), omitirlo (crear) o llevar delete: true con su record_id (eliminar ese registro). Un lote con borrados exige que la persona tenga permiso de eliminar en el modulo, se pinta en rojo y pide una confirmacion aparte. Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Despues, dile a la persona que revise la propuesta; no afirmes que los cambios quedaron hechos.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         module: Type.String({
@@ -411,6 +433,9 @@ export default defineToolPlugin({
         ),
       }),
       execute: async ({ thread_id, module, items, intent }, _config, context) => {
+        if (containsGeneratedArtifactReference({ items, intent })) {
+          return generatedArtifactAsRecordError();
+        }
         return postQuery(
           thread_id,
           `modules/${encodeURIComponent(module)}/records/propose-batch/`,
