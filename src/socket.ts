@@ -15,6 +15,7 @@ import {
   reconnectDelay,
 } from "./protocol.js";
 import { queryAttachmentForMediaSource, queryAttachmentForMediaUrl } from "./media.js";
+import { rewritePrivateArtifactLinks } from "./private-links.js";
 import {
   isLocalArtifactPath,
   QueryUploadError,
@@ -620,7 +621,13 @@ export class QuerySocketMonitor {
         );
       }
       mediaAttachments = oneVoiceNote(mediaAttachments);
-      const responseText = result.text.trim();
+      const rewritten = await this.rewritePrivateLinksInResponse(
+        event,
+        threadId,
+        result.text.trim(),
+      );
+      mediaAttachments.push(...rewritten.attachments);
+      const responseText = rewritten.text.trim();
       if (!responseText && mediaAttachments.length === 0) {
         if (event.data?.delivery_mode === "intervene") {
           const response: CachedResponse = {
@@ -771,6 +778,26 @@ export class QuerySocketMonitor {
         attachment,
       });
     }
+  }
+
+  private async rewritePrivateLinksInResponse(
+    event: QueryUserMessageEvent,
+    threadId: string,
+    text: string,
+  ): Promise<{ text: string; attachments: QueryAttachment[] }> {
+    const delegated = event.data?.delegated_auth;
+    if (!text || !delegated?.token) return { text, attachments: [] };
+    const rewritten = await rewritePrivateArtifactLinks({
+      text,
+      upload: async (path) => this.uploadArtifact(event, threadId, path, delegated),
+      onBlocked: (sourceUrl) => {
+        this.options.log?.warn?.(
+          `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
+            `query_private_link_blocked url=${sourceUrl}`,
+        );
+      },
+    });
+    return { text: rewritten.text, attachments: rewritten.attachments };
   }
 
   /**

@@ -6,6 +6,7 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import { inspectQueryAccount, listQueryAccountIds, resolveQueryAccount } from "./config.js";
 import { queryAttachmentForMediaSource, queryAttachmentForMediaUrl } from "./media.js";
+import { rewritePrivateArtifactLinks } from "./private-links.js";
 import {
   botIdFromSocketUrl,
   isLocalArtifactPath,
@@ -19,6 +20,17 @@ import {
   type QueryConfig,
   type ResolvedQueryAccount,
 } from "./types.js";
+
+async function resolveAccountForOutbound(
+  cfg: QueryConfig,
+  accountId: string,
+): Promise<ResolvedQueryAccount | undefined> {
+  const { getQueryAccountForUpload } = await import("./socket.js");
+  const liveAccount = getQueryAccountForUpload(accountId);
+  if (liveAccount) return liveAccount;
+  const configuredAccount = resolveQueryAccount(cfg, accountId);
+  return configuredAccount.configured ? configuredAccount : undefined;
+}
 
 function newOutboundClientMsgId(deliveryQueueId?: string): string {
   if (deliveryQueueId?.trim()) return deliveryQueueId.trim();
@@ -41,6 +53,7 @@ export function uploadTargetForOutbound(to: string, threadId?: string | number |
  * puede servir y que el navegador resolvia contra su propio dominio.
  */
 async function resolveOutboundAttachment(
+  cfg: QueryConfig,
   accountId: string | null | undefined,
   to: string,
   threadId: string | number | null | undefined,
@@ -50,8 +63,7 @@ async function resolveOutboundAttachment(
   if (!isLocalArtifactPath(mediaUrl)) {
     return queryAttachmentForMediaSource(mediaUrl, options);
   }
-  const { getQueryAccountForUpload } = await import("./socket.js");
-  const account = getQueryAccountForUpload(accountId ?? DEFAULT_ACCOUNT_ID);
+  const account = await resolveAccountForOutbound(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
   const botId = account ? botIdFromSocketUrl(account.url) : "";
   if (!account || !botId) {
     // Sin cuenta activa no hay a donde subir; se mantiene el comportamiento
@@ -67,7 +79,32 @@ async function resolveOutboundAttachment(
   });
 }
 
-async function sendOutboundEvent(params: {
+async function rewritePrivateLinksForOutbound(
+  cfg: QueryConfig,
+  accountId: string,
+  to: string,
+  threadId: string | number | null | undefined,
+  text: string,
+) {
+  if (!text) return { text, attachments: [] };
+  const account = await resolveAccountForOutbound(cfg, accountId);
+  const botId = account ? botIdFromSocketUrl(account.url) : "";
+  if (!account || !botId) return { text, attachments: [] };
+  return rewritePrivateArtifactLinks({
+    text,
+    upload: async (path) =>
+      uploadOutboundArtifactToQuery({
+        uploadUrl: queryOutboundUploadUrlFor(account.url, botId),
+        token: account.token,
+        to: uploadTargetForOutbound(to, threadId),
+        path,
+        attachment: queryAttachmentForMediaUrl(path),
+      }),
+  });
+}
+
+export async function sendOutboundEvent(params: {
+  cfg: QueryConfig;
   accountId?: string | null;
   to: string;
   text: string;
@@ -77,11 +114,22 @@ async function sendOutboundEvent(params: {
 }) {
   const { sendQueryOutboundEvent } = await import("./socket.js");
   const accountId = params.accountId?.trim() || DEFAULT_ACCOUNT_ID;
+  const rewritten = await rewritePrivateLinksForOutbound(
+    params.cfg,
+    accountId,
+    params.to,
+    params.threadId,
+    params.text,
+  );
   const clientMsgId = newOutboundClientMsgId(params.deliveryQueueId);
+  const existingAttachments = Array.isArray(params.data?.attachments)
+    ? (params.data.attachments as unknown[])
+    : [];
+  const attachments = [...existingAttachments, ...rewritten.attachments];
   const event: QueryOutboundEvent = {
     type: "message",
     role: "assistant",
-    content: params.text,
+    content: rewritten.text,
     client_msg_id: clientMsgId,
     thread_id: String(params.threadId ?? params.to),
     data: {
@@ -91,9 +139,17 @@ async function sendOutboundEvent(params: {
         ? {}
         : { thread_id: String(params.threadId) }),
       ...(params.data ?? {}),
+      ...(attachments.length > 0 ? { attachments } : {}),
     },
   };
-  sendQueryOutboundEvent(accountId, event);
+  try {
+    sendQueryOutboundEvent(accountId, event);
+  } catch (error) {
+    const account = await resolveAccountForOutbound(params.cfg, accountId);
+    if (!account) throw error;
+    const { sendQueryOutboundEventDirect } = await import("./outbound-direct.js");
+    await sendQueryOutboundEventDirect(account, event);
+  }
   return {
     channel: CHANNEL_ID,
     messageId: clientMsgId,
@@ -228,6 +284,7 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
       },
       sendText: async (ctx) =>
         sendOutboundEvent({
+          cfg: ctx.cfg as QueryConfig,
           accountId: ctx.accountId,
           to: ctx.to,
           text: ctx.text,
@@ -236,12 +293,13 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
         }),
       sendMedia: async (ctx) => {
         const attachment = ctx.mediaUrl
-          ? await resolveOutboundAttachment(ctx.accountId, ctx.to, ctx.threadId, ctx.mediaUrl, {
+          ? await resolveOutboundAttachment(ctx.cfg as QueryConfig, ctx.accountId, ctx.to, ctx.threadId, ctx.mediaUrl, {
               audioAsVoice: ctx.audioAsVoice,
               forceDocument: ctx.forceDocument,
             })
           : undefined;
         return sendOutboundEvent({
+          cfg: ctx.cfg as QueryConfig,
           accountId: ctx.accountId,
           to: ctx.to,
           text: ctx.text,
