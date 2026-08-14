@@ -622,6 +622,30 @@ export class QuerySocketMonitor {
       mediaAttachments = oneVoiceNote(mediaAttachments);
       const responseText = result.text.trim();
       if (!responseText && mediaAttachments.length === 0) {
+        if (event.data?.delivery_mode === "intervene") {
+          const response: CachedResponse = {
+            threadId,
+            clientMsgId: event.client_msg_id,
+            type: "turn.adopted",
+            content: "",
+            data: { adopted: true, delivery_mode: "intervene" },
+            completedAt: Date.now(),
+          };
+          await this.store.set(response);
+          this.patchStatus({ lastOutboundAt: Date.now(), lastError: undefined });
+          this.send({
+            type: "turn.adopted",
+            role: "assistant",
+            content: "",
+            client_msg_id: event.client_msg_id,
+            thread_id: threadId,
+            data: response.data,
+          });
+          this.options.log?.info?.(
+            `[${this.options.account.accountId}] ${event.client_msg_id}: query_intervention_adopted total_ms=${Date.now() - receivedAt}`,
+          );
+          return;
+        }
         const response: CachedResponse = {
           threadId,
           clientMsgId: event.client_msg_id,

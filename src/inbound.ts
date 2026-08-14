@@ -429,7 +429,14 @@ export async function dispatchQueryMessage(params: {
     peer: { kind: conversationKind, id: peerId },
   });
   const rawBody = rawBodyForAgent(event);
-  const agentBody = bodyForAgent(event);
+  const body = bodyForAgent(event);
+  // Query solo entrega un segundo turno mientras hay uno activo cuando la
+  // persona pulsa "Intervenir ahora". La directiva hace explicita esa decision
+  // aun si la configuracion global de OpenClaw usa otro modo de cola. Los
+  // mensajes normales no llevan directiva: Query ya los serializo y OpenClaw
+  // debe tratarlos como el turno base, sin recordar ``steer`` en la sesion.
+  const agentBody =
+    event.data?.delivery_mode === "intervene" ? `/queue steer\n${body}` : body;
   const attachments = event.data?.attachments ?? [];
   const ctxPayload = buildChannelInboundEventContext({
     channel: CHANNEL_ID,

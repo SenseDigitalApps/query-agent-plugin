@@ -243,6 +243,65 @@ describe("QuerySocketMonitor", () => {
     await monitor.stop();
   });
 
+  it("reports an explicitly steered turn as adopted instead of failed", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-socket-steer-"));
+    const server = new WebSocketServer({ port: 0 });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const controller = new AbortController();
+    cleanupTasks.push(async () => {
+      controller.abort();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    });
+    const account: ResolvedQueryAccount = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      url: `ws://127.0.0.1:${address.port}/ws/openclaw-agent/test/`,
+      token: "bot-secret",
+      heartbeatMs: 5_000,
+      reconnectMinMs: 100,
+      reconnectMaxMs: 1_000,
+      responseTimeoutMs: 0,
+      stateFile: join(directory, "responses.json"),
+    };
+    let status = { accountId: "default" } as never;
+    const monitor = new QuerySocketMonitor({
+      cfg: { channels: { query: {} } } as never,
+      account,
+      runtime: { error: vi.fn() } as never,
+      abortSignal: controller.signal,
+      getStatus: () => status,
+      setStatus: (next) => { status = next as never; },
+      dispatchMessage: vi.fn(async () => ({ text: "", mediaUrls: [] })),
+    });
+    const connection = new Promise<WebSocket>((resolve) => server.once("connection", resolve));
+    await monitor.start();
+    const socket = await connection;
+    socket.send(JSON.stringify({
+      type: "session.ready",
+      role: "system",
+      content: "",
+      data: { protocol: "query-openclaw.v2", thread_id: "thread-steer" },
+    }));
+    socket.send(JSON.stringify({
+      type: "message",
+      role: "user",
+      content: "agrega este dato",
+      client_msg_id: "msg-steer",
+      thread_id: "thread-steer",
+      data: { attachments: [], delivery_mode: "intervene" },
+    }));
+
+    await expect(receive(socket)).resolves.toMatchObject({ type: "activity" });
+    await expect(receive(socket)).resolves.toMatchObject({
+      type: "turn.adopted",
+      client_msg_id: "msg-steer",
+      data: { adopted: true, delivery_mode: "intervene" },
+    });
+  });
+
   it("sends outbound messages over the active account socket", async () => {
     const directory = await mkdtemp(join(tmpdir(), "query-socket-outbound-"));
     const server = new WebSocketServer({ port: 0 });

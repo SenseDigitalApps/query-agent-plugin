@@ -191,6 +191,7 @@ export type QueryOutboundEvent = {
   type:
     | "activity"
     | "message"
+    | "turn.adopted"
     | "error"
     | "schedule.sync"
     | "auth.refresh"
@@ -205,7 +206,7 @@ export type QueryOutboundEvent = {
 export type CachedResponse = {
   threadId: string;
   clientMsgId: string;
-  type: "message" | "error";
+  type: "message" | "turn.adopted" | "error";
   content: string;
   data: Record<string, unknown>;
   completedAt: number;
