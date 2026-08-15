@@ -3,10 +3,22 @@ import {
   onAgentEvent,
   type AgentEventPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { createHash } from "node:crypto";
-import { mkdir, readFile, stat, writeFile } from "node:fs/promises";
+import { createHash, randomUUID } from "node:crypto";
+import { createWriteStream } from "node:fs";
+import {
+  copyFile,
+  mkdir,
+  readdir,
+  rename,
+  rm,
+  stat,
+  unlink,
+  writeFile,
+} from "node:fs/promises";
 import { homedir } from "node:os";
 import { basename, extname, isAbsolute, join } from "node:path";
+import { Readable } from "node:stream";
+import { pipeline } from "node:stream/promises";
 import type {
   QueryAgentActivity,
   QueryConfig,
@@ -87,6 +99,20 @@ type QueryLog = {
 const DEFAULT_INBOUND_MEDIA_DIR =
   process.env.QUERY_INBOUND_MEDIA_DIR ?? join(homedir(), ".openclaw", "media", "inbound");
 
+function positiveNumberFromEnv(name: string, fallback: number): number {
+  const parsed = Number(process.env[name]);
+  return Number.isFinite(parsed) && parsed > 0 ? parsed : fallback;
+}
+
+// Un archivo de 200 MB por un enlace lento tarda minutos y es legitimo; lo que
+// no puede es quedarse colgado para siempre, que es lo que pasaba sin timeout.
+const INBOUND_DOWNLOAD_TIMEOUT_MS = positiveNumberFromEnv(
+  "QUERY_INBOUND_DOWNLOAD_TIMEOUT_MS",
+  15 * 60 * 1000,
+);
+const INBOUND_MEDIA_TTL_MS =
+  positiveNumberFromEnv("QUERY_INBOUND_MEDIA_TTL_HOURS", 72) * 60 * 60 * 1000;
+
 function mediaKind(kind: string | undefined) {
   if (kind === "image" || kind === "audio" || kind === "video") return kind;
   if (kind === "file") return "document" as const;
@@ -136,6 +162,18 @@ function documentAttachments(event: QueryUserMessageEvent) {
   return (event.data?.attachments ?? []).filter(
     (attachment) => !isAudioAttachment(attachment) && !isImageAttachment(attachment),
   );
+}
+
+// A partir de aca la forma de leer el archivo deja de ser indiferente.
+const LARGE_ATTACHMENT_HINT_BYTES = positiveNumberFromEnv(
+  "QUERY_LARGE_ATTACHMENT_HINT_BYTES",
+  25 * 1024 * 1024,
+);
+
+function formatAttachmentSize(bytes: number): string {
+  if (bytes >= 1024 * 1024) return `${(bytes / (1024 * 1024)).toFixed(1)} MB`;
+  if (bytes >= 1024) return `${Math.round(bytes / 1024)} KB`;
+  return `${bytes} B`;
 }
 
 function attachmentTranscript(attachment: {
@@ -222,22 +260,77 @@ function isLocalPath(value: string): boolean {
   return !/^[a-z][a-z0-9+.-]*:/i.test(value) || /^[a-z]:[\\/]/i.test(value);
 }
 
-async function bytesForAttachmentUrl(url: string): Promise<Buffer> {
-  if (isDataUrl(url)) {
-    const match = /^data:([^;,]+)?(;base64)?,(.*)$/is.exec(url);
-    if (!match) throw new Error("Invalid data URL");
-    const payload = decodeURIComponent(match[3] ?? "");
-    return match[2] ? Buffer.from(payload, "base64") : Buffer.from(payload, "utf8");
+function bufferForDataUrl(url: string): Buffer {
+  const match = /^data:([^;,]+)?(;base64)?,(.*)$/is.exec(url);
+  if (!match) throw new Error("Invalid data URL");
+  const payload = decodeURIComponent(match[3] ?? "");
+  return match[2] ? Buffer.from(payload, "base64") : Buffer.from(payload, "utf8");
+}
+
+/**
+ * Baja el adjunto a disco sin pasarlo entero por memoria.
+ *
+ * Antes esto era un `arrayBuffer()`: un xlsx de 150 MB se convertia en un
+ * Buffer de 150 MB antes de tocar el disco, y con varios adjuntos a la vez el
+ * proceso del agente se iba al suelo. Con `pipeline` el pico es el del chunk.
+ *
+ * Se escribe en un temporal y se renombra al final: una descarga cortada a la
+ * mitad dejaba un archivo truncado que el chequeo de existencia daba por bueno
+ * en el turno siguiente, y el agente leia datos incompletos sin saberlo.
+ */
+async function downloadAttachmentToFile(
+  url: string,
+  destination: string,
+): Promise<number> {
+  const temporary = `${destination}.${randomUUID().slice(0, 8)}.part`;
+  try {
+    if (isDataUrl(url)) {
+      await writeFile(temporary, bufferForDataUrl(url));
+    } else if (isLocalPath(url)) {
+      await copyFile(url, temporary);
+    } else if (isHttpUrl(url)) {
+      const response = await fetch(url, {
+        signal: AbortSignal.timeout(INBOUND_DOWNLOAD_TIMEOUT_MS),
+      });
+      if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
+      if (!response.body) throw new Error("Respuesta sin cuerpo");
+      await pipeline(
+        Readable.fromWeb(response.body as Parameters<typeof Readable.fromWeb>[0]),
+        createWriteStream(temporary),
+      );
+    } else {
+      throw new Error(`Unsupported media URL: ${url.slice(0, 80)}`);
+    }
+    await rename(temporary, destination);
+    const written = await stat(destination);
+    return written.size;
+  } catch (error) {
+    await rm(temporary, { force: true }).catch(() => {});
+    throw error;
   }
-  if (isLocalPath(url)) {
-    return readFile(url);
+}
+
+/**
+ * Borra lo materializado hace mas de `QUERY_INBOUND_MEDIA_TTL_HOURS`.
+ *
+ * Nadie limpiaba este directorio: con adjuntos de pocos MB tardaba anios en
+ * notarse, pero con archivos de 200 MB llena el disco del agente en semanas.
+ */
+async function cleanupInboundMedia(mediaDir: string, log?: QueryLog): Promise<void> {
+  const cutoff = Date.now() - INBOUND_MEDIA_TTL_MS;
+  const entries = await readdir(mediaDir, { withFileTypes: true }).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.isFile()) continue;
+    const path = join(mediaDir, entry.name);
+    try {
+      const info = await stat(path);
+      if (info.mtimeMs >= cutoff) continue;
+      await unlink(path);
+      log?.debug?.(`query_inbound_media_pruned path=${path} bytes=${info.size}`);
+    } catch {
+      // Otro turno pudo borrarlo primero: no es un error que valga reportar.
+    }
   }
-  if (isHttpUrl(url)) {
-    const response = await fetch(url);
-    if (!response.ok) throw new Error(`HTTP ${response.status} ${response.statusText}`);
-    return Buffer.from(await response.arrayBuffer());
-  }
-  throw new Error(`Unsupported media URL: ${url.slice(0, 80)}`);
 }
 
 export async function materializeInboundMediaAttachments(
@@ -249,41 +342,49 @@ export async function materializeInboundMediaAttachments(
 
   const mediaDir = options.mediaDir ?? DEFAULT_INBOUND_MEDIA_DIR;
   await mkdir(mediaDir, { recursive: true });
-  const enrichedAttachments = await Promise.all(
-    attachments.map(async (attachment, index) => {
-      if (!needsLocalMaterialization(attachment)) return attachment;
-      if (attachment.local_path) return attachment;
+  await cleanupInboundMedia(mediaDir, options.log);
 
-      const localPath = stableInboundMediaPath({ event, attachment, index, mediaDir });
-      try {
-        try {
-          const existing = await stat(localPath);
-          if (existing.isFile() && existing.size > 0) {
-            options.log?.debug?.(
-              `query_inbound_media_materialized_existing msg=${event.client_msg_id} path=${localPath} bytes=${existing.size}`,
-            );
-            return { ...attachment, local_path: localPath, size: attachment.size ?? existing.size };
-          }
-        } catch {
-          // File does not exist yet.
-        }
+  // En serie y no con `Promise.all`: tres adjuntos grandes en paralelo son tres
+  // descargas compitiendo por el mismo ancho de banda y disco, y ninguna de las
+  // tres termina antes por eso.
+  const enrichedAttachments: typeof attachments = [];
+  for (const [index, attachment] of attachments.entries()) {
+    if (!needsLocalMaterialization(attachment) || attachment.local_path) {
+      enrichedAttachments.push(attachment);
+      continue;
+    }
 
-        const bytes = await bytesForAttachmentUrl(attachment.url);
-        await writeFile(localPath, bytes, { flag: "wx" }).catch(async (error: unknown) => {
-          if ((error as { code?: string }).code !== "EEXIST") throw error;
+    const localPath = stableInboundMediaPath({ event, attachment, index, mediaDir });
+    try {
+      const existing = await stat(localPath).catch(() => null);
+      if (existing?.isFile() && existing.size > 0) {
+        options.log?.debug?.(
+          `query_inbound_media_materialized_existing msg=${event.client_msg_id} path=${localPath} bytes=${existing.size}`,
+        );
+        enrichedAttachments.push({
+          ...attachment,
+          local_path: localPath,
+          size: attachment.size ?? existing.size,
         });
-        options.log?.info?.(
-          `query_inbound_media_materialized msg=${event.client_msg_id} attachment=${attachment.id ?? index} path=${localPath} bytes=${bytes.length}`,
-        );
-        return { ...attachment, local_path: localPath, size: attachment.size ?? bytes.length };
-      } catch (error) {
-        options.log?.warn?.(
-          `query_inbound_media_materialize_failed msg=${event.client_msg_id} attachment=${attachment.id ?? index} url=${attachment.url} error=${String(error)}`,
-        );
-        return attachment;
+        continue;
       }
-    }),
-  );
+
+      const bytes = await downloadAttachmentToFile(attachment.url, localPath);
+      options.log?.info?.(
+        `query_inbound_media_materialized msg=${event.client_msg_id} attachment=${attachment.id ?? index} path=${localPath} bytes=${bytes}`,
+      );
+      enrichedAttachments.push({
+        ...attachment,
+        local_path: localPath,
+        size: attachment.size ?? bytes,
+      });
+    } catch (error) {
+      options.log?.warn?.(
+        `query_inbound_media_materialize_failed msg=${event.client_msg_id} attachment=${attachment.id ?? index} url=${attachment.url} error=${String(error)}`,
+      );
+      enrichedAttachments.push(attachment);
+    }
+  }
 
   return {
     ...event,
@@ -363,10 +464,12 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
   });
   const documentLines = documentAttachments(event).map((attachment, index) => {
     const filename = originalFilename(attachment, index);
+    const size = typeof attachment.size === "number" ? attachment.size : 0;
     return [
       `DocumentAttachment ${index + 1}:`,
       `Filename: ${filename}`,
       `MediaType: ${attachment.mime_type || "application/octet-stream"}`,
+      size > 0 ? `Size: ${formatAttachmentSize(size)}` : "",
       attachment.local_path ? `LocalPath: ${attachment.local_path}` : "",
       isHttpUrl(attachment.url) ? `MediaUrl: ${attachment.url}` : "",
       // Sin esto el agente ve la ruta y responde describiendo el archivo por su
@@ -377,6 +480,16 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
         "leelo con codigo (openpyxl, pandas o equivalente) en vez de suponer su " +
         "contenido. Si no puedes abrirlo, dilo claramente en vez de responder " +
         "como si no hubiera llegado nada.",
+      // El tamaño manda sobre la tecnica: `pandas.read_excel` sobre un archivo
+      // de cientos de MB se lleva puesto el proceso, y el agente no tiene como
+      // saberlo si solo ve una ruta.
+      size > LARGE_ATTACHMENT_HINT_BYTES
+        ? "Instruction: este archivo es grande. No lo cargues entero en memoria " +
+          "ni lo vuelques al contexto: leelo en streaming o por consultas " +
+          "(openpyxl en read_only, DuckDB, polars o equivalente), trabaja sobre " +
+          "agregados y muestras, y si tienes que entregar un resultado visual " +
+          "genera un archivo y subelo en vez de imprimir filas."
+        : "",
     ]
       .filter(Boolean)
       .join("\n");
