@@ -662,7 +662,7 @@ export class QuerySocketMonitor {
       );
       const agentDoneAt = Date.now();
       this.options.log?.info?.(
-        `[${this.options.account.accountId}] ${event.client_msg_id}: query_agent_done agent_ms=${agentDoneAt - dispatchAt} total_ms=${agentDoneAt - receivedAt}`,
+        `[${this.options.account.accountId}] ${event.client_msg_id}: query_agent_done agent_ms=${agentDoneAt - dispatchAt} total_ms=${agentDoneAt - receivedAt} diagnostics=${JSON.stringify(result.diagnostics ?? {})}`,
       );
       let mediaAttachments = await this.buildResponseAttachments(
         event,
@@ -726,7 +726,10 @@ export class QuerySocketMonitor {
           clientMsgId: event.client_msg_id,
           type: "error",
           content: "El agente terminó sin devolver contenido visible.",
-          data: { detail: "empty_agent_response" },
+          data: {
+            detail: "empty_agent_response",
+            diagnostics: result.diagnostics ?? {},
+          },
           completedAt: Date.now(),
         };
         await this.store.set(response);

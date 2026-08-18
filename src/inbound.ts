@@ -3,6 +3,7 @@ import {
   onAgentEvent,
   type AgentEventPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-chunking";
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import {
@@ -31,6 +32,18 @@ import { getQueryRuntime } from "./runtime.js";
 export type QueryAgentResult = {
   text: string;
   mediaUrls: string[];
+  diagnostics?: QueryDispatchDiagnostics;
+};
+
+export type QueryDispatchDiagnostics = {
+  queuedFinal?: boolean;
+  counts?: Record<string, number>;
+  failedCounts?: Record<string, number>;
+  sourceReplyDeliveryMode?: string;
+  observedReplyDelivery?: boolean;
+  noVisibleReplyFallbackEligible?: boolean;
+  beforeAgentRunBlocked?: boolean;
+  recoveredFromEmptyReply?: boolean;
 };
 
 function boundedText(value: unknown, maxLength = 80): string | undefined {
@@ -559,6 +572,10 @@ export async function dispatchQueryMessage(params: {
   onProgress?: (detail: string) => void;
   onActivity?: (activity: QueryAgentActivity) => void;
   log?: QueryLog;
+  /** Interno: una recuperacion nunca vuelve a abrir otra recuperacion. */
+  recoveryAttempt?: boolean;
+  /** Permite ejecutar la recuperacion sin repetir herramientas ni acciones. */
+  toolsAllow?: string[];
 }): Promise<QueryAgentResult> {
   const core = getQueryRuntime();
   const { cfg, account, threadId } = params;
@@ -586,7 +603,9 @@ export async function dispatchQueryMessage(params: {
   // mensajes normales no llevan directiva: Query ya los serializo y OpenClaw
   // debe tratarlos como el turno base, sin recordar ``steer`` en la sesion.
   const agentBody =
-    event.data?.delivery_mode === "intervene" ? `/queue steer\n${body}` : body;
+    event.data?.delivery_mode === "intervene"
+      ? `/queue steer\n${body}`
+      : `${body}\n\n[Entrega requerida de Query: este mensaje viene de una persona que espera una respuesta en el chat. Termina siempre con texto visible o un archivo visible para esa persona, incluso si usaste herramientas. No termines con NO_REPLY ni dejes el turno solo en llamadas de herramientas.]`;
   const ctxPayload = buildChannelInboundEventContext({
     channel: CHANNEL_ID,
     accountId: route.accountId,
@@ -628,6 +647,7 @@ export async function dispatchQueryMessage(params: {
   });
 
   let runId: string | undefined;
+  let lastAssistantText = "";
   const unsubscribe = onAgentEvent((agentEvent) => {
     if (agentEvent.sessionKey !== route.sessionKey) return;
     if (agentEvent.agentId && agentEvent.agentId !== route.agentId) return;
@@ -637,12 +657,17 @@ export async function dispatchQueryMessage(params: {
       runId = agentEvent.runId;
     }
     if (agentEvent.runId !== runId) return;
+    if (agentEvent.stream === "assistant") {
+      const streamedText =
+        typeof agentEvent.data.text === "string" ? agentEvent.data.text.trim() : "";
+      if (streamedText) lastAssistantText = streamedText;
+    }
     const activity = activityFromAgentEvent(agentEvent);
     if (activity) params.onActivity?.({ ...activity, runId });
   });
 
   try {
-    await core.channel.inbound.dispatchReply({
+    const turnResult = await core.channel.inbound.dispatchReply({
       cfg,
       channel: CHANNEL_ID,
       accountId: account.accountId,
@@ -673,6 +698,7 @@ export async function dispatchQueryMessage(params: {
         },
       },
       replyPipeline: {},
+      toolsAllow: params.toolsAllow,
       record: {
         onRecordError: (error) => {
           params.onProgress?.(`No se pudo registrar la sesión: ${String(error)}`);
@@ -680,12 +706,71 @@ export async function dispatchQueryMessage(params: {
       },
       messageId: event.client_msg_id,
     });
+
+    const rawDispatchResult =
+      turnResult && turnResult.dispatched ? turnResult.dispatchResult : undefined;
+    const diagnostics: QueryDispatchDiagnostics | undefined = rawDispatchResult
+      ? {
+          queuedFinal: rawDispatchResult.queuedFinal,
+          counts: rawDispatchResult.counts,
+          failedCounts: rawDispatchResult.failedCounts,
+          sourceReplyDeliveryMode: rawDispatchResult.sourceReplyDeliveryMode,
+          observedReplyDelivery: rawDispatchResult.observedReplyDelivery,
+          noVisibleReplyFallbackEligible:
+            rawDispatchResult.noVisibleReplyFallbackEligible,
+          beforeAgentRunBlocked: rawDispatchResult.beforeAgentRunBlocked,
+        }
+      : undefined;
+    const deliveredText = texts.join("\n\n").trim();
+    const streamedFallback =
+      lastAssistantText && !isSilentReplyText(lastAssistantText)
+        ? lastAssistantText
+        : "";
+    const text = deliveredText || streamedFallback;
+    const visibleMedia = uniqueNonEmpty(mediaUrls);
+
+    if (
+      !text &&
+      visibleMedia.length === 0 &&
+      !params.recoveryAttempt &&
+      event.data?.delivery_mode !== "intervene"
+    ) {
+      params.log?.warn?.(
+        `query_empty_reply_recovery msg=${event.client_msg_id} diagnostics=${JSON.stringify(diagnostics ?? {})}`,
+      );
+      const recovery = await dispatchQueryMessage({
+        ...params,
+        event: {
+          ...event,
+          content:
+            "El turno anterior termino sin entregar una respuesta visible. No repitas herramientas, consultas ni acciones. Usando solamente los resultados que ya estan en esta conversacion, responde ahora a la solicitud original con una conclusion breve y visible. Si no fue posible terminarla, explica concretamente que falto.",
+          client_msg_id: `${event.client_msg_id}:visible-recovery`,
+          data: {
+            ...(event.data ?? {}),
+            attachments: [],
+            delivery_mode: "normal",
+          },
+        },
+        recoveryAttempt: true,
+        toolsAllow: [],
+      });
+      return {
+        ...recovery,
+        diagnostics: {
+          ...(recovery.diagnostics ?? diagnostics),
+          recoveredFromEmptyReply: Boolean(
+            recovery.text.trim() || recovery.mediaUrls.length,
+          ),
+        },
+      };
+    }
+
+    return {
+      text,
+      mediaUrls: visibleMedia,
+      diagnostics,
+    };
   } finally {
     unsubscribe();
   }
-
-  return {
-    text: texts.join("\n\n").trim(),
-    mediaUrls: uniqueNonEmpty(mediaUrls),
-  };
 }

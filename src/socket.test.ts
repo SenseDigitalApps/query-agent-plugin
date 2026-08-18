@@ -655,4 +655,106 @@ describe("QuerySocketMonitor", () => {
     controller.abort();
     await monitor.stop();
   });
+
+  it("replays a cached terminal response after the socket drops mid-turn", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-socket-terminal-replay-"));
+    const server = new WebSocketServer({ port: 0 });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const controller = new AbortController();
+    cleanupTasks.push(async () => {
+      controller.abort();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const sockets: WebSocket[] = [];
+    server.on("connection", (socket) => {
+      sockets.push(socket);
+      socket.send(
+        JSON.stringify({
+          type: "session.ready",
+          role: "system",
+          content: "",
+          data: { protocol: "query-openclaw.v2", general_thread_id: "thread-replay" },
+        }),
+      );
+    });
+
+    let finishDispatch:
+      | ((result: { text: string; mediaUrls: string[] }) => void)
+      | undefined;
+    const dispatchMessage = vi.fn(
+      () =>
+        new Promise<{ text: string; mediaUrls: string[] }>((resolve) => {
+          finishDispatch = resolve;
+        }),
+    );
+    const logError = vi.fn();
+    const account: ResolvedQueryAccount = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      url: `ws://127.0.0.1:${address.port}/ws/openclaw-agent/test/`,
+      token: "bot-secret",
+      heartbeatMs: 5_000,
+      // Da tiempo a que el turno termine y se guarde mientras no hay socket.
+      reconnectMinMs: 400,
+      reconnectMaxMs: 400,
+      responseTimeoutMs: 0,
+      stateFile: join(directory, "responses.json"),
+    };
+    let status = { accountId: "default" } as never;
+    const monitor = new QuerySocketMonitor({
+      cfg: { channels: { query: {} } } as never,
+      account,
+      runtime: { error: vi.fn() } as never,
+      abortSignal: controller.signal,
+      getStatus: () => status,
+      setStatus: (next) => {
+        status = next as never;
+      },
+      dispatchMessage: dispatchMessage as never,
+      log: { error: logError, warn: vi.fn() },
+    });
+
+    await monitor.start();
+    await waitFor(() => sockets.length === 1);
+    const userMessage = JSON.stringify({
+      type: "message",
+      role: "user",
+      content: "respuesta larga",
+      client_msg_id: "msg-terminal-replay",
+      thread_id: "thread-replay",
+      data: { attachments: [] },
+    });
+    const initialActivity = receive(sockets[0]);
+    sockets[0].send(userMessage);
+    await expect(initialActivity).resolves.toMatchObject({
+      type: "activity",
+      client_msg_id: "msg-terminal-replay",
+    });
+
+    sockets[0].close(1011, "bridge restart");
+    await waitFor(() => (status as { running?: boolean }).running === false);
+    finishDispatch?.({ text: "Respuesta recuperada", mediaUrls: [] });
+    // `send` falla porque todavía no hay socket, pero la respuesta ya quedó en
+    // ResponseStore. La excepción observada confirma que probamos ese camino.
+    await waitFor(() => logError.mock.calls.length > 0);
+
+    await waitFor(() => sockets.length === 2);
+    const replayedTerminal = receive(sockets[1]);
+    // Query vuelve a enviar el turno PROCESSING al reconectar; el plugin no lo
+    // ejecuta otra vez y responde desde su cache durable.
+    sockets[1].send(userMessage);
+    await expect(replayedTerminal).resolves.toMatchObject({
+      type: "message",
+      content: "Respuesta recuperada",
+      client_msg_id: "msg-terminal-replay",
+    });
+    expect(dispatchMessage).toHaveBeenCalledTimes(1);
+
+    controller.abort();
+    await monitor.stop();
+  });
 });
