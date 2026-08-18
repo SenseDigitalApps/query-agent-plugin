@@ -30,6 +30,7 @@ import {
 import { defaultResponseStorePath, ResponseStore } from "./response-store.js";
 import type {
   CachedResponse,
+  QueryAgentProfile,
   QueryConfig,
   QueryAttachment,
   QueryDelegatedAuth,
@@ -405,6 +406,11 @@ export class QuerySocketMonitor {
         `[${this.options.account.accountId}] connected to Query`,
       );
       this.patchStatus({ running: true, lastError: undefined });
+      await this.syncAgentProfile(event.data.agent_profile);
+      return;
+    }
+    if (event.type === "agent.profile") {
+      await this.syncAgentProfile(event.data);
       return;
     }
     if (event.type === "auth.granted") {
@@ -429,6 +435,68 @@ export class QuerySocketMonitor {
       return;
     }
     await this.handleUserMessage(event);
+  }
+
+  /**
+   * Lleva la personalidad y la mision al workspace del agente.
+   *
+   * Se invoca al conectar y cada vez que alguien las edita en Query. Nunca
+   * propaga el error: quedarse sin escribir el perfil deja al agente
+   * respondiendo con el que ya tenia, mientras que dejar reventar aqui tumbaria
+   * el canal entero por un archivo.
+   */
+  private async syncAgentProfile(
+    profile: QueryAgentProfile | undefined,
+  ): Promise<void> {
+    if (!profile) return;
+    try {
+      const { applyQueryAgentProfile } = await import("./agent-profile.js");
+      const { workspaceDir } = await applyQueryAgentProfile({
+        cfg: this.options.cfg,
+        accountId: this.options.account.accountId,
+        peerId: this.legacyGeneralThreadId,
+        profile,
+        log: this.options.log,
+      });
+      await this.seedProfileFromWorkspace(workspaceDir, profile);
+    } catch (error) {
+      this.options.log?.warn?.(
+        `[${this.options.account.accountId}] no se pudo aplicar el perfil del agente: ${String(error)}`,
+      );
+    }
+  }
+
+  /**
+   * Le ofrece a Query la personalidad que el agente ya traia escrita.
+   *
+   * Sin esto el panel abre en blanco frente a un agente que lleva meses con su
+   * SOUL.md afinado, y quien lo vea asumira que no hay nada que respetar. Query
+   * decide si la adopta: solo rellena lo que este vacio, nunca pisa lo que una
+   * persona haya escrito ahi.
+   */
+  private async seedProfileFromWorkspace(
+    workspaceDir: string,
+    profile: QueryAgentProfile,
+  ): Promise<void> {
+    if (!workspaceDir) return;
+    if (profile.personality?.trim() || profile.mission?.trim()) return;
+
+    const { readSeedCandidates } = await import("./agent-profile.js");
+    const seed = await readSeedCandidates(workspaceDir);
+    if (!seed.personality && !seed.mission) return;
+
+    this.send({
+      type: "profile.seed",
+      role: "system",
+      content: "",
+      client_msg_id: "",
+      thread_id: this.legacyGeneralThreadId,
+      data: seed,
+    });
+    this.options.log?.info?.(
+      `[${this.options.account.accountId}] perfil existente ofrecido a Query ` +
+        `(${Object.keys(seed).join(", ")}).`,
+    );
   }
 
   private async handleUserMessage(event: QueryUserMessageEvent): Promise<void> {

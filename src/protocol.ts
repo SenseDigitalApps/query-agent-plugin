@@ -1,6 +1,7 @@
 import type {
   CachedResponse,
   QueryActivityState,
+  QueryAgentProfileEvent,
   QueryAuthGrantedEvent,
   QueryInboundEvent,
   QueryOutboundEvent,
@@ -28,6 +29,9 @@ export function parseQueryEvent(raw: string): QueryInboundEvent | null {
   }
   if (value.type === "auth.granted" && isRecord(value.data)) {
     return value as QueryAuthGrantedEvent;
+  }
+  if (value.type === "agent.profile" && isRecord(value.data)) {
+    return value as QueryAgentProfileEvent;
   }
   if (
     value.type === "schedule.cancel" &&

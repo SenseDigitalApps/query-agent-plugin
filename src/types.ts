@@ -64,6 +64,21 @@ export type QueryAttachment = {
     url: string;
 };
 
+/**
+ * Como habla el agente y para que existe, tal como los escribio una persona en
+ * el panel de Query.
+ *
+ * No son metadatos: se escriben en `SOUL.md` e `IDENTITY.md` del workspace, de
+ * donde OpenClaw arma el system prompt. Una cadena vacia es una instruccion
+ * explicita —"vuelve al comportamiento por defecto"— y no un valor faltante;
+ * por eso lo que decide si hay que tocar archivos es la presencia del objeto
+ * entero, no la de cada campo.
+ */
+export type QueryAgentProfile = {
+  personality?: string;
+  mission?: string;
+};
+
 export type QuerySessionReadyEvent = {
   type: "session.ready";
   role?: "system";
@@ -75,7 +90,17 @@ export type QuerySessionReadyEvent = {
     thread_id?: string | number;
     general_thread_id?: string | number;
     multi_thread?: boolean;
+    /** Ausente en servidores Query anteriores a esta funcion. */
+    agent_profile?: QueryAgentProfile;
   };
+};
+
+/** Alguien edito el perfil desde Query con el agente ya conectado. */
+export type QueryAgentProfileEvent = {
+  type: "agent.profile";
+  role?: "system";
+  content?: string;
+  data: QueryAgentProfile & { display_name?: string };
 };
 
 export type QueryThreadType = "general" | "topic" | "private";
@@ -171,6 +196,7 @@ export type QueryScheduleCancelEvent = {
 
 export type QueryInboundEvent =
   | QuerySessionReadyEvent
+  | QueryAgentProfileEvent
   | QueryUserMessageEvent
   | QueryScheduleCancelEvent
   | QueryAuthGrantedEvent;
@@ -194,6 +220,7 @@ export type QueryOutboundEvent = {
     | "turn.adopted"
     | "error"
     | "schedule.sync"
+    | "profile.seed"
     | "auth.refresh"
     | "auth.request";
   role: "assistant" | "system";

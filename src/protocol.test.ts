@@ -42,6 +42,31 @@ describe("Query protocol", () => {
     });
   });
 
+  it("keeps text and attachments from the same user message", () => {
+    expect(
+      parseQueryEvent(
+        JSON.stringify({
+          type: "message",
+          role: "user",
+          content: "revisa esta imagen",
+          client_msg_id: "msg-image-text-1",
+          data: {
+            attachments: [
+              {
+                kind: "image",
+                mime_type: "image/png",
+                url: "https://cdn.test/image.png",
+              },
+            ],
+          },
+        }),
+      ),
+    ).toMatchObject({
+      content: "revisa esta imagen",
+      data: { attachments: [{ kind: "image", url: "https://cdn.test/image.png" }] },
+    });
+  });
+
   it("rejects malformed and unsupported messages", () => {
     expect(parseQueryEvent("not-json")).toBeNull();
     expect(parseQueryEvent('{"type":"message","role":"assistant"}')).toBeNull();

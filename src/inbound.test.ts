@@ -6,6 +6,7 @@ import { describe, expect, it } from "vitest";
 import {
   bodyForAgent,
   materializeInboundMediaAttachments,
+  mediaForAgent,
   rawBodyForAgent,
 } from "./inbound.js";
 import type { QueryResolvedAction, QueryUserMessageEvent } from "./types.js";
@@ -59,6 +60,75 @@ describe("Query inbound body", () => {
     expect(bodyForAgent(event)).toContain(
       "Transcript: [system-generated] Revisa el flujo de notas de voz.",
     );
+  });
+
+  it("keeps typed text and audio together in the same multimodal turn", () => {
+    const event: QueryUserMessageEvent = {
+      type: "message",
+      role: "user",
+      content: "Compara lo que digo con la propuesta escrita.",
+      client_msg_id: "voice-with-text",
+      data: {
+        attachments: [
+          {
+            id: "audio-1",
+            kind: "audio",
+            name: "propuesta.m4a",
+            mime_type: "audio/mp4",
+            local_path: "C:\\query-media\\propuesta.m4a",
+            transcript: "La fecha correcta es el viernes.",
+            url: "https://example.test/propuesta.m4a",
+          },
+        ],
+      },
+    };
+
+    const body = bodyForAgent(event);
+    expect(body.startsWith("Compara lo que digo con la propuesta escrita.")).toBe(true);
+    expect(body).toContain("Transcript: [system-generated] La fecha correcta es el viernes.");
+    expect(body).toContain("partes de una sola consulta; no reemplaces ni ignores ninguno");
+    expect(mediaForAgent(event)).toEqual([
+      expect.objectContaining({
+        path: "C:\\query-media\\propuesta.m4a",
+        contentType: "audio/mp4",
+        kind: "audio",
+        transcribed: true,
+      }),
+    ]);
+  });
+
+  it("keeps typed text and an image together, including a readable fallback", () => {
+    const event: QueryUserMessageEvent = {
+      type: "message",
+      role: "user",
+      content: "Dime si el total de esta factura coincide.",
+      client_msg_id: "image-with-text",
+      data: {
+        attachments: [
+          {
+            id: "image-1",
+            kind: "image",
+            name: "factura.png",
+            mime_type: "image/png",
+            local_path: "C:\\query-media\\factura.png",
+            url: "https://example.test/factura.png",
+          },
+        ],
+      },
+    };
+
+    const body = bodyForAgent(event);
+    expect(body.startsWith("Dime si el total de esta factura coincide.")).toBe(true);
+    expect(body).toContain("ImageAttachment 1:");
+    expect(body).toContain("LocalMediaPath: C:\\query-media\\factura.png");
+    expect(body).toContain("partes de una sola consulta; no reemplaces ni ignores ninguno");
+    expect(mediaForAgent(event)).toEqual([
+      expect.objectContaining({
+        path: "C:\\query-media\\factura.png",
+        contentType: "image/png",
+        kind: "image",
+      }),
+    ]);
   });
 
   it("materializes a remote .m4a voice note and exposes structured prompt fields", async () => {
@@ -335,6 +405,38 @@ describe("Query inbound resolved actions", () => {
     }
   });
 
+  it("an image that fails to download still reaches the agent by url and text", async () => {
+    const event: QueryUserMessageEvent = {
+      type: "message",
+      role: "user",
+      content: "revisa esta captura",
+      client_msg_id: "image-caida",
+      data: {
+        attachments: [
+          {
+            id: 10,
+            kind: "image",
+            name: "captura.png",
+            mime_type: "image/png",
+            url: "http://127.0.0.1:1/captura.png",
+          },
+        ],
+      },
+    };
+    const mediaDir = await mkdtemp(join(tmpdir(), "query-inbound-image-fail-"));
+    try {
+      const materialized = await materializeInboundMediaAttachments(event, { mediaDir });
+      expect(materialized.data?.attachments?.[0]?.local_path).toBeUndefined();
+
+      const body = bodyForAgent(materialized);
+      expect(body.startsWith("revisa esta captura")).toBe(true);
+      expect(body).toContain("ImageAttachment 1:");
+      expect(body).toContain("MediaUrl: http://127.0.0.1:1/captura.png");
+    } finally {
+      await rm(mediaDir, { recursive: true, force: true });
+    }
+  });
+
   it("does not label an image or an audio as a document", () => {
     const body = bodyForAgent({
       type: "message",
@@ -361,6 +463,7 @@ describe("Query inbound resolved actions", () => {
 
     expect(body).not.toContain("DocumentAttachment");
     expect(body).toContain("AudioAttachment 1:");
+    expect(body).toContain("ImageAttachment 1:");
   });
 
 });

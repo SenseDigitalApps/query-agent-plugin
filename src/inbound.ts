@@ -113,7 +113,9 @@ const INBOUND_DOWNLOAD_TIMEOUT_MS = positiveNumberFromEnv(
 const INBOUND_MEDIA_TTL_MS =
   positiveNumberFromEnv("QUERY_INBOUND_MEDIA_TTL_HOURS", 72) * 60 * 60 * 1000;
 
-function mediaKind(kind: string | undefined) {
+function mediaKind(
+  kind: string | undefined,
+): "image" | "audio" | "video" | "document" | "unknown" {
   if (kind === "image" || kind === "audio" || kind === "video") return kind;
   if (kind === "file") return "document" as const;
   return "unknown" as const;
@@ -155,6 +157,10 @@ function needsLocalMaterialization(_attachment: {
 
 function audioAttachments(event: QueryUserMessageEvent) {
   return (event.data?.attachments ?? []).filter(isAudioAttachment);
+}
+
+function imageAttachments(event: QueryUserMessageEvent) {
+  return (event.data?.attachments ?? []).filter(isImageAttachment);
 }
 
 /** Todo lo que no es audio ni imagen: hojas de calculo, pdf, csv, texto. */
@@ -452,7 +458,7 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
       isHttpUrl(attachment.url) ? `MediaUrl: ${attachment.url}` : "",
       duration ? `Duration: ${duration}` : "",
       transcript ? `Transcript: [system-generated] ${transcript}` : "",
-      "Instruction: usa este audio como entrada directa del usuario. Si LocalMediaPath existe, úsalo primero; si no, usa MediaUrl/MediaPath como fallback. No busques transcripts internos ni JSONL de sesión para entender este audio.",
+      "Instruction: usa este audio como entrada directa del usuario e interpreta el audio y el texto escrito como partes de una sola consulta; no reemplaces ni ignores ninguno. Si LocalMediaPath existe, úsalo primero; si no, usa MediaUrl/MediaPath como fallback. No busques transcripts internos ni JSONL de sesión para entender este audio.",
     ].filter(Boolean);
     if (transcript) return [fields.join("\n")];
     return [
@@ -461,6 +467,20 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
         "Transcript: no disponible; debes acceder al archivo local o a la URL remota para interpretar la nota de voz.",
       ].join("\n"),
     ];
+  });
+  const imageLines = imageAttachments(event).map((attachment, index) => {
+    const filename = originalFilename(attachment, index);
+    return [
+      `ImageAttachment ${index + 1}:`,
+      `Filename: ${filename}`,
+      `MediaType: ${attachment.mime_type || "image/unknown"}`,
+      attachment.local_path ? `LocalMediaPath: ${attachment.local_path}` : "",
+      `MediaPath: ${attachment.url}`,
+      isHttpUrl(attachment.url) ? `MediaUrl: ${attachment.url}` : "",
+      "Instruction: interpreta esta imagen y el texto escrito como partes de una sola consulta; no reemplaces ni ignores ninguno. La imagen también llega adjunta al turno. Si no puedes verla directamente, abre LocalMediaPath o usa MediaUrl/MediaPath como fallback; si aun así no puedes leerla, dilo claramente.",
+    ]
+      .filter(Boolean)
+      .join("\n");
   });
   const documentLines = documentAttachments(event).map((attachment, index) => {
     const filename = originalFilename(attachment, index);
@@ -503,6 +523,7 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
       : "",
     resolvedActionLine(event),
     ...audioLines,
+    ...imageLines,
     ...documentLines,
     "Si creas una tarea programada para una persona, configura la entrega al canal privado indicado; no uses un canal compartido como destino individual.",
   ]
@@ -512,6 +533,22 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
     ? "\n\n[Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]"
     : "";
   return `${rawBody}\n\n[Contexto de Query: ${context}]${audioHint}`;
+}
+
+export function mediaForAgent(event: QueryUserMessageEvent) {
+  return (event.data?.attachments ?? []).map((attachment) => ({
+    // OpenClaw usa estas rutas y tipos alineados para construir un único turno
+    // multimodal. `transcribed` evita volver a transcribir un audio cuando
+    // Query ya envió la transcripción que bodyForAgent incluye arriba.
+    path: attachment.local_path,
+    url: attachment.url,
+    contentType: attachment.mime_type,
+    kind: mediaKind(attachment.kind),
+    transcribed: isAudioAttachment(attachment)
+      ? Boolean(attachmentTranscript(attachment))
+      : undefined,
+    messageId: attachment.id === undefined ? undefined : String(attachment.id),
+  }));
 }
 
 export async function dispatchQueryMessage(params: {
@@ -550,7 +587,6 @@ export async function dispatchQueryMessage(params: {
   // debe tratarlos como el turno base, sin recordar ``steer`` en la sesion.
   const agentBody =
     event.data?.delivery_mode === "intervene" ? `/queue steer\n${body}` : body;
-  const attachments = event.data?.attachments ?? [];
   const ctxPayload = buildChannelInboundEventContext({
     channel: CHANNEL_ID,
     accountId: route.accountId,
@@ -578,17 +614,7 @@ export async function dispatchQueryMessage(params: {
       rawBody,
       commandBody: agentBody,
     },
-    media: attachments.map((attachment) => ({
-      // Vale para audio y para imagen: OpenClaw solo mira `path`. Sin ruta
-      // local, `resolveAgentTurnAttachments` descarta la imagen en silencio y
-      // el turno llega con `imagesCount: 0`.
-      path: attachment.local_path,
-      url: attachment.url,
-      contentType: attachment.mime_type,
-      kind: mediaKind(attachment.kind),
-      transcribed: isAudioAttachment(attachment) ? Boolean(attachmentTranscript(attachment)) : undefined,
-      messageId: attachment.id === undefined ? undefined : String(attachment.id),
-    })),
+    media: mediaForAgent(event),
     access: {
       commands: { authorized: true },
       mentions: { canDetectMention: false, wasMentioned: true },
