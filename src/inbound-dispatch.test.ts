@@ -79,6 +79,9 @@ describe("Query inbound dispatch recovery", () => {
     });
 
     expect(dispatchReply).toHaveBeenCalledTimes(1);
+    expect(dispatchReply.mock.calls[0][0].replyOptions).toEqual({
+      sourceReplyDeliveryMode: "automatic",
+    });
     expect(result.text).toBe("Respuesta que solo aparecio en el stream.");
   });
 
@@ -143,6 +146,12 @@ describe("Query inbound dispatch recovery", () => {
     });
 
     expect(dispatchReply).toHaveBeenCalledTimes(2);
+    expect(dispatchReply.mock.calls[0][0].replyOptions).toEqual({
+      sourceReplyDeliveryMode: "automatic",
+    });
+    expect(dispatchReply.mock.calls[1][0].replyOptions).toEqual({
+      sourceReplyDeliveryMode: "automatic",
+    });
     expect(dispatchReply.mock.calls[0][0].toolsAllow).toBeUndefined();
     expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
       "Termina siempre con texto visible o un archivo visible",

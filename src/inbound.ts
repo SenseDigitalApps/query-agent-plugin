@@ -698,6 +698,9 @@ export async function dispatchQueryMessage(params: {
         },
       },
       replyPipeline: {},
+      replyOptions: {
+        sourceReplyDeliveryMode: "automatic",
+      },
       toolsAllow: params.toolsAllow,
       record: {
         onRecordError: (error) => {
