@@ -16,6 +16,7 @@ import {
   rememberDelegatedAuth,
 } from "./delegated-store.js";
 import { clearExternalAccountCache } from "./external-accounts.js";
+import { setOpenClawConfigLoader } from "./google-accounts.js";
 import { evaluateGoogleToolCall, registerQueryGoogleGuard } from "./google-guard.js";
 import { forgetQuerySession, rememberQuerySession } from "./query-session-store.js";
 
@@ -53,10 +54,26 @@ afterAll(() => {
 beforeEach(() => {
   fetchMock = vi.fn();
   vi.stubGlobal("fetch", fetchMock);
+  // Por defecto, una maquina sin cuentas de Google configuradas: asi las
+  // pruebas de siempre siguen describiendo el comportamiento sin correo.
+  setOpenClawConfigLoader(() => ({}));
 });
+
+/** Deja escrito en la config de la maquina el correo de una cuenta. */
+function configuredAccounts(accounts: Record<string, { expectedEmail?: string }>) {
+  setOpenClawConfigLoader(() => ({
+    plugins: { entries: { "google-workspace": { config: { accounts } } } },
+  }));
+}
+
+function requestBody(call = 0): Record<string, unknown> {
+  const [, init] = fetchMock.mock.calls[call];
+  return JSON.parse(String((init as RequestInit).body));
+}
 
 afterEach(() => {
   vi.unstubAllGlobals();
+  setOpenClawConfigLoader(undefined);
   clearExternalAccountCache();
   forgetDelegatedAuth(THREAD);
   forgetQuerySession(SESSION);
@@ -188,11 +205,15 @@ describe("guard de cuentas de Google en sesiones Query", () => {
     expect((init as RequestInit).headers).toMatchObject({
       "X-Query-Delegated-Token": "token-de-juli",
     });
-    expect(JSON.parse(String((init as RequestInit).body))).toMatchObject({
+    const body = JSON.parse(String((init as RequestInit).body));
+    expect(body).toMatchObject({
       provider: "google_workspace",
       account_id: "jcvargas",
       thread_id: THREAD,
     });
+    // Sin cuenta configurada localmente no hay correo que mandar, y Query
+    // decide con lo unico que tiene: el vinculo que ya exista.
+    expect(body).not.toHaveProperty("configured_email");
   });
 
   it("bloquea la cuenta de otra persona antes de llamar a Google", async () => {
@@ -304,6 +325,112 @@ describe("guard de cuentas de Google en sesiones Query", () => {
       accountId: "jcvargas",
       expectedEmail: "jc.vargas2150@gmail.com",
     });
+  });
+
+  it("le manda a Query el correo que la maquina tiene escrito para esa cuenta", async () => {
+    configuredAccounts({ jcvargas: { expectedEmail: "jc.vargas2150@gmail.com" } });
+    querySession();
+    storeAuth();
+    fetchMock.mockResolvedValue(
+      grantedResponse({
+        ok: true,
+        account_id: "jcvargas",
+        authenticated_email: "jc.vargas2150@gmail.com",
+        status: "verified",
+        source: "auto_email_match",
+      }),
+    );
+    const decision = await callGoogle({ accountId: "jcvargas", query: "facturas" });
+    expect(decision).toBeUndefined();
+    expect(requestBody()).toMatchObject({
+      account_id: "jcvargas",
+      configured_email: "jc.vargas2150@gmail.com",
+    });
+  });
+
+  it("solo manda el correo de la cuenta que la llamada pidio", async () => {
+    configuredAccounts({
+      jcvargas: { expectedEmail: "jc.vargas2150@gmail.com" },
+      felotaca: { expectedEmail: "felotaca@gmail.com" },
+    });
+    querySession();
+    storeAuth();
+    fetchMock.mockResolvedValue(
+      deniedResponse({
+        ok: false,
+        error: "binding_not_owned",
+        detail: "no es tuya",
+        allowed_account_ids: ["jcvargas"],
+      }),
+    );
+    await callGoogle({ accountId: "felotaca" });
+    expect(requestBody()).toMatchObject({
+      account_id: "felotaca",
+      configured_email: "felotaca@gmail.com",
+    });
+  });
+
+  it("no manda nada si la cuenta configurada no declara expectedEmail", async () => {
+    configuredAccounts({ jcvargas: { scopes: ["gmail.readonly"] } as never });
+    querySession();
+    storeAuth();
+    fetchMock.mockResolvedValue(
+      deniedResponse({
+        ok: false,
+        error: "binding_missing",
+        detail: "no esta vinculada",
+        allowed_account_ids: [],
+      }),
+    );
+    const decision = await callGoogle({ accountId: "jcvargas" });
+    // Comportamiento de siempre: sin correo configurado Query no funda nada y
+    // la herramienta queda bloqueada.
+    expect(decision?.block).toBe(true);
+    expect(requestBody()).not.toHaveProperty("configured_email");
+  });
+
+  it("el correo configurado no sale de los parametros del modelo", async () => {
+    // La llamada afirma un correo; la maquina tiene escrito otro. Son campos
+    // distintos a proposito: el de la llamada solo puede bloquear, el de la
+    // maquina es el unico que Query puede usar para fundar el vinculo.
+    configuredAccounts({ jcvargas: { expectedEmail: "jc.vargas2150@gmail.com" } });
+    querySession();
+    storeAuth();
+    fetchMock.mockResolvedValue(
+      deniedResponse({
+        ok: false,
+        error: "email_mismatch",
+        detail: "otro correo",
+        allowed_account_ids: ["jcvargas"],
+      }),
+    );
+    await callGoogle({
+      accountId: "jcvargas",
+      expectedEmail: "el-correo-que-invento-el-modelo@gmail.com",
+    });
+    expect(requestBody()).toMatchObject({
+      configured_email: "jc.vargas2150@gmail.com",
+      authenticated_email: "el-correo-que-invento-el-modelo@gmail.com",
+    });
+  });
+
+  it("no le mete el correo configurado a los parametros de la tool", async () => {
+    configuredAccounts({ jcvargas: { expectedEmail: "jc.vargas2150@gmail.com" } });
+    querySession();
+    storeAuth();
+    fetchMock.mockResolvedValue(
+      grantedResponse({
+        ok: true,
+        account_id: "jcvargas",
+        authenticated_email: "jc.vargas2150@gmail.com",
+        status: "verified",
+      }),
+    );
+    // Las tools de ``openclaw-google-workspace`` solo declaran ``accountId``.
+    // Anadirles una clave que su esquema no conoce romperia la llamada, y el
+    // correo esperado ya lo valida ese plugin por su lado.
+    const decision = await callGoogle({ accountId: "jcvargas", query: "facturas" });
+    expect(decision).toBeUndefined();
   });
 
   it("no vuelve a preguntar lo mismo dentro del mismo turno", async () => {

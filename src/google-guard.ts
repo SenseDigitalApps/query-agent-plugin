@@ -6,6 +6,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { getDelegatedAuth } from "./delegated-store.js";
 import { authorizeExternalAccount } from "./external-accounts.js";
+import { readConfiguredGoogleAccountEmail } from "./google-accounts.js";
 import {
   findQuerySessionByThread,
   getQuerySession,
@@ -140,13 +141,26 @@ export async function evaluateGoogleToolCall(
     );
   }
 
+  // Dos correos, y la diferencia entre ellos es la del guard entero.
+  //
+  // ``declaredEmail`` sale de los parametros de la herramienta, o sea del
+  // modelo. Solo puede restar: si no cuadra con lo que Query tiene vinculado, se
+  // bloquea. Nunca funda nada.
+  //
+  // ``configuredEmail`` sale de la configuracion de Google Workspace en esta
+  // maquina, que escribio un operador y el modelo no puede tocar. Es lo que le
+  // permite a Query reconocer en el primer uso una cuenta que ya estaba
+  // configurada, sin pedir una migracion a mano por persona. Si la cuenta no
+  // declara ``expectedEmail``, no se manda nada y Query responde como siempre.
   const declaredEmail = readParam(params, EMAIL_PARAM_KEYS);
+  const configuredEmail = await readConfiguredGoogleAccountEmail(account.value);
   const verdict = await authorizeExternalAccount({
     socketUrl: stored.socketUrl,
     token: stored.auth.token,
     provider: PROVIDER,
     accountId: account.value,
     authenticatedEmail: declaredEmail?.value,
+    configuredEmail: configuredEmail || undefined,
     threadId: session.threadId,
   });
 

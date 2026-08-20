@@ -178,6 +178,64 @@ en la configuración interna de cada cuenta de ese plugin, que lo valida por su
 lado. `QUERY_GOOGLE_GUARD_EXPECTED_EMAIL_PARAM` existe por si ese contrato
 cambia; déjalo apagado.
 
+#### Reconocer en el primer uso una cuenta que ya estaba configurada
+
+Las cuentas de Google se configuraron en OpenClaw antes de que Query llevara la
+tabla de vínculos, así que la primera vez que alguien usa la suya desde Query no
+hay nada vinculado y la respuesta sería 403. Pedir una migración manual por
+persona convierte el aislamiento en un trámite, y un trámite que estorba se
+termina saltando por lo ancho.
+
+Antes de preguntar, el guard busca en la configuración local de Google Workspace
+el `expectedEmail` de ese `accountId` y lo manda a Query en `configured_email`.
+Si coincide exactamente con el correo del usuario que firmó el token, Query crea
+el vínculo `verified` en ese momento y deja pasar. Si no coincide, no autoriza y
+no crea nada.
+
+Los dos correos que viajan al backend **no valen lo mismo**, y por eso van en
+campos distintos:
+
+| campo | de dónde sale | qué puede hacer |
+| --- | --- | --- |
+| `configured_email` | `expectedEmail` en la config de la máquina | fundar el vínculo la primera vez |
+| `authenticated_email` | parámetros de la tool, o sea el modelo | sólo bloquear si no cuadra |
+
+El modelo elige el `accountId` y puede escribir el correo que quiera en los
+parámetros; lo que no puede es editar la configuración de la máquina. Esa es la
+única razón por la que `configured_email` sirve como prueba.
+
+El atajo no se aplica cuando la cuenta ya tiene una decisión tomada: si está
+vinculada a otra persona, revocada, o esperando revisión, sigue bloqueada. Y si
+la cuenta local se reconfigura a otro buzón, el guard lo delata —Query responde
+`email_mismatch` en vez de seguir apuntando a donde ya no apunta.
+
+Esto **no reemplaza la verificación de Google**. Después de que Query autorice,
+`openclaw-google-workspace` sigue comprobando que el token OAuth real pertenece
+al `expectedEmail` configurado; si el token es de otro correo, la tool falla
+igual.
+
+El dato se lee de:
+
+```
+plugins.entries["openclaw-google-workspace"].config.accounts[accountId].expectedEmail
+```
+
+`plugins.entries` es un objeto indexado por id de plugin y `accounts` un mapa por
+`accountId` — ésa es la forma que hay en la máquina. El lector también acepta
+`plugins.entries` como lista y `accounts` como lista, además de algunos alias del
+nombre del correo, porque ese formato lo fija `openclaw-google-workspace` y puede
+cambiarlo sin avisar: si dejara de reconocerse, el fallo sería mudo —todo el
+mundo bloqueado sin un error que lo explique—. Si esa versión guarda las cuentas
+en otro sitio, hay dos escapes sin tocar código:
+
+- `QUERY_GOOGLE_WORKSPACE_PLUGIN_IDS=mi-plugin-google` — id exacto de la entrada
+  en `plugins.entries` cuando el nombre no contiene "google workspace".
+- `QUERY_GOOGLE_WORKSPACE_ACCOUNTS_FILE=/ruta/accounts.json` — archivo aparte con
+  las cuentas, leído con las mismas reglas.
+
+Si no se encuentra correo, no se manda nada y todo se comporta como antes: sin
+vínculo previo, 403.
+
 El patrón `google_*` cubre las herramientas actuales —`google_gmail_*`,
 `google_calendar_*`, `google_drive_*`, `google_tasks_*`, `google_sheets_*`,
 `google_contacts_*`, `google_workspace_*`— incluidas las de autenticación, que
