@@ -147,6 +147,45 @@ Las tareas personales creadas desde un canal compartido deben dirigirse al
 `private_thread_id` del solicitante. Una cancelación queda registrada en Query
 y se reenvía si el plugin estaba desconectado.
 
+### Cuentas de Google por persona
+
+Las herramientas `google_*` no se ejecutan en una sesión de Query hasta que
+Query confirma que esa cuenta es de quien está conversando. El guard corre en
+`before_tool_call`, antes de que exista un cliente de Google, y bloquea cuando:
+
+- la llamada no dice explícitamente qué `accountId` usa (no hay cuenta por
+  defecto, ni siquiera con una sola configurada);
+- no hay credencial delegada vigente para el canal —incluido el caso de un cron
+  cuya tarea no tiene un autor con acceso vigente;
+- Query responde que esa cuenta no es de esa persona, está pendiente de revisión
+  o fue revocada;
+- no se puede consultar a Query (un fallo de red no abre el paso).
+
+`QUERY_EXTERNAL_ACCOUNT_GUARD_TOOLS=gmail,gcal` amplía los prefijos vigilados.
+
+El mensaje de bloqueo le dice al agente qué cuentas sí tiene esa persona, así que
+el reintento suele ser el correcto. La identidad sale de la credencial que firmó
+Query, no del prompt: el agente puede equivocarse de nombre sin que el error
+llegue a Google. Un subagente lanzado desde un turno de Query hereda el canal, y
+con él la misma restricción.
+
+Query devuelve además el correo con el que espera que esa cuenta esté
+autenticada. El guard lo usa para preguntar y para contrastar lo que la llamada
+ya traiga —si no coincide, bloquea aunque la cuenta sí sea de esa persona— pero
+**no reescribe los parámetros de la tool**: hoy las herramientas de
+`openclaw-google-workspace` sólo reciben `accountId`, y el correo esperado vive
+en la configuración interna de cada cuenta de ese plugin, que lo valida por su
+lado. `QUERY_GOOGLE_GUARD_EXPECTED_EMAIL_PARAM` existe por si ese contrato
+cambia; déjalo apagado.
+
+El patrón `google_*` cubre las herramientas actuales —`google_gmail_*`,
+`google_calendar_*`, `google_drive_*`, `google_tasks_*`, `google_sheets_*`,
+`google_contacts_*`, `google_workspace_*`— incluidas las de autenticación, que
+también quedan protegidas en sesiones Query: la migración de cuentas se hace por
+admin y auditoría, no por lo que el agente decida en un turno.
+`QUERY_EXTERNAL_ACCOUNT_GUARD_TOOLS` sólo hace falta si aparece una herramienta
+con otro prefijo.
+
 ## Verificación
 
 ```powershell

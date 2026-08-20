@@ -10,6 +10,7 @@ import {
   rememberDelegatedAuth,
   threadsWithDelegatedAuth,
 } from "./delegated-store.js";
+import { queryApiUrl } from "./query-api.js";
 
 /**
  * Herramientas para consultar Query en nombre de la persona que escribe.
@@ -29,15 +30,6 @@ const LOCAL_GENERATED_ARTIFACT_RE =
   /(?:^|[\s"'([{])(?:https?:\/\/[^\s<>"')\]]*)?\/(?:home|tmp|var|mnt|opt|srv|Users|private\/var)\/[^\s<>"')\]]+\.(?:html?|pdf|csv|json|md|txt|xlsx?|docx?|pptx?|zip|png|jpe?g|gif|webp|mp4|mov|m4v|webm)(?:[.,!?;:]?)(?:$|[\s"')\]}])/i;
 
 type QueryToolLog = ToolPluginExecutionContext["api"]["logger"];
-
-function queryApiUrl(socketUrl: string, path: string): string {
-  const parsed = new URL(socketUrl);
-  parsed.protocol = parsed.protocol === "ws:" ? "http:" : "https:";
-  parsed.search = "";
-  parsed.hash = "";
-  parsed.pathname = `/api/v4/openclaw-agent/${path}`.replace(/\/{2,}/g, "/");
-  return parsed.toString();
-}
 
 async function postQuery(
   threadId: string,

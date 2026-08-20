@@ -105,12 +105,29 @@ export type QueryAgentProfileEvent = {
 
 export type QueryThreadType = "general" | "topic" | "private";
 
+/**
+ * Quien delega, en claro. No es una credencial: no sirve para autenticarse ni
+ * para decidir nada del lado de Query, que siempre vuelve a mirar el token.
+ * Sirve para que el agente sepa por quien esta actuando sin deducirlo del texto
+ * de la conversacion, que es justo donde se equivoca.
+ */
+export type QueryDelegatedIdentity = {
+  id?: number;
+  username?: string;
+  email?: string;
+  display_name?: string;
+};
+
 /** Credencial corta con la que el agente actua en nombre del usuario. */
 export type QueryDelegatedAuth = {
   token: string;
   expires_at?: string;
   expires_in?: number;
   scopes?: string[];
+  /** Ausente en servidores Query anteriores a esta funcion. */
+  identity?: QueryDelegatedIdentity;
+  /** ``turn`` cuando la pidio una persona; ``schedule`` cuando la pidio un cron. */
+  source?: "turn" | "schedule" | string;
 };
 
 export type QueryTenant = {

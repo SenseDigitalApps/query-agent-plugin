@@ -16,12 +16,16 @@ import {
   getDelegatedAuth,
   rememberDelegatedAuth,
 } from "./delegated-store.js";
+import { evaluateGoogleToolCall } from "./google-guard.js";
+import { forgetQuerySession } from "./query-session-store.js";
 
 const SOCKET = "wss://apius.itsquery.com/ws/openclaw-agent/3/?token=x";
 const THREAD = "private-42";
+const SESSION = "query:agente:private-42";
 
 let stateDirectory: string;
 let previousStateFile: string | undefined;
+let previousSessionFile: string | undefined;
 
 const requestQueryScheduleAuth = vi.fn();
 
@@ -40,6 +44,11 @@ beforeAll(() => {
     stateDirectory,
     "delegated.json",
   );
+  previousSessionFile = process.env.QUERY_SESSION_BINDING_STATE_FILE;
+  process.env.QUERY_SESSION_BINDING_STATE_FILE = join(
+    stateDirectory,
+    "sessions.json",
+  );
 });
 
 afterAll(() => {
@@ -48,11 +57,17 @@ afterAll(() => {
   } else {
     process.env.QUERY_DELEGATED_AUTH_STATE_FILE = previousStateFile;
   }
+  if (previousSessionFile === undefined) {
+    delete process.env.QUERY_SESSION_BINDING_STATE_FILE;
+  } else {
+    process.env.QUERY_SESSION_BINDING_STATE_FILE = previousSessionFile;
+  }
   rmSync(stateDirectory, { recursive: true, force: true });
 });
 
 afterEach(() => {
   forgetDelegatedAuth(THREAD);
+  forgetQuerySession(SESSION);
   requestQueryScheduleAuth.mockReset();
 });
 
@@ -204,6 +219,102 @@ describe("arranque del turno de un cron", () => {
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("Vuelve a crear la tarea"),
     );
+  });
+
+  it("reconoce una tarea que ya existia al arrancar el gateway", async () => {
+    // El caso del deploy: la tarea se creo hace meses, este proceso nunca vio
+    // su ``cron_changed`` y su turno no se identifica como de Query. Sin la
+    // adopcion del arranque pasaria de largo por el control de cuentas.
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    const list = vi.fn().mockResolvedValue([
+      {
+        id: "cron-viejo",
+        delivery: { channel: "query", accountId: "sales", threadId: THREAD },
+      },
+      { id: "cron-de-discord", delivery: { channel: "discord", to: "otro" } },
+    ]);
+    await hooks.get("gateway_start")?.({}, { getCron: () => ({ list }) });
+    requestQueryScheduleAuth.mockResolvedValue(undefined);
+
+    await hooks.get("before_agent_start")?.(
+      {},
+      { jobId: "cron-viejo", chatId: THREAD, sessionKey: SESSION },
+    );
+
+    // Recupera ademas la cuenta con la que hay que pedir la credencial, que en
+    // una instalacion con varios tenants es el tenant correcto o el de al lado.
+    expect(requestQueryScheduleAuth).toHaveBeenCalledWith(
+      THREAD,
+      "cron-viejo",
+      "sales",
+    );
+    const decision = await evaluateGoogleToolCall(
+      { toolName: "google_gmail_search", params: { accountId: "jcvargas" } },
+      { toolName: "google_gmail_search", sessionKey: SESSION },
+    );
+    expect(decision?.block).toBe(true);
+  });
+
+  it("no adopta los crones de otros canales", async () => {
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    const list = vi.fn().mockResolvedValue([
+      { id: "cron-de-discord", delivery: { channel: "discord", to: "otro" } },
+    ]);
+    await hooks.get("gateway_start")?.({}, { getCron: () => ({ list }) });
+    requestQueryScheduleAuth.mockResolvedValue(undefined);
+
+    await hooks.get("before_agent_start")?.(
+      {},
+      { jobId: "cron-de-discord", chatId: THREAD, sessionKey: SESSION },
+    );
+
+    const decision = await evaluateGoogleToolCall(
+      { toolName: "google_gmail_search", params: { accountId: "jcvargas" } },
+      { toolName: "google_gmail_search", sessionKey: SESSION },
+    );
+    expect(decision).toBeUndefined();
+  });
+
+  it("un fallo enumerando tareas no impide arrancar", async () => {
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    const list = vi.fn().mockRejectedValue(new Error("cron store caido"));
+
+    await expect(
+      hooks.get("gateway_start")?.({}, { getCron: () => ({ list }) }),
+    ).resolves.not.toThrow();
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("no pudo enumerar"),
+    );
+  });
+
+  it("un cron sin autor deja el turno sin acceso a Google", async () => {
+    // El encadenado completo: Query no entrega credencial porque la tarea no
+    // tiene ``run_as`` con acceso, y el guard lo convierte en un bloqueo antes
+    // de que exista un cliente de Google. Sin la sesion apuntada aqui, el turno
+    // pasaria de largo por no parecer de Query.
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    requestQueryScheduleAuth.mockResolvedValue(undefined);
+
+    await hooks.get("before_agent_start")?.(
+      {},
+      {
+        jobId: "cron-sin-autor",
+        channel: "query",
+        chatId: THREAD,
+        sessionKey: SESSION,
+      },
+    );
+
+    const decision = await evaluateGoogleToolCall(
+      { toolName: "google_gmail_search", params: { accountId: "jcvargas" } },
+      { toolName: "google_gmail_search", sessionKey: SESSION },
+    );
+    expect(decision?.block).toBe(true);
+    expect(decision?.blockReason).toContain("cron-sin-autor");
   });
 
   it("un fallo pidiendo credencial no tumba el turno", async () => {

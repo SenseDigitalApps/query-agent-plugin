@@ -5,6 +5,7 @@ import type {
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { sendQueryOutboundEvent } from "./socket.js";
 import { getDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
+import { rememberQuerySession } from "./query-session-store.js";
 import type { QueryOutboundEvent } from "./types.js";
 
 type CronDelivery = {
@@ -20,11 +21,60 @@ type SyncedCron = {
 };
 
 const syncedCrons = new Map<string, SyncedCron>();
+// Tareas que sabemos de Query aunque no podamos rutearlas. Un cron viejo puede
+// no traer ``accountId`` -no existia cuando se creo- y aun asi tiene que
+// reconocerse como nuestro: es lo que decide si sus herramientas pasan por el
+// control de cuentas externas o se las salta.
+const queryCronIds = new Set<string>();
 let cronService: PluginHookGatewayCronService | undefined;
 
 function explicitQueryAccountId(delivery: CronDelivery): string | undefined {
   const accountId = delivery.accountId?.trim();
   return accountId || undefined;
+}
+
+/**
+ * Reconoce las tareas de Query que ya existian al arrancar.
+ *
+ * ``cron_changed`` solo avisa de lo que cambia, asi que un cron creado antes de
+ * este arranque -o antes de que existiera este codigo- no estaria en ningun
+ * mapa. Sin adoptarlo aqui, su turno no pareceria de Query y sus llamadas a
+ * Google se saltarian el control: exactamente el cruce que se quiere evitar,
+ * y justo en las tareas mas viejas, que son las que nadie vuelve a mirar.
+ *
+ * Tambien devuelve la cuenta por la que sincronizar cada tarea, que en una
+ * instalacion con varias cuentas de Query es la diferencia entre pedirle la
+ * credencial al tenant correcto o al de al lado.
+ */
+async function adoptExistingQueryCrons(api: OpenClawPluginApi): Promise<void> {
+  if (!cronService?.list) return;
+  let jobs: Awaited<ReturnType<PluginHookGatewayCronService["list"]>>;
+  try {
+    jobs = await cronService.list({ includeDisabled: true });
+  } catch (error) {
+    api.logger.warn(
+      `query cron sync no pudo enumerar las tareas existentes: ${String(error)}`,
+    );
+    return;
+  }
+  let adopted = 0;
+  for (const job of jobs ?? []) {
+    const jobId = String((job as { id?: string })?.id ?? "").trim();
+    const delivery = (job as { delivery?: CronDelivery })?.delivery;
+    if (!jobId || delivery?.channel !== "query") continue;
+    queryCronIds.add(jobId);
+    adopted += 1;
+    const target = delivery.threadId ?? delivery.to;
+    const accountId = explicitQueryAccountId(delivery);
+    if (!accountId || target === undefined || target === null) continue;
+    const threadId = String(target).trim();
+    if (threadId) syncedCrons.set(jobId, { accountId, threadId });
+  }
+  if (adopted) {
+    api.logger.info(
+      `query cron sync adopto ${adopted} tarea(s) de Query ya registradas.`,
+    );
+  }
 }
 
 export async function cancelQuerySchedules(
@@ -39,6 +89,7 @@ export async function cancelQuerySchedules(
     try {
       await cronService.remove(externalId);
       syncedCrons.delete(externalId);
+      queryCronIds.delete(externalId);
       log?.info?.(`Query cancelled OpenClaw schedule ${externalId}.`);
     } catch (error) {
       log?.warn?.(
@@ -78,7 +129,13 @@ function targetFrom(event: PluginHookCronChangedEvent): SyncedCron | undefined {
  */
 async function primeScheduleCredential(
   api: OpenClawPluginApi,
-  context: { jobId?: string; channel?: string; chatId?: string; channelId?: string },
+  context: {
+    jobId?: string;
+    channel?: string;
+    chatId?: string;
+    channelId?: string;
+    sessionKey?: string;
+  },
 ): Promise<void> {
   // ``jobId`` solo viene en ejecuciones disparadas por cron; un turno normal ya
   // trae su credencial con el mensaje y no debe tocar nada de esto.
@@ -87,10 +144,25 @@ async function primeScheduleCredential(
   if (context.channel && context.channel !== "query") return;
   const threadId = (context.chatId ?? context.channelId ?? "").trim();
   if (!threadId) return;
+
+  const synced = syncedCrons.get(externalId);
+  // Que la tarea es de Query hay que poder afirmarlo, no suponerlo: o el
+  // contexto lo dice, o la sincronizacion la registro como nuestra. Lo que se
+  // apunta aqui es lo que despues deja al guard bloquear un cron sin autor, asi
+  // que adoptar de mas seria bloquear crones de otras integraciones.
+  const isQueryCron =
+    context.channel === "query" || Boolean(synced) || queryCronIds.has(externalId);
+  if (isQueryCron) {
+    rememberQuerySession(context.sessionKey, {
+      threadId,
+      jobId: externalId,
+      accountId: synced?.accountId,
+    });
+  }
+
   // Un reintento dentro de la misma ventana reusa la credencial que ya hay.
   if (getDelegatedAuth(threadId)) return;
 
-  const synced = syncedCrons.get(externalId);
   try {
     const { requestQueryScheduleAuth } = await import("./socket.js");
     const granted = await requestQueryScheduleAuth(
@@ -107,6 +179,12 @@ async function primeScheduleCredential(
       return;
     }
     rememberDelegatedAuth(threadId, granted.auth, granted.socketUrl);
+    // Con credencial en mano la tarea es de Query sin lugar a dudas, aunque el
+    // contexto no lo dijera y la sincronizacion se hubiera perdido en un
+    // reinicio: Query no la habria firmado si no.
+    if (!isQueryCron) {
+      rememberQuerySession(context.sessionKey, { threadId, jobId: externalId });
+    }
   } catch (error) {
     api.logger.warn(
       `query cron ${externalId}: fallo pidiendo credencial: ${String(error)}`,
@@ -118,11 +196,14 @@ export function registerQueryCronSync(
   api: OpenClawPluginApi,
   sendEvent: typeof sendQueryOutboundEvent = sendQueryOutboundEvent,
 ): void {
-  api.on("gateway_start", (_event, context) => {
+  api.on("gateway_start", async (_event, context) => {
     cronService = context.getCron?.();
+    await adoptExistingQueryCrons(api);
   });
   api.on("gateway_stop", () => {
     cronService = undefined;
+    syncedCrons.clear();
+    queryCronIds.clear();
   });
   api.on("before_agent_start", async (_event, context) => {
     await primeScheduleCredential(api, context ?? {});
@@ -174,8 +255,13 @@ export function registerQueryCronSync(
     };
     try {
       sendEvent(target.accountId, outbound);
-      if (event.action === "removed") syncedCrons.delete(event.jobId);
-      else syncedCrons.set(event.jobId, target);
+      if (event.action === "removed") {
+        syncedCrons.delete(event.jobId);
+        queryCronIds.delete(event.jobId);
+      } else {
+        syncedCrons.set(event.jobId, target);
+        queryCronIds.add(event.jobId);
+      }
     } catch (error) {
       api.logger.warn(
         `query cron sync failed for ${event.jobId}: ${String(error)}`,
