@@ -380,7 +380,7 @@ valor por defecto).
 
 Para templates u otros artifacts permanentes se puede pasar `pinned: true` al
 crear o reemplazar. Query responderá `is_pinned: true` y `expires_at: null`, y
-el asset quedará excluido de la limpieza automática de 40 días. Para cambiar
+el asset quedará excluido de la limpieza automática. Para cambiar
 un asset existente sin volver a subir su archivo están disponibles
 `setQueryArtifactPinned()` y `setOutboundQueryArtifactPinned()`.
 
