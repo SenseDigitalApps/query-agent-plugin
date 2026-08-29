@@ -1,6 +1,7 @@
 import type {
   OpenClawPluginApi,
   PluginHookCronChangedEvent,
+  PluginHookGatewayCronJob,
   PluginHookGatewayCronService,
 } from "openclaw/plugin-sdk/plugin-runtime";
 import { sendQueryOutboundEvent } from "./socket.js";
@@ -21,6 +22,19 @@ type SyncedCron = {
 };
 
 const syncedCrons = new Map<string, SyncedCron>();
+/**
+ * Crones que existian antes de arrancar y que Query todavia no conoce.
+ *
+ * ``cron_changed`` solo avisa de lo que cambia, asi que una tarea creada antes
+ * de que existiera esta sincronizacion -o mientras Query estaba caido- no se
+ * anuncia sola nunca mas. Se guardan aqui con su job entero y se sueltan
+ * cuando la sesion de Query queda lista, que es el primer momento en que hay
+ * alguien al otro lado escuchando.
+ */
+const pendingBackfill = new Map<
+  string,
+  { target: SyncedCron; job: PluginHookGatewayCronJob }
+>();
 // Tareas que sabemos de Query aunque no podamos rutearlas. Un cron viejo puede
 // no traer ``accountId`` -no existia cuando se creo- y aun asi tiene que
 // reconocerse como nuestro: es lo que decide si sus herramientas pasan por el
@@ -68,11 +82,70 @@ async function adoptExistingQueryCrons(api: OpenClawPluginApi): Promise<void> {
     const accountId = explicitQueryAccountId(delivery);
     if (!accountId || target === undefined || target === null) continue;
     const threadId = String(target).trim();
-    if (threadId) syncedCrons.set(jobId, { accountId, threadId });
+    if (!threadId) continue;
+    const resolved = { accountId, threadId };
+    syncedCrons.set(jobId, resolved);
+    pendingBackfill.set(jobId, {
+      target: resolved,
+      job: job as PluginHookGatewayCronJob,
+    });
   }
   if (adopted) {
     api.logger.info(
       `query cron sync adopto ${adopted} tarea(s) de Query ya registradas.`,
+    );
+  }
+}
+
+/**
+ * Anuncia a Query los crones que ya existian cuando arranco el gateway.
+ *
+ * Lo llama el socket al quedar lista la sesion: antes de eso no hay a quien
+ * mandarselo. Cada tarea se suelta una sola vez por proceso -se borra del mapa
+ * al conseguirlo-, asi que reconectar no repite el anuncio.
+ *
+ * Sin credencial delegada la tarea se registra igual pero sin identidad. Es
+ * deliberado: un cron viejo sin turno humano detras no puede probar de quien
+ * es, y perderlo de vista seria peor que verlo sin autor.
+ */
+export function backfillQuerySchedules(
+  accountId: string,
+  sendEvent: typeof sendQueryOutboundEvent = sendQueryOutboundEvent,
+  log?: { info?: (message: string) => void; warn?: (message: string) => void },
+): void {
+  if (!pendingBackfill.size) return;
+  let announced = 0;
+  for (const [jobId, entry] of [...pendingBackfill]) {
+    if (entry.target.accountId !== accountId) continue;
+    const stored = getDelegatedAuth(entry.target.threadId);
+    const outbound: QueryOutboundEvent = {
+      type: "schedule.sync",
+      role: "system",
+      content: "",
+      client_msg_id: "",
+      thread_id: entry.target.threadId,
+      data: {
+        action: "added",
+        external_id: jobId,
+        job: entry.job,
+        ...(stored ? { delegated_token: stored.auth.token } : {}),
+      },
+    };
+    try {
+      sendEvent(accountId, outbound);
+      pendingBackfill.delete(jobId);
+      announced += 1;
+    } catch (error) {
+      // La sesion se cayo entre medias: se deja pendiente para el proximo
+      // ``session.ready`` en vez de darlo por anunciado.
+      log?.warn?.(
+        `query cron backfill fallo para ${jobId}: ${String(error)}`,
+      );
+    }
+  }
+  if (announced) {
+    log?.info?.(
+      `query cron backfill anuncio ${announced} tarea(s) preexistente(s).`,
     );
   }
 }
@@ -204,6 +277,7 @@ export function registerQueryCronSync(
     cronService = undefined;
     syncedCrons.clear();
     queryCronIds.clear();
+    pendingBackfill.clear();
   });
   api.on("before_agent_start", async (_event, context) => {
     await primeScheduleCredential(api, context ?? {});
@@ -255,6 +329,7 @@ export function registerQueryCronSync(
     };
     try {
       sendEvent(target.accountId, outbound);
+      pendingBackfill.delete(event.jobId);
       if (event.action === "removed") {
         syncedCrons.delete(event.jobId);
         queryCronIds.delete(event.jobId);

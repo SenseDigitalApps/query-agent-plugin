@@ -421,6 +421,20 @@ export class QuerySocketMonitor {
       );
       this.patchStatus({ running: true, lastError: undefined });
       await this.syncAgentProfile(event.data.agent_profile);
+      // Recien ahora hay alguien escuchando al otro lado, que es lo que le
+      // faltaba a las tareas que ya existian cuando arranco el gateway.
+      try {
+        const { backfillQuerySchedules } = await import("./cron-sync.js");
+        backfillQuerySchedules(
+          this.options.account.accountId,
+          sendQueryOutboundEvent,
+          this.options.log,
+        );
+      } catch (error) {
+        this.options.log?.warn?.(
+          `[${this.options.account.accountId}] query cron backfill no pudo ejecutarse: ${String(error)}`,
+        );
+      }
       return;
     }
     if (event.type === "agent.profile") {
