@@ -35,6 +35,7 @@ import {
   type EffortResolution,
 } from "./effort-policy.js";
 import { redactUnsafeArtifactReferences } from "./private-links.js";
+import { stripOpenClawControlAnnotations } from "./public-text.js";
 import { getQueryRuntime } from "./runtime.js";
 
 export type QueryAgentResult = {
@@ -725,7 +726,18 @@ export async function dispatchQueryMessage(params: {
   let lastAssistantText = "";
   let lastPartialReply = "";
   let toolCalls = 0;
+  let loggedControlAnnotation = false;
   const seenToolStarts = new Set<string>();
+  const publicText = (text: string): string => {
+    const sanitized = stripOpenClawControlAnnotations(text);
+    if (sanitized !== text && !loggedControlAnnotation) {
+      loggedControlAnnotation = true;
+      params.log?.info?.(
+        `query_control_annotation_filtered msg=${event.client_msg_id} kind=fast_mode`,
+      );
+    }
+    return sanitized;
+  };
   const unsubscribe = onAgentEvent((agentEvent) => {
     if (agentEvent.sessionKey !== route.sessionKey) return;
     if (agentEvent.agentId && agentEvent.agentId !== route.agentId) return;
@@ -746,7 +758,9 @@ export async function dispatchQueryMessage(params: {
     }
     if (agentEvent.stream === "assistant") {
       const streamedText =
-        typeof agentEvent.data.text === "string" ? agentEvent.data.text.trim() : "";
+        typeof agentEvent.data.text === "string"
+          ? publicText(agentEvent.data.text).trim()
+          : "";
       if (streamedText) lastAssistantText = streamedText;
     }
     const activity = activityFromAgentEvent(agentEvent);
@@ -767,8 +781,9 @@ export async function dispatchQueryMessage(params: {
         core.channel.reply.dispatchReplyWithBufferedBlockDispatcher,
       delivery: {
         deliver: async (payload) => {
-          if (payload.text?.trim()) {
-            texts.push(payload.text.trim());
+          const deliveredText = publicText(payload.text ?? "").trim();
+          if (deliveredText) {
+            texts.push(deliveredText);
             params.onProgress?.("El agente generó parte de la respuesta");
             params.onActivity?.({ kind: "finalizing", runId });
           }
@@ -794,8 +809,10 @@ export async function dispatchQueryMessage(params: {
         allowToolLifecycleWhenProgressHidden: true,
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onPartialReply: (payload) => {
-          const publicDraft = redactUnsafeArtifactReferences(
-            typeof payload.text === "string" ? payload.text : "",
+          const publicDraft = publicText(
+            redactUnsafeArtifactReferences(
+              typeof payload.text === "string" ? payload.text : "",
+            ),
           ).trim();
           if (!publicDraft || publicDraft === lastPartialReply) return;
           lastPartialReply = publicDraft;
@@ -878,10 +895,10 @@ export async function dispatchQueryMessage(params: {
         }
       : {}),
     };
-    const deliveredText = texts.join("\n\n").trim();
+    const deliveredText = publicText(texts.join("\n\n")).trim();
     const streamedFallback =
       lastAssistantText && !isSilentReplyText(lastAssistantText)
-        ? lastAssistantText
+        ? publicText(lastAssistantText).trim()
         : "";
     const text = deliveredText || streamedFallback;
     const visibleMedia = uniqueNonEmpty(mediaUrls);

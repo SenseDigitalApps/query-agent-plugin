@@ -23,7 +23,7 @@ describe("Query inbound dispatch recovery", () => {
     const onPartialReply = vi.fn();
     const dispatchReply = vi.fn(async (params: any) => {
       params.replyOptions.onPartialReply?.({
-        text: "Estoy redactando la respuesta con el dato confirmado.",
+        text: "💨Fast: auto-onEstoy redactando la respuesta con el dato confirmado.",
       });
       params.replyOptions.onItemEvent?.({
         kind: "preamble",
@@ -42,7 +42,9 @@ describe("Query inbound dispatch recovery", () => {
         stream: "assistant",
         sessionKey: "agent:query:test-thread",
         agentId: "agent",
-        data: { text: "Respuesta que solo aparecio en el stream." },
+        data: {
+          text: "💨Fast: auto-off(61s>=60s)💨Fast: auto-onRespuesta que solo aparecio en el stream.",
+        },
       });
       return {
         admission: { kind: "dispatch" },
@@ -120,6 +122,58 @@ describe("Query inbound dispatch recovery", () => {
       "Estoy redactando la respuesta con el dato confirmado.",
     );
     expect(result.text).toBe("Respuesta que solo aparecio en el stream.");
+  });
+
+  it("filters Fast annotations from the final delivery callback", async () => {
+    const dispatchReply = vi.fn(async (params: any) => {
+      await params.delivery.deliver({
+        text: "💨Fast: auto-off(161s>=60s)💨Fast: auto-onRespuesta final limpia.",
+      });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: "agent:query:test-thread",
+      };
+    });
+    setQueryRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "agent",
+            accountId: "default",
+            sessionKey: "agent:query:test-thread",
+          }),
+        },
+        session: {
+          resolveStorePath: () => "sessions.json",
+          recordInboundSession: vi.fn(),
+        },
+        inbound: { dispatchReply },
+        reply: { dispatchReplyWithBufferedBlockDispatcher: vi.fn() },
+      },
+    } as never);
+    const info = vi.fn();
+
+    const result = await dispatchQueryMessage({
+      cfg: { channels: { query: {} } } as QueryConfig,
+      account,
+      threadId: "test-thread",
+      event: {
+        type: "message",
+        role: "user",
+        content: "Continúa",
+        client_msg_id: "turn-fast-control",
+        thread_id: "test-thread",
+        data: { attachments: [] },
+      },
+      log: { info },
+    });
+
+    expect(result.text).toBe("Respuesta final limpia.");
+    expect(info).toHaveBeenCalledWith(
+      "query_control_annotation_filtered msg=turn-fast-control kind=fast_mode",
+    );
   });
 
   it("asks for one visible final without tools when the first turn returns empty", async () => {
