@@ -31,6 +31,53 @@ const LOCAL_GENERATED_ARTIFACT_RE =
 
 type QueryToolLog = ToolPluginExecutionContext["api"]["logger"];
 
+/**
+ * Cache corto de metadatos de modulos.
+ *
+ * El agente tiene instruccion de empezar cada tarea listando modulos y
+ * describiendo el que va a tocar, asi que un turno normal repite las mismas dos
+ * llamadas antes de hacer nada util. La estructura de un modulo no cambia entre
+ * dos frases de una conversacion, pero los permisos si pueden cambiar entre dos
+ * personas: por eso la clave incluye la credencial delegada y no el hilo. Dos
+ * usuarios del mismo canal tienen tokens distintos y nunca comparten entrada.
+ *
+ * Solo entra aqui la metadata. Los registros no se cachean: cambian, y una
+ * lectura vieja despues de aplicar una propuesta seria un error visible.
+ */
+const METADATA_CACHE_TTL_MS = (() => {
+  const parsed = Number(process.env.QUERY_TOOLS_CACHE_TTL_MS);
+  return Number.isFinite(parsed) && parsed >= 0 ? parsed : 60_000;
+})();
+const METADATA_CACHE_MAX_ENTRIES = 200;
+const metadataCache = new Map<string, { value: unknown; expiresAt: number }>();
+
+function readMetadataCache(key: string, now: number): unknown | undefined {
+  const hit = metadataCache.get(key);
+  if (!hit) return undefined;
+  if (hit.expiresAt <= now) {
+    metadataCache.delete(key);
+    return undefined;
+  }
+  return hit.value;
+}
+
+function writeMetadataCache(key: string, value: unknown, now: number): void {
+  if (METADATA_CACHE_TTL_MS <= 0) return;
+  for (const [entryKey, entry] of metadataCache) {
+    if (entry.expiresAt <= now) metadataCache.delete(entryKey);
+  }
+  if (metadataCache.size >= METADATA_CACHE_MAX_ENTRIES) {
+    const oldest = metadataCache.keys().next();
+    if (!oldest.done) metadataCache.delete(oldest.value);
+  }
+  metadataCache.set(key, { value, expiresAt: now + METADATA_CACHE_TTL_MS });
+}
+
+/** Expuesto para las pruebas: ningun turno depende de que el cache persista. */
+export function clearQueryMetadataCache(): void {
+  metadataCache.clear();
+}
+
 async function postQuery(
   threadId: string,
   path: string,
@@ -89,18 +136,31 @@ function generatedArtifactAsRecordError() {
   };
 }
 
-async function callQuery(
+export async function callQuery(
   threadId: string,
   path: string,
   query: Record<string, string>,
   toolName: string,
   log: QueryToolLog,
+  options: { cacheable?: boolean } = {},
 ): Promise<unknown> {
   const stored = await delegatedAuthForTool(threadId, toolName, log);
   if (!stored) return noCredential();
   const url = new URL(queryApiUrl(stored.socketUrl, path));
   for (const [key, value] of Object.entries(query)) {
     if (value !== undefined && value !== "") url.searchParams.set(key, value);
+  }
+  const cacheKey =
+    options.cacheable && METADATA_CACHE_TTL_MS > 0
+      ? JSON.stringify([stored.auth.token, url.toString()])
+      : undefined;
+  const now = Date.now();
+  if (cacheKey) {
+    const cached = readMetadataCache(cacheKey, now);
+    if (cached !== undefined) {
+      log.info(`query_metadata_cache_hit tool=${JSON.stringify(toolName)}`);
+      return cached;
+    }
   }
   const response = await fetch(url, {
     headers: { "X-Query-Delegated-Token": stored.auth.token },
@@ -114,6 +174,9 @@ async function callQuery(
       detail: (body as { detail?: string } | undefined)?.detail,
     };
   }
+  // Un fallo nunca se cachea: repetir un error durante un minuto convierte un
+  // problema pasajero en uno que parece permanente.
+  if (cacheKey && body !== undefined) writeMetadataCache(cacheKey, body, now);
   return body;
 }
 
@@ -177,6 +240,7 @@ export default defineToolPlugin({
           {},
           "query_modules_list",
           context.api.logger,
+          { cacheable: true },
         ),
     }),
     tool({
@@ -199,6 +263,7 @@ export default defineToolPlugin({
           {},
           "query_module_describe",
           context.api.logger,
+          { cacheable: true },
         ),
     }),
     tool({

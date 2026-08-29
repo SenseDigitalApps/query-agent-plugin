@@ -8,6 +8,11 @@ import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-runtime
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { dispatchQueryMessage } from "./inbound.js";
 import {
+  createActivityGate,
+  type ActivityCandidate,
+  type NormalizedActivity,
+} from "./activity-policy.js";
+import {
   activityEvent,
   buildSocketUrl,
   cachedResponseEvent,
@@ -65,6 +70,11 @@ const QUERY_TTS_BIN = process.env.QUERY_TTS_BIN;
 const QUERY_TTS_VOICE = process.env.QUERY_TTS_VOICE ?? "es-CO-GonzaloNeural";
 const QUERY_TTS_LANG = process.env.QUERY_TTS_LANG ?? "es-CO";
 const QUERY_TTS_RATE = process.env.QUERY_TTS_RATE ?? "+15%";
+/**
+ * Cada cuanto se mira si hay un paso retenido esperando salir. Corto a
+ * proposito: es un chequeo en memoria, no una emision.
+ */
+const QUERY_ACTIVITY_RELEASE_MS = 1_000;
 const QUERY_ACTIVITY_HEARTBEAT_MS = Math.max(
   5_000,
   Number(process.env.QUERY_ACTIVITY_HEARTBEAT_MS) || 20_000,
@@ -563,8 +573,10 @@ export class QuerySocketMonitor {
           threadId,
           clientMsgId: event.client_msg_id,
           state: "working",
+          kind: "working",
           label: "El agente sigue procesando el mensaje",
           stage: "agent",
+          visibility: "public",
         }),
       );
       this.options.log?.info?.(
@@ -577,48 +589,33 @@ export class QuerySocketMonitor {
     this.options.log?.info?.(
       `[${this.options.account.accountId}] ${event.client_msg_id}: query_received attachments=${event.data?.attachments?.length ?? 0}`,
     );
-    this.send(
-      activityEvent({
-        threadId,
-        clientMsgId: event.client_msg_id,
-        state: "working",
-        label: "El agente recibió el mensaje",
-        stage: "received",
-        progress: 0,
-      }),
-    );
-    const activityAt = Date.now();
-    this.options.log?.info?.(
-      `[${this.options.account.accountId}] ${event.client_msg_id}: query_activity_sent activity_ms=${activityAt - receivedAt}`,
-    );
-    this.patchStatus({ lastInboundAt: Date.now() });
-
-    let lastActivityLabel = "El agente está trabajando";
-    const emitTurnActivity = (
-      activity: {
-        label: string;
-        detail?: string;
-        stage?: string;
-        toolName?: string;
-        progress?: number;
-        runId?: string;
-      },
-      heartbeat = false,
-    ) => {
-      lastActivityLabel = activity.label || lastActivityLabel;
+    // Todo lo que la persona llegara a ver de este turno pasa por esta puerta:
+    // traduce el evento tecnico a una plantilla fija, descarta lo repetido y
+    // calla mientras el turno todavia pueda resolverse rapido.
+    const gate = createActivityGate({
+      mode: this.options.account.activityMode,
+      startedAt: receivedAt,
+    });
+    let firstVisibleAt: number | undefined;
+    const deliverActivity = (activity: NormalizedActivity) => {
+      if (firstVisibleAt === undefined && activity.visibility === "public") {
+        firstVisibleAt = Date.now();
+      }
       try {
         this.send(
           activityEvent({
             threadId,
             clientMsgId: event.client_msg_id,
             state: "working",
-            label: lastActivityLabel,
+            kind: activity.kind,
+            label: activity.label,
             detail: activity.detail,
             stage: activity.stage,
             toolName: activity.toolName,
             progress: activity.progress,
             runId: activity.runId,
-            heartbeat,
+            heartbeat: activity.heartbeat || undefined,
+            visibility: activity.visibility,
             elapsedMs: Date.now() - receivedAt,
           }),
         );
@@ -628,14 +625,29 @@ export class QuerySocketMonitor {
         );
       }
     };
+    const emitTurnActivity = (candidate: ActivityCandidate) => {
+      const decision = gate.evaluate(candidate, Date.now());
+      if (decision.emit) deliverActivity(decision.activity);
+    };
+
+    emitTurnActivity({ kind: "received" });
+    const activityAt = Date.now();
+    this.options.log?.info?.(
+      `[${this.options.account.accountId}] ${event.client_msg_id}: query_activity_sent activity_ms=${activityAt - receivedAt}`,
+    );
+    this.patchStatus({ lastInboundAt: Date.now() });
+
+    // El paso retenido durante el silencio inicial se libera solo. Sin este
+    // reloj, un turno que se pasa de los cuatro segundos y luego no vuelve a
+    // emitir nada se quedaria mudo hasta el siguiente latido.
+    const activityRelease = setInterval(() => {
+      const held = gate.takeHeld(Date.now());
+      if (held) deliverActivity(held);
+    }, QUERY_ACTIVITY_RELEASE_MS);
+    activityRelease.unref?.();
     const activityHeartbeat = setInterval(() => {
-      emitTurnActivity(
-        {
-          label: lastActivityLabel,
-          stage: "heartbeat",
-        },
-        true,
-      );
+      const decision = gate.evaluate({ kind: "working", keepalive: true }, Date.now());
+      if (decision.emit) deliverActivity(decision.activity);
     }, QUERY_ACTIVITY_HEARTBEAT_MS);
     activityHeartbeat.unref?.();
 
@@ -655,7 +667,10 @@ export class QuerySocketMonitor {
               `[${this.options.account.accountId}] ${event.client_msg_id}: ${detail}`,
             );
           },
-          onActivity: (activity) => emitTurnActivity(activity),
+          // Un evento sin paso canonico sigue siendo senal de vida: entra como
+          // el paso generico en vez de perderse.
+          onActivity: (activity) =>
+            emitTurnActivity({ ...activity, kind: activity.kind ?? "working" }),
           log: this.options.log,
         }),
         this.options.account.responseTimeoutMs,
@@ -782,6 +797,15 @@ export class QuerySocketMonitor {
       );
     } finally {
       clearInterval(activityHeartbeat);
+      clearInterval(activityRelease);
+      const stats = gate.stats();
+      this.options.log?.info?.(
+        `[${this.options.account.accountId}] ${event.client_msg_id}: query_turn_metrics ` +
+          `mode=${gate.mode} total_ms=${Date.now() - receivedAt} ` +
+          `ack_ms=${activityAt - receivedAt} ` +
+          `first_visible_ms=${firstVisibleAt === undefined ? -1 : firstVisibleAt - receivedAt} ` +
+          `activity_emitted=${stats.emitted} activity_dropped=${stats.dropped}`,
+      );
       this.inFlight.delete(turnKey);
     }
   }

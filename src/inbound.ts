@@ -27,6 +27,7 @@ import type {
   ResolvedQueryAccount,
 } from "./types.js";
 import { CHANNEL_ID } from "./types.js";
+import { kindForTool } from "./activity-policy.js";
 import { getQueryRuntime } from "./runtime.js";
 
 export type QueryAgentResult = {
@@ -64,40 +65,26 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
     : undefined;
 
   if (event.stream === "lifecycle") {
-    if (phase === "start") {
-      return { label: "Analizando la solicitud", stage: "agent", progress: 5 };
-    }
-    if (phase === "finishing") {
-      return { label: "Preparando la respuesta", stage: "response", progress: 90 };
-    }
-    if (phase === "fallback_step") {
-      return { label: "Buscando una alternativa", stage: "agent" };
-    }
+    if (phase === "start") return { kind: "routing" };
+    if (phase === "finishing") return { kind: "finalizing" };
+    if (phase === "fallback_step") return { kind: "retrying" };
     return undefined;
   }
   if (event.stream === "tool") {
     const finished = phase === "end" || phase === "done" || phase === "complete";
-    return {
-      label: toolName
-        ? finished
-          ? `${toolName} completado`
-          : `Usando ${toolName}`
-        : finished
-          ? "Consulta completada"
-          : "Consultando herramientas",
-      stage: "tool",
-      toolName,
-      progress,
-    };
+    return { kind: kindForTool(toolName, finished), toolName, progress };
   }
   if (event.stream === "compaction") {
-    return { label: "Organizando el contexto", stage: "context" };
+    return { kind: "context" };
   }
   if (event.stream === "assistant") {
-    return { label: "Redactando la respuesta", stage: "response", progress: 85 };
+    return { kind: "finalizing" };
   }
+  // El razonamiento del agente solo aporta el hecho de que sigue vivo. El
+  // contenido nunca sale de aqui: se traduce al mismo paso generico de siempre
+  // y el texto literal se queda donde estaba.
   if (event.stream === "thinking" || event.stream === "plan") {
-    return { label: "Analizando la información", stage: "thinking" };
+    return { kind: "routing" };
   }
   return undefined;
 }
@@ -683,12 +670,7 @@ export async function dispatchQueryMessage(params: {
           if (payload.text?.trim()) {
             texts.push(payload.text.trim());
             params.onProgress?.("El agente generó parte de la respuesta");
-            params.onActivity?.({
-              label: "Preparando la respuesta",
-              stage: "response",
-              progress: 90,
-              runId,
-            });
+            params.onActivity?.({ kind: "finalizing", runId });
           }
           mediaUrls.push(...(payload.mediaUrls ?? []));
           if (payload.mediaUrl) mediaUrls.push(payload.mediaUrl);

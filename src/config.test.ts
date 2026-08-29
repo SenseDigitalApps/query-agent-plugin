@@ -3,6 +3,7 @@ import { listQueryAccountIds, resolveQueryAccount } from "./config.js";
 
 afterEach(() => {
   delete process.env.QUERY_OPENCLAW_TOKEN;
+  delete process.env.QUERY_AGENT_ACTIVITY_MODE;
 });
 
 describe("Query account configuration", () => {
@@ -80,5 +81,45 @@ describe("Query account configuration", () => {
       origin: "https://us.itsquery.com",
       stateFile: "/tmp/director-cache.json",
     });
+  });
+});
+
+describe("modo de actividad de la cuenta", () => {
+  it("usa smart cuando nadie dice otra cosa", () => {
+    const account = resolveQueryAccount({
+      channels: { query: { url: "wss://query.test/ws/?token=t" } },
+    } as never);
+    expect(account.activityMode).toBe("smart");
+  });
+
+  it("respeta el modo del canal y el de una cuenta concreta", () => {
+    const cfg = {
+      channels: {
+        query: {
+          url: "wss://query.test/ws/?token=t",
+          activityMode: "lite",
+          accounts: {
+            soporte: { url: "wss://query.test/ws/?token=t", activityMode: "verbose" },
+            ventas: { url: "wss://query.test/ws/?token=t" },
+          },
+        },
+      },
+    } as never;
+    expect(resolveQueryAccount(cfg, "soporte").activityMode).toBe("verbose");
+    // La cuenta sin modo propio hereda el del canal.
+    expect(resolveQueryAccount(cfg, "ventas").activityMode).toBe("lite");
+  });
+
+  it("cae al entorno y descarta un modo desconocido", () => {
+    process.env.QUERY_AGENT_ACTIVITY_MODE = "debug-internal";
+    const heredado = resolveQueryAccount({
+      channels: { query: { url: "wss://query.test/ws/?token=t" } },
+    } as never);
+    expect(heredado.activityMode).toBe("debug-internal");
+
+    const invalido = resolveQueryAccount({
+      channels: { query: { url: "wss://query.test/ws/?token=t", activityMode: "ruidoso" } },
+    } as never);
+    expect(invalido.activityMode).toBe("debug-internal");
   });
 });

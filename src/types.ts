@@ -1,4 +1,9 @@
 import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import type {
+  QueryActivityKind,
+  QueryActivityMode,
+  QueryActivityVisibility,
+} from "./activity-policy.js";
 
 export const CHANNEL_ID = "query" as const;
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -16,6 +21,8 @@ export type QueryChannelConfig = {
   ttsVoice?: string;
   ttsLang?: string;
   ttsRate?: string;
+  /** Cuanta actividad ve la persona mientras el agente trabaja. */
+  activityMode?: QueryActivityMode | string;
   accounts?: Record<string, QueryAccountConfig>;
 };
 
@@ -36,6 +43,7 @@ export type ResolvedQueryAccount = {
   ttsVoice?: string;
   ttsLang?: string;
   ttsRate?: string;
+  activityMode: QueryActivityMode;
 };
 
 export type QueryConfig = OpenClawConfig & {
@@ -222,12 +230,15 @@ export type QueryActivityState = "queued" | "working" | "done" | "error";
 
 export type QueryAgentActivity = {
   state?: QueryActivityState;
-  label: string;
+  /** Paso canonico del catalogo; el texto sale de ahi, no del agente. */
+  kind?: QueryActivityKind;
+  label?: string;
   detail?: string;
   stage?: string;
   toolName?: string;
   progress?: number;
   runId?: string;
+  visibility?: QueryActivityVisibility;
 };
 
 export type QueryOutboundEvent = {

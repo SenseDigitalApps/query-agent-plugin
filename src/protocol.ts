@@ -1,4 +1,8 @@
 import type {
+  QueryActivityKind,
+  QueryActivityVisibility,
+} from "./activity-policy.js";
+import type {
   CachedResponse,
   QueryActivityState,
   QueryAgentProfileEvent,
@@ -78,6 +82,13 @@ export function activityEvent(params: {
   runId?: string;
   heartbeat?: boolean;
   elapsedMs?: number;
+  /** Paso canonico; deja que Query agrupe sin volver a leer la etiqueta. */
+  kind?: QueryActivityKind;
+  /**
+   * Para quien es. Query filtra por esto antes de reenviar al chat, asi que un
+   * evento sin marcar viaja como publico y debe ser seguro por si mismo.
+   */
+  visibility?: QueryActivityVisibility;
 }): QueryOutboundEvent {
   const {
     threadId,

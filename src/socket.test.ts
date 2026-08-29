@@ -129,16 +129,9 @@ describe("QuerySocketMonitor", () => {
       client_msg_id: "msg-7",
       data: { state: "working", stage: "received" },
     });
-    await expect(receive(socket)).resolves.toMatchObject({
-      type: "activity",
-      client_msg_id: "msg-7",
-      data: {
-        label: "Consultando inventario",
-        stage: "tool",
-        tool_name: "inventario",
-        progress: 40,
-      },
-    });
+    // El turno se resuelve en milisegundos, asi que el paso de herramienta se
+    // queda dentro del silencio inicial: despues del acuse llega la respuesta
+    // y nada mas. Un chat rapido no se llena de cronologia.
     await expect(receive(socket)).resolves.toMatchObject({
       type: "message",
       content: "¡Hola!",
@@ -159,6 +152,120 @@ describe("QuerySocketMonitor", () => {
     expect(diagnosticLog).toContain("created_by_id_present=true");
     expect(diagnosticLog).toContain("query_delegated_auth_stored");
     expect(diagnosticLog).not.toContain("delegated-secret");
+
+    controller.abort();
+    await monitor.stop();
+  });
+
+  it("publishes tool progress with its canonical step when the turn is slow", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-socket-activity-"));
+    const server = new WebSocketServer({ port: 0 });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const controller = new AbortController();
+    cleanupTasks.push(async () => {
+      controller.abort();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    // `verbose` es el mismo camino que `smart` una vez pasado el silencio
+    // inicial, y no obliga a que la prueba espere cuatro segundos reales.
+    const account: ResolvedQueryAccount = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      url: `ws://127.0.0.1:${address.port}/ws/openclaw-agent/test/`,
+      token: "bot-secret",
+      heartbeatMs: 5_000,
+      reconnectMinMs: 100,
+      reconnectMaxMs: 1_000,
+      responseTimeoutMs: 0,
+      stateFile: join(directory, "responses.json"),
+      activityMode: "verbose",
+    };
+    const dispatchMessage = vi.fn(
+      async (params: { onActivity?: (activity: Record<string, unknown>) => void }) => {
+        // La herramienta ofrece un detalle con credencial: es justo lo que no
+        // puede llegar al chat por mucho que el evento lo traiga.
+        params.onActivity?.({
+          kind: "searching",
+          toolName: "query_records_search",
+          detail: "Authorization: Bearer abc123",
+        });
+        await new Promise((resolve) => setTimeout(resolve, 10));
+        return { text: "Listo", mediaUrls: [] };
+      },
+    );
+    let status = { accountId: "default" } as never;
+    const monitor = new QuerySocketMonitor({
+      cfg: { channels: { query: {} } } as never,
+      account,
+      runtime: { error: vi.fn() } as never,
+      abortSignal: controller.signal,
+      getStatus: () => status,
+      setStatus: (next) => {
+        status = next as never;
+      },
+      dispatchMessage,
+      log: {},
+    });
+    cleanupTasks.push(async () => {
+      forgetDelegatedAuth("thread-act");
+    });
+
+    const connection = new Promise<WebSocket>((resolve) => server.once("connection", resolve));
+    await monitor.start();
+    const socket = await connection;
+    const wire: QueryOutboundEvent[] = [];
+    socket.on("message", (data) =>
+      wire.push(JSON.parse(data.toString()) as QueryOutboundEvent),
+    );
+    socket.send(
+      JSON.stringify({
+        type: "session.ready",
+        role: "system",
+        content: "",
+        data: { protocol: "query-openclaw.v1", thread_id: "thread-act" },
+      }),
+    );
+    socket.send(
+      JSON.stringify({
+        type: "message",
+        role: "user",
+        content: "cuantos clientes hay",
+        client_msg_id: "msg-act",
+        thread_id: "thread-act",
+        event_id: 11,
+        data: { attachments: [] },
+      }),
+    );
+
+    await waitFor(() => wire.some((event) => event.type === "message"));
+    const activities = wire.filter((event) => event.type === "activity");
+
+    expect(activities[0]).toMatchObject({
+      client_msg_id: "msg-act",
+      data: { kind: "received", stage: "received", visibility: "public" },
+    });
+    expect(activities[1]).toMatchObject({
+      data: {
+        kind: "searching",
+        label: "Consultando registros",
+        tool_name: "query_records_search",
+        visibility: "public",
+      },
+    });
+    // El paso viaja; la credencial que lo acompanaba no.
+    expect(activities[1]?.data).not.toHaveProperty("detail");
+    const traffic = JSON.stringify(wire);
+    expect(traffic).not.toContain("Bearer");
+    expect(traffic).not.toContain("abc123");
+    expect(wire.at(-1)).toMatchObject({
+      type: "message",
+      content: "Listo",
+      client_msg_id: "msg-act",
+    });
 
     controller.abort();
     await monitor.stop();

@@ -1,3 +1,4 @@
+import { resolveActivityMode } from "./activity-policy.js";
 import {
   DEFAULT_ACCOUNT_ID,
   type QueryAccountConfig,
@@ -58,6 +59,7 @@ export function resolveQueryAccount(
     ttsVoice: accountSection?.ttsVoice?.trim() || undefined,
     ttsLang: accountSection?.ttsLang?.trim() || undefined,
     ttsRate: accountSection?.ttsRate?.trim() || undefined,
+    activityMode: resolveActivityMode(accountSection?.activityMode),
   };
 }
 
@@ -89,6 +91,7 @@ function resolveQueryAccountSection(
       reconnectMaxMs: section?.reconnectMaxMs,
       responseTimeoutMs: section?.responseTimeoutMs,
       stateFile: section?.stateFile,
+      activityMode: section?.activityMode,
       ...account,
     };
   }
@@ -100,5 +103,6 @@ export function inspectQueryAccount(account: ResolvedQueryAccount) {
     enabled: account.enabled,
     configured: account.configured,
     tokenStatus: account.token ? ("available" as const) : ("missing" as const),
+    activityMode: account.activityMode,
   };
 }

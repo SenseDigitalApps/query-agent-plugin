@@ -55,6 +55,7 @@ También se puede separar el secreto para que no quede dentro de la URL:
       heartbeatMs: 25000,
       reconnectMinMs: 500,
       reconnectMaxMs: 15000,
+      activityMode: "smart",
     },
   },
 }
@@ -280,6 +281,32 @@ reconecta con espera exponencial de 0.5 a 15 segundos. Además envía un ping ca
   20 segundos. Puede ajustarse con `QUERY_ACTIVITY_HEARTBEAT_MS` (mínimo 5000).
 - No se exponen pensamientos ni razonamiento interno: solo etapas genéricas,
   herramientas utilizadas y progreso disponible.
+
+### Actividad visible
+
+`channels.query.activityMode` decide cuánto ve la persona mientras el agente
+trabaja. Si no se configura se usa `QUERY_AGENT_ACTIVITY_MODE` y, en último
+lugar, `smart`.
+
+| Modo | Qué muestra |
+| --- | --- |
+| `off` | Nada. El latido sigue saliendo marcado como interno para que Query sepa que el turno vive. |
+| `lite` | Solo el acuse de recibo. |
+| `smart` | Acuse inmediato y, si el turno pasa de 4 s, los pasos útiles con un máximo de uno cada 3,5 s. |
+| `verbose` | Sin espera inicial, throttle de 1,5 s y además los pasos de mantenimiento marcados `admin`. |
+| `debug-internal` | Todo, incluido lo marcado `internal`. Solo para el panel interno. |
+
+Cada evento viaja con `kind` (paso canónico) y `visibility`
+(`public` / `admin` / `internal`). Query filtra por `visibility` antes de
+reenviar al chat, así que un paso `admin` llega al panel pero no a la persona.
+
+Las etiquetas salen de un catálogo fijo en `src/activity-policy.ts`: no hay una
+segunda llamada al modelo para narrar el progreso. Lo que aporta el agente
+(nombre de herramienta, detalle corto) pasa antes por un saneador que descarta
+credenciales, rutas del servidor, trazas, prompts y payloads crudos.
+
+`QUERY_TOOLS_CACHE_TTL_MS` (60000 por omisión, `0` desactiva) controla cuánto
+se reutiliza la metadata de módulos entre llamadas de una misma credencial.
 - Los adjuntos entrantes se entregan al contexto multimedia del agente; las
   URLs multimedia devueltas por el agente regresan como adjuntos de Query.
 
