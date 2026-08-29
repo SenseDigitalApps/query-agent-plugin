@@ -441,7 +441,7 @@ describe("QuerySocketMonitor", () => {
     expect(activities[1]).toMatchObject({
       data: {
         kind: "searching",
-        label: "Consultando registros",
+        label: "Estoy buscando la información necesaria en Query.",
         tool_name: "query_records_search",
         visibility: "public",
       },

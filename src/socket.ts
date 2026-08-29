@@ -9,6 +9,7 @@ import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { dispatchQueryMessage } from "./inbound.js";
 import {
   createActivityGate,
+  heartbeatActivityLabel,
   type ActivityCandidate,
   type NormalizedActivity,
 } from "./activity-policy.js";
@@ -607,7 +608,7 @@ export class QuerySocketMonitor {
           clientMsgId: event.client_msg_id,
           state: "working",
           kind: "working",
-          label: "El agente sigue procesando el mensaje",
+          label: "Sigo trabajando en tu solicitud.",
           stage: "agent",
           visibility: "public",
         }),
@@ -691,7 +692,15 @@ export class QuerySocketMonitor {
     }, QUERY_ACTIVITY_RELEASE_MS);
     activityRelease.unref?.();
     const activityHeartbeat = setInterval(() => {
-      const decision = gate.evaluate({ kind: "working", keepalive: true }, Date.now());
+      const now = Date.now();
+      const decision = gate.evaluate(
+        {
+          kind: "working",
+          keepalive: true,
+          label: heartbeatActivityLabel(gate.lastKind(), now - receivedAt),
+        },
+        now,
+      );
       if (decision.emit) deliverActivity(decision.activity);
     }, QUERY_ACTIVITY_HEARTBEAT_MS);
     activityHeartbeat.unref?.();

@@ -1,6 +1,8 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  activityForTool,
   createActivityGate,
+  heartbeatActivityLabel,
   kindForTool,
   parseActivityMode,
   resolveActivityMode,
@@ -62,7 +64,7 @@ describe("modo smart", () => {
     const ack = emit(gate, { kind: "received" }, T0);
     expect(ack).toMatchObject({
       kind: "received",
-      label: "El agente recibió el mensaje",
+      label: "Ya recibí tu mensaje y voy a revisarlo.",
       visibility: "public",
     });
   });
@@ -87,7 +89,7 @@ describe("modo smart", () => {
     expect(gate.takeHeld(T0 + 3_000)).toBeUndefined();
     expect(gate.takeHeld(T0 + 4_100)).toMatchObject({
       kind: "searching",
-      label: "Consultando registros",
+      label: "Estoy buscando la información necesaria en Query.",
     });
     // Ya se entrego: no vuelve a salir el mismo paso.
     expect(gate.takeHeld(T0 + 9_000)).toBeUndefined();
@@ -153,7 +155,7 @@ describe("modo smart", () => {
       },
       T0,
     );
-    expect(blocked?.label).toBe("Revisando el enfoque");
+    expect(blocked?.label).toBe("Estoy definiendo la mejor forma de resolverlo.");
   });
 });
 
@@ -214,7 +216,7 @@ describe("throttle y dedupe", () => {
     // Que el turno pase a esperar a la persona no puede llegar tarde.
     expect(emit(gate, { kind: "waiting_for_user" }, T0 + 5_500)).toMatchObject({
       kind: "waiting_for_user",
-      label: "Requiere tu confirmación",
+      label: "Ya preparé la propuesta y necesito tu confirmación.",
     });
   });
 
@@ -225,7 +227,7 @@ describe("throttle y dedupe", () => {
     const beat = emit(gate, { kind: "working", keepalive: true }, T0 + 25_000);
     expect(beat).toMatchObject({
       heartbeat: true,
-      label: "Consultando registros",
+      label: "Estoy buscando la información necesaria en Query.",
       stage: "heartbeat",
     });
     // El latido no consumio el hueco del throttle del siguiente paso real.
@@ -346,7 +348,7 @@ describe("saneado del texto visible", () => {
       { kind: "searching", label: "Bearer abc123 en /home/query" },
       T0 + 9_000,
     );
-    expect(activity?.label).toBe("Consultando registros");
+    expect(activity?.label).toBe("Estoy buscando la información necesaria en Query.");
   });
 
   it("ignora el detalle en los pasos que no lo admiten", () => {
@@ -372,5 +374,25 @@ describe("paso derivado de la herramienta", () => {
   it("una propuesta terminada devuelve la conversacion a la persona", () => {
     expect(kindForTool("query_record_propose", true)).toBe("waiting_for_user");
     expect(kindForTool("query_records_search", true)).toBe("tool_completed");
+  });
+
+  it("explica las herramientas en primera persona sin mostrar su nombre tecnico", () => {
+    expect(activityForTool("query_modules_describe", false)).toMatchObject({
+      kind: "module_detected",
+      label: "Estoy revisando la estructura del módulo y sus campos.",
+    });
+    expect(activityForTool("query_records_search", true)).toMatchObject({
+      kind: "tool_completed",
+      label: "Ya encontré información y estoy revisando cuál corresponde.",
+    });
+  });
+
+  it("explica una espera prolongada sin inventar un resultado", () => {
+    expect(heartbeatActivityLabel("searching", 65_000)).toBe(
+      "Sigo esperando el resultado porque la consulta está tomando más de lo habitual.",
+    );
+    expect(heartbeatActivityLabel("routing", 65_000)).toContain(
+      "aún no tengo un resultado final",
+    );
   });
 });

@@ -63,6 +63,7 @@ describe("Query effort policy", () => {
     const instruction = effortInstruction("normal");
     expect(instruction).toContain("[Modo de trabajo Query: normal.");
     expect(instruction).toContain("publica avances breves y concretos");
+    expect(instruction).toContain("en primera persona");
     expect(instruction).toContain("No muestres cadenas privadas de razonamiento");
   });
 });

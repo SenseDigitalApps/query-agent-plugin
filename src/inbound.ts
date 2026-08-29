@@ -27,7 +27,7 @@ import type {
   ResolvedQueryAccount,
 } from "./types.js";
 import { CHANNEL_ID } from "./types.js";
-import { kindForTool } from "./activity-policy.js";
+import { activityForTool } from "./activity-policy.js";
 import {
   effortInstruction,
   effortRunOptions,
@@ -92,7 +92,7 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
   }
   if (event.stream === "tool") {
     const finished = phase === "end" || phase === "done" || phase === "complete";
-    return { kind: kindForTool(toolName, finished), toolName, progress };
+    return { ...activityForTool(toolName, finished), toolName, progress };
   }
   if (event.stream === "item") {
     const itemKind = boundedText(event.data.kind, 32)?.toLowerCase();
@@ -119,9 +119,9 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
   if (event.stream === "assistant") {
     return { kind: "finalizing" };
   }
-  // El razonamiento del agente solo aporta el hecho de que sigue vivo. El
-  // contenido nunca sale de aqui: se traduce al mismo paso generico de siempre
-  // y el texto literal se queda donde estaba.
+  // El razonamiento privado solo aporta el hecho de que el turno sigue vivo.
+  // Los avances publicos llegan por commentary/preamble y si se muestran; el
+  // contenido literal de thinking nunca cruza al chat.
   if (event.stream === "thinking" || event.stream === "plan") {
     return { kind: "routing" };
   }

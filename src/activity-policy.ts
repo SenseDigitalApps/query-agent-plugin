@@ -64,92 +64,92 @@ type ActivityTemplate = {
  */
 const ACTIVITY_CATALOG: Record<QueryActivityKind, ActivityTemplate> = {
   received: {
-    label: "El agente recibió el mensaje",
+    label: "Ya recibí tu mensaje y voy a revisarlo.",
     stage: "received",
     visibility: "public",
     progress: 0,
     important: true,
   },
   routing: {
-    label: "Identificando la solicitud",
+    label: "Estoy entendiendo qué necesitas y cómo abordarlo.",
     stage: "routing",
     visibility: "public",
     progress: 5,
   },
   reasoning_summary: {
-    label: "Revisando el enfoque",
+    label: "Estoy definiendo la mejor forma de resolverlo.",
     stage: "reasoning",
     visibility: "public",
     important: true,
   },
   module_detected: {
-    label: "Módulo detectado",
+    label: "Estoy revisando el módulo relacionado con tu solicitud.",
     stage: "module",
     visibility: "public",
     progress: 15,
     detailAllowed: true,
   },
   searching: {
-    label: "Consultando registros",
+    label: "Estoy buscando la información necesaria en Query.",
     stage: "search",
     visibility: "public",
     progress: 35,
     detailAllowed: true,
   },
   tool_started: {
-    label: "Consultando el sistema",
+    label: "Estoy consultando la información que necesito.",
     stage: "tool",
     visibility: "public",
     progress: 45,
     detailAllowed: true,
   },
   tool_completed: {
-    label: "Consulta finalizada",
+    label: "Ya recibí el resultado y estoy revisándolo.",
     stage: "tool",
     visibility: "public",
     progress: 60,
     detailAllowed: true,
   },
   validating: {
-    label: "Validando datos y permisos",
+    label: "Estoy comprobando los datos antes de continuar.",
     stage: "validation",
     visibility: "public",
     progress: 70,
   },
   proposal_preparing: {
-    label: "Preparando la propuesta",
+    label: "Estoy preparando una propuesta para que puedas revisarla.",
     stage: "proposal",
     visibility: "public",
     progress: 80,
   },
   waiting_for_user: {
-    label: "Requiere tu confirmación",
+    label: "Ya preparé la propuesta y necesito tu confirmación.",
     stage: "waiting",
     visibility: "public",
     important: true,
   },
   retrying: {
-    label: "Reintentando el servicio",
+    label: "Estoy intentando nuevamente porque la consulta anterior falló.",
     stage: "retry",
     visibility: "public",
     important: true,
   },
   finalizing: {
-    label: "Preparando la respuesta",
+    label: "Ya terminé la revisión y estoy redactando la respuesta.",
     stage: "response",
     visibility: "public",
     progress: 90,
     important: true,
   },
   working: {
-    label: "El agente sigue procesando el mensaje",
+    label: "Sigo trabajando en tu solicitud.",
     stage: "agent",
     visibility: "public",
   },
   // Mantenimiento del propio agente. Sirve para diagnosticar una espera larga
   // en el dashboard, pero a la persona del chat no le dice nada que pueda usar.
   context: {
-    label: "Organizando el contexto",
+    label: "Estoy organizando el contexto de la conversación.",
     stage: "context",
     visibility: "admin",
   },
@@ -269,6 +269,83 @@ export function kindForTool(
   return finished ? "tool_completed" : "tool_started";
 }
 
+/**
+ * Traduce una herramienta a una frase pública. No usa argumentos ni
+ * respuestas de la herramienta: solo su identificador saneado, de modo que el
+ * avance sea concreto sin filtrar datos, prompts o rutas internas.
+ */
+export function activityForTool(
+  toolName: string | undefined,
+  finished: boolean,
+): Pick<ActivityCandidate, "kind" | "label"> {
+  const name = toolName?.toLowerCase() ?? "";
+  const kind = kindForTool(toolName, finished);
+
+  if (name.includes("propose")) {
+    return finished
+      ? { kind, label: "Ya preparé la propuesta y necesito tu confirmación." }
+      : { kind, label: "Estoy preparando la propuesta para que puedas revisarla." };
+  }
+  if (name.includes("module") || name.includes("field")) {
+    return finished
+      ? { kind, label: "Ya identifiqué la estructura y los campos que necesito." }
+      : { kind, label: "Estoy revisando la estructura del módulo y sus campos." };
+  }
+  if (name.includes("search") || name.includes("record") || name.includes("list")) {
+    return finished
+      ? { kind, label: "Ya encontré información y estoy revisando cuál corresponde." }
+      : { kind, label: "Estoy buscando los registros relacionados con tu solicitud." };
+  }
+  if (name.includes("web") || name.includes("browser") || name.includes("fetch")) {
+    return finished
+      ? { kind, label: "Ya consulté la fuente y estoy contrastando lo que encontré." }
+      : { kind, label: "Estoy consultando una fuente externa para verificar la información." };
+  }
+  if (
+    name.includes("attachment") ||
+    name.includes("upload") ||
+    name.includes("file") ||
+    name.includes("document")
+  ) {
+    return finished
+      ? { kind, label: "Ya procesé el archivo y estoy comprobando el resultado." }
+      : { kind, label: "Estoy preparando el archivo para compartirlo en el chat." };
+  }
+  return finished
+    ? { kind, label: "Ya recibí el resultado y estoy revisándolo." }
+    : { kind, label: "Estoy consultando la información que necesito." };
+}
+
+/**
+ * Un latido no inventa progreso. Explica honestamente que la etapa conocida
+ * sigue activa y, cuando la espera se alarga, por qué todavía no hay respuesta.
+ */
+export function heartbeatActivityLabel(
+  kind: QueryActivityKind,
+  elapsedMs: number,
+): string {
+  const delayed = elapsedMs >= 60_000;
+  if (kind === "searching" || kind === "module_detected" || kind === "tool_started") {
+    return delayed
+      ? "Sigo esperando el resultado porque la consulta está tomando más de lo habitual."
+      : "Sigo consultando la información necesaria para poder continuar.";
+  }
+  if (kind === "validating") {
+    return delayed
+      ? "Sigo comprobando los datos; la validación está tomando más tiempo de lo habitual."
+      : "Sigo comprobando los datos antes de responderte.";
+  }
+  if (kind === "proposal_preparing") {
+    return "Sigo preparando la propuesta para que puedas revisarla antes de aplicarla.";
+  }
+  if (kind === "finalizing") {
+    return "Ya tengo el resultado y estoy terminando de redactar la respuesta.";
+  }
+  return delayed
+    ? "Sigo con la revisión; está tomando más de lo habitual y aún no tengo un resultado final."
+    : "Sigo revisando tu solicitud para darte una respuesta útil y concreta.";
+}
+
 export type ActivityCandidate = {
   kind: QueryActivityKind;
   /** Solo se usa si sobrevive al saneador; si no, manda la plantilla. */
@@ -332,6 +409,7 @@ export type ActivityGate = {
    */
   takeHeld(now: number): NormalizedActivity | undefined;
   lastLabel(): string;
+  lastKind(): QueryActivityKind;
   stats(): { emitted: number; dropped: number };
 };
 
@@ -356,7 +434,9 @@ function normalize(
       : template.progress;
   return {
     kind: candidate.kind,
-    label: candidate.keepalive ? lastLabel : (overrideLabel ?? template.label),
+    label: candidate.keepalive
+      ? (overrideLabel ?? lastLabel)
+      : (overrideLabel ?? template.label),
     detail,
     stage: candidate.keepalive ? "heartbeat" : template.stage,
     toolName,
@@ -399,6 +479,7 @@ export function createActivityGate(options: ActivityGateOptions): ActivityGate {
       : DEFAULT_THROTTLE_MS);
 
   let lastLabel = ACTIVITY_CATALOG.working.label;
+  let lastKind: QueryActivityKind = "working";
   let lastSignature: string | undefined;
   let lastEmitAt = 0;
   let held: NormalizedActivity | undefined;
@@ -419,6 +500,7 @@ export function createActivityGate(options: ActivityGateOptions): ActivityGate {
       // throttle: si lo hicieran, el primer paso real del turno —el unico que
       // de verdad cuenta algo— llegaria siempre tarde o se perderia.
       if (activity.kind !== "received") lastEmitAt = now;
+      lastKind = activity.kind;
     }
     lastLabel = activity.label || lastLabel;
     return { emit: true, activity };
@@ -427,6 +509,7 @@ export function createActivityGate(options: ActivityGateOptions): ActivityGate {
   return {
     mode,
     lastLabel: () => lastLabel,
+    lastKind: () => lastKind,
     stats: () => ({ emitted, dropped }),
 
     takeHeld(now: number) {
@@ -438,6 +521,7 @@ export function createActivityGate(options: ActivityGateOptions): ActivityGate {
       lastSignature = signature(pending);
       lastEmitAt = now;
       lastLabel = pending.label || lastLabel;
+      lastKind = pending.kind;
       emitted += 1;
       return pending;
     },
