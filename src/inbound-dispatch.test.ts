@@ -19,7 +19,12 @@ const account: ResolvedQueryAccount = {
 
 describe("Query inbound dispatch recovery", () => {
   it("recovers assistant text when OpenClaw omits the final delivery callback", async () => {
+    const onActivity = vi.fn();
     const dispatchReply = vi.fn(async (params: any) => {
+      params.replyOptions.onItemEvent?.({
+        kind: "preamble",
+        progressText: "Voy a revisar los leads y contrastar sus estados.",
+      });
       emitAgentEvent({
         runId: "run-streamed",
         stream: "lifecycle",
@@ -74,14 +79,26 @@ describe("Query inbound dispatch recovery", () => {
         content: "Revisa los leads de ayer",
         client_msg_id: "turn-streamed-1",
         thread_id: "test-thread",
-        data: { attachments: [] },
+        data: { attachments: [], effort_mode: "fast" },
       },
+      onActivity,
     });
 
     expect(dispatchReply).toHaveBeenCalledTimes(1);
-    expect(dispatchReply.mock.calls[0][0].replyOptions).toEqual({
+    expect(dispatchReply.mock.calls[0][0].replyOptions).toMatchObject({
       sourceReplyDeliveryMode: "automatic",
+      thinkingLevelOverride: "low",
+      fastModeOverride: true,
+      bootstrapContextMode: "lightweight",
+      commentaryProgressEnabled: true,
     });
+    expect(dispatchReply.mock.calls[0][0].replyOptions.onReasoningStream).toBeUndefined();
+    expect(onActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "reasoning_summary",
+        label: "Voy a revisar los leads y contrastar sus estados.",
+      }),
+    );
     expect(result.text).toBe("Respuesta que solo aparecio en el stream.");
   });
 
@@ -146,11 +163,15 @@ describe("Query inbound dispatch recovery", () => {
     });
 
     expect(dispatchReply).toHaveBeenCalledTimes(2);
-    expect(dispatchReply.mock.calls[0][0].replyOptions).toEqual({
+    expect(dispatchReply.mock.calls[0][0].replyOptions).toMatchObject({
       sourceReplyDeliveryMode: "automatic",
+      thinkingLevelOverride: "medium",
     });
-    expect(dispatchReply.mock.calls[1][0].replyOptions).toEqual({
+    expect(dispatchReply.mock.calls[1][0].replyOptions).toMatchObject({
       sourceReplyDeliveryMode: "automatic",
+      thinkingLevelOverride: "high",
+      fastModeOverride: false,
+      bootstrapContextMode: "full",
     });
     expect(dispatchReply.mock.calls[0][0].toolsAllow).toBeUndefined();
     expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(

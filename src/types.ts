@@ -4,6 +4,7 @@ import type {
   QueryActivityMode,
   QueryActivityVisibility,
 } from "./activity-policy.js";
+import type { QueryEffortMode } from "./effort-policy.js";
 
 export const CHANNEL_ID = "query" as const;
 export const DEFAULT_ACCOUNT_ID = "default";
@@ -23,6 +24,8 @@ export type QueryChannelConfig = {
   ttsRate?: string;
   /** Cuanta actividad ve la persona mientras el agente trabaja. */
   activityMode?: QueryActivityMode | string;
+  /** Esfuerzo base del agente; `auto` escala deterministicamente por riesgo. */
+  effortMode?: QueryEffortMode | string;
   accounts?: Record<string, QueryAccountConfig>;
 };
 
@@ -44,6 +47,8 @@ export type ResolvedQueryAccount = {
   ttsLang?: string;
   ttsRate?: string;
   activityMode: QueryActivityMode;
+  /** Optional for binary compatibility with accounts resolved by older hosts. */
+  effortMode?: QueryEffortMode;
 };
 
 export type QueryConfig = OpenClawConfig & {
@@ -100,6 +105,7 @@ export type QuerySessionReadyEvent = {
     multi_thread?: boolean;
     /** Ausente en servidores Query anteriores a esta funcion. */
     agent_profile?: QueryAgentProfile;
+    effort_mode?: QueryEffortMode | string;
   };
 };
 
@@ -154,6 +160,9 @@ export type QueryAuthGrantedEvent = {
   data: {
     tenant?: QueryTenant;
     delegated_auth?: QueryDelegatedAuth;
+    effort_mode?: QueryEffortMode | string;
+    action_type?: string;
+    risk_signals?: string[];
     /** Presente cuando la credencial es de una tarea programada, no de un turno. */
     external_id?: string;
   };
@@ -239,6 +248,10 @@ export type QueryAgentActivity = {
   progress?: number;
   runId?: string;
   visibility?: QueryActivityVisibility;
+  effortModeConfigured?: QueryEffortMode;
+  effortModeEffective?: Exclude<QueryEffortMode, "auto">;
+  effortEscalated?: boolean;
+  effortReason?: string;
 };
 
 export type QueryOutboundEvent = {

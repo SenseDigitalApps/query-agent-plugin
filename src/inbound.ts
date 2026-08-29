@@ -28,6 +28,12 @@ import type {
 } from "./types.js";
 import { CHANNEL_ID } from "./types.js";
 import { kindForTool } from "./activity-policy.js";
+import {
+  effortInstruction,
+  effortRunOptions,
+  resolveEffortMode,
+  type EffortResolution,
+} from "./effort-policy.js";
 import { getQueryRuntime } from "./runtime.js";
 
 export type QueryAgentResult = {
@@ -45,6 +51,12 @@ export type QueryDispatchDiagnostics = {
   noVisibleReplyFallbackEligible?: boolean;
   beforeAgentRunBlocked?: boolean;
   recoveredFromEmptyReply?: boolean;
+  toolCalls?: number;
+  contextChars?: number;
+  effortModeConfigured?: string;
+  effortModeEffective?: string;
+  effortEscalated?: boolean;
+  effortEscalationReason?: string;
 };
 
 function boundedText(value: unknown, maxLength = 80): string | undefined {
@@ -73,6 +85,25 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
   if (event.stream === "tool") {
     const finished = phase === "end" || phase === "done" || phase === "complete";
     return { kind: kindForTool(toolName, finished), toolName, progress };
+  }
+  if (event.stream === "item") {
+    const itemKind = boundedText(event.data.kind, 32)?.toLowerCase();
+    if (itemKind === "preamble" || itemKind === "commentary") {
+      const commentary = boundedText(
+        event.data.progressText ?? event.data.progress_text ?? event.data.summary,
+        240,
+      );
+      return commentary
+        ? { kind: "reasoning_summary", label: commentary }
+        : undefined;
+    }
+  }
+  if (event.stream === "plan") {
+    const summary = boundedText(
+      event.data.explanation ?? event.data.title ?? event.data.summary,
+      240,
+    );
+    return summary ? { kind: "reasoning_summary", label: summary } : undefined;
   }
   if (event.stream === "compaction") {
     return { kind: "context" };
@@ -563,6 +594,8 @@ export async function dispatchQueryMessage(params: {
   recoveryAttempt?: boolean;
   /** Permite ejecutar la recuperacion sin repetir herramientas ni acciones. */
   toolsAllow?: string[];
+  /** Pre-resolved by the socket so activity and execution use one decision. */
+  effort?: EffortResolution;
 }): Promise<QueryAgentResult> {
   const core = getQueryRuntime();
   const { cfg, account, threadId } = params;
@@ -584,6 +617,15 @@ export async function dispatchQueryMessage(params: {
   });
   const rawBody = rawBodyForAgent(event);
   const body = bodyForAgent(event);
+  const effort = params.effort ?? resolveEffortMode({
+    configuredMode: event.data?.effort_mode ?? account.effortMode,
+    content: event.content,
+    actionType: typeof event.data?.action_type === "string" ? event.data.action_type : undefined,
+    riskSignals: Array.isArray(event.data?.risk_signals)
+      ? event.data.risk_signals.filter((value): value is string => typeof value === "string")
+      : undefined,
+  });
+  const policy = effortInstruction(effort.effectiveMode);
   // Query solo entrega un segundo turno mientras hay uno activo cuando la
   // persona pulsa "Intervenir ahora". La directiva hace explicita esa decision
   // aun si la configuracion global de OpenClaw usa otro modo de cola. Los
@@ -591,8 +633,8 @@ export async function dispatchQueryMessage(params: {
   // debe tratarlos como el turno base, sin recordar ``steer`` en la sesion.
   const agentBody =
     event.data?.delivery_mode === "intervene"
-      ? `/queue steer\n${body}`
-      : `${body}\n\n[Entrega requerida de Query: este mensaje viene de una persona que espera una respuesta en el chat. Termina siempre con texto visible o un archivo visible para esa persona, incluso si usaste herramientas. No termines con NO_REPLY ni dejes el turno solo en llamadas de herramientas.]`;
+      ? `/queue steer\n${body}\n\n${policy}`
+      : `${body}\n\n${policy}\n[Entrega requerida de Query: este mensaje viene de una persona que espera una respuesta en el chat. Termina siempre con texto visible o un archivo visible para esa persona, incluso si usaste herramientas. No termines con NO_REPLY ni dejes el turno solo en llamadas de herramientas.]`;
   const ctxPayload = buildChannelInboundEventContext({
     channel: CHANNEL_ID,
     accountId: route.accountId,
@@ -635,6 +677,8 @@ export async function dispatchQueryMessage(params: {
 
   let runId: string | undefined;
   let lastAssistantText = "";
+  let toolCalls = 0;
+  const seenToolStarts = new Set<string>();
   const unsubscribe = onAgentEvent((agentEvent) => {
     if (agentEvent.sessionKey !== route.sessionKey) return;
     if (agentEvent.agentId && agentEvent.agentId !== route.agentId) return;
@@ -644,6 +688,15 @@ export async function dispatchQueryMessage(params: {
       runId = agentEvent.runId;
     }
     if (agentEvent.runId !== runId) return;
+    if (agentEvent.stream === "tool") {
+      const phase = boundedText(agentEvent.data.phase ?? agentEvent.data.state, 32)?.toLowerCase();
+      const callId = boundedText(agentEvent.data.toolCallId ?? agentEvent.data.tool_call_id, 100);
+      const signature = callId ?? `${boundedText(agentEvent.data.toolName ?? agentEvent.data.tool, 64) ?? "tool"}:${toolCalls}`;
+      if ((phase === "start" || phase === "begin") && !seenToolStarts.has(signature)) {
+        seenToolStarts.add(signature);
+        toolCalls += 1;
+      }
+    }
     if (agentEvent.stream === "assistant") {
       const streamedText =
         typeof agentEvent.data.text === "string" ? agentEvent.data.text.trim() : "";
@@ -682,6 +735,36 @@ export async function dispatchQueryMessage(params: {
       replyPipeline: {},
       replyOptions: {
         sourceReplyDeliveryMode: "automatic",
+        ...effortRunOptions(effort.effectiveMode),
+        ...(effort.reason === "simple_intent" ? { disableTools: true } : {}),
+        // OpenClaw separa el comentario publico del reasoning privado. Solo el
+        // primero se usa como bitacora visible del turno.
+        commentaryProgressEnabled: true,
+        onItemEvent: (item) => {
+          const itemKind = boundedText(item.kind, 32)?.toLowerCase();
+          if (itemKind !== "preamble" && itemKind !== "commentary") return;
+          const commentary = boundedText(
+            item.progressText ?? item.summary ?? item.title,
+            240,
+          );
+          if (commentary) {
+            params.onActivity?.({
+              kind: "reasoning_summary",
+              label: commentary,
+              runId,
+            });
+          }
+        },
+        onPlanUpdate: (plan) => {
+          const summary = boundedText(plan.explanation ?? plan.title, 240);
+          if (summary) {
+            params.onActivity?.({
+              kind: "reasoning_summary",
+              label: summary,
+              runId,
+            });
+          }
+        },
       },
       toolsAllow: params.toolsAllow,
       record: {
@@ -694,7 +777,14 @@ export async function dispatchQueryMessage(params: {
 
     const rawDispatchResult =
       turnResult && turnResult.dispatched ? turnResult.dispatchResult : undefined;
-    const diagnostics: QueryDispatchDiagnostics | undefined = rawDispatchResult
+    const diagnostics: QueryDispatchDiagnostics = {
+      toolCalls,
+      contextChars: agentBody.length,
+      effortModeConfigured: effort.configuredMode,
+      effortModeEffective: effort.effectiveMode,
+      effortEscalated: effort.escalated,
+      effortEscalationReason: effort.reason,
+      ...(rawDispatchResult
       ? {
           queuedFinal: rawDispatchResult.queuedFinal,
           counts: rawDispatchResult.counts,
@@ -705,7 +795,8 @@ export async function dispatchQueryMessage(params: {
             rawDispatchResult.noVisibleReplyFallbackEligible,
           beforeAgentRunBlocked: rawDispatchResult.beforeAgentRunBlocked,
         }
-      : undefined;
+      : {}),
+    };
     const deliveredText = texts.join("\n\n").trim();
     const streamedFallback =
       lastAssistantText && !isSilentReplyText(lastAssistantText)
@@ -738,6 +829,11 @@ export async function dispatchQueryMessage(params: {
         },
         recoveryAttempt: true,
         toolsAllow: [],
+        effort: resolveEffortMode({
+          configuredMode: effort.effectiveMode,
+          content: event.content,
+          riskSignals: [...effort.signals, "tool_failure"],
+        }),
       });
       return {
         ...recovery,

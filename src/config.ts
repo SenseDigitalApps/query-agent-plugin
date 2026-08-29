@@ -1,4 +1,5 @@
 import { resolveActivityMode } from "./activity-policy.js";
+import { resolveConfiguredEffortMode } from "./effort-policy.js";
 import {
   DEFAULT_ACCOUNT_ID,
   type QueryAccountConfig,
@@ -60,6 +61,7 @@ export function resolveQueryAccount(
     ttsLang: accountSection?.ttsLang?.trim() || undefined,
     ttsRate: accountSection?.ttsRate?.trim() || undefined,
     activityMode: resolveActivityMode(accountSection?.activityMode),
+    effortMode: resolveConfiguredEffortMode(accountSection?.effortMode),
   };
 }
 
@@ -92,6 +94,7 @@ function resolveQueryAccountSection(
       responseTimeoutMs: section?.responseTimeoutMs,
       stateFile: section?.stateFile,
       activityMode: section?.activityMode,
+      effortMode: section?.effortMode,
       ...account,
     };
   }
@@ -104,5 +107,6 @@ export function inspectQueryAccount(account: ResolvedQueryAccount) {
     configured: account.configured,
     tokenStatus: account.token ? ("available" as const) : ("missing" as const),
     activityMode: account.activityMode,
+    effortMode: account.effortMode,
   };
 }

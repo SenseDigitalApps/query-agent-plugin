@@ -35,6 +35,7 @@ export type QueryActivityVisibility = "public" | "admin" | "internal";
 export type QueryActivityKind =
   | "received"
   | "routing"
+  | "reasoning_summary"
   | "module_detected"
   | "searching"
   | "tool_started"
@@ -74,6 +75,12 @@ const ACTIVITY_CATALOG: Record<QueryActivityKind, ActivityTemplate> = {
     stage: "routing",
     visibility: "public",
     progress: 5,
+  },
+  reasoning_summary: {
+    label: "Revisando el enfoque",
+    stage: "reasoning",
+    visibility: "public",
+    important: true,
   },
   module_detected: {
     label: "Módulo detectado",
@@ -335,7 +342,10 @@ function normalize(
 ): NormalizedActivity {
   const template = ACTIVITY_CATALOG[candidate.kind] ?? ACTIVITY_CATALOG.working;
   const maxDetail = mode === "smart" || mode === "lite" ? MAX_PUBLIC_DETAIL : MAX_ADMIN_DETAIL;
-  const overrideLabel = sanitizeActivityDetail(candidate.label, 80);
+  const overrideLabel = sanitizeActivityDetail(
+    candidate.label,
+    candidate.kind === "reasoning_summary" ? 180 : 80,
+  );
   const detail = template.detailAllowed
     ? sanitizeActivityDetail(candidate.detail, maxDetail)
     : undefined;
@@ -378,7 +388,10 @@ export function createActivityGate(options: ActivityGateOptions): ActivityGate {
   // defecto es preferible a que la telemetria tumbe el turno que decoraba.
   const mode = parseActivityMode(options.mode) ?? DEFAULT_ACTIVITY_MODE;
   const audience = MODE_AUDIENCE[mode];
-  const quietMs = mode === "smart" ? (options.quietMs ?? DEFAULT_QUIET_MS) : 0;
+  const quietMs =
+    mode === "smart" || mode === "lite"
+      ? (options.quietMs ?? DEFAULT_QUIET_MS)
+      : 0;
   const throttleMs =
     options.throttleMs ??
     (mode === "verbose" || mode === "debug-internal"
@@ -448,20 +461,32 @@ export function createActivityGate(options: ActivityGateOptions): ActivityGate {
       // sale siempre y sin esperar, que es justo lo que se le pide.
       if (activity.kind === "received") return accept(activity, now);
 
-      if (mode === "lite") return drop("mode_lite");
+      // Lite sigue silencioso en turnos rapidos, pero si el propio agente
+      // publico una explicacion concreta y la espera ya se nota, esa frase es
+      // mas util que mantener un spinner mudo.
+      if (mode === "lite" && activity.kind !== "reasoning_summary") {
+        return drop("mode_lite");
+      }
 
       if (signature(activity) === lastSignature) return drop("duplicate");
 
       // Un turno que termina antes del silencio inicial no llega a mostrar
       // cronologia: la persona ve la respuesta, no el andamio.
       if (now - options.startedAt < quietMs) {
-        held = activity;
+        // El comentario escrito por el agente explica el porqué del siguiente
+        // tool call. No dejar que el evento técnico que ocurre milisegundos
+        // después lo reemplace antes de que la persona alcance a verlo.
+        if (held?.kind !== "reasoning_summary" || activity.kind === "reasoning_summary") {
+          held = activity;
+        }
         return drop("quiet_window");
       }
 
       const important = ACTIVITY_CATALOG[activity.kind]?.important ?? false;
       if (!important && lastEmitAt > 0 && now - lastEmitAt < throttleMs) {
-        held = activity;
+        if (held?.kind !== "reasoning_summary" || activity.kind === "reasoning_summary") {
+          held = activity;
+        }
         return drop("throttled");
       }
 

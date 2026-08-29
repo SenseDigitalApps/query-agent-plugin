@@ -2,6 +2,7 @@ import type {
   QueryActivityKind,
   QueryActivityVisibility,
 } from "./activity-policy.js";
+import type { EffectiveQueryEffortMode, EffortEscalationReason, QueryEffortMode } from "./effort-policy.js";
 import type {
   CachedResponse,
   QueryActivityState,
@@ -89,6 +90,12 @@ export function activityEvent(params: {
    * evento sin marcar viaja como publico y debe ser seguro por si mismo.
    */
   visibility?: QueryActivityVisibility;
+  effortModeConfigured?: QueryEffortMode;
+  effortModeEffective?: EffectiveQueryEffortMode;
+  effortEscalated?: boolean;
+  effortReason?: EffortEscalationReason;
+  toolCalls?: number;
+  contextChars?: number;
 }): QueryOutboundEvent {
   const {
     threadId,
@@ -96,6 +103,12 @@ export function activityEvent(params: {
     toolName,
     runId,
     elapsedMs,
+    effortModeConfigured,
+    effortModeEffective,
+    effortEscalated,
+    effortReason,
+    toolCalls,
+    contextChars,
     ...data
   } = params;
   return {
@@ -110,6 +123,12 @@ export function activityEvent(params: {
         tool_name: toolName,
         run_id: runId,
         elapsed_ms: elapsedMs,
+        effort_mode_configured: effortModeConfigured,
+        effort_mode_effective: effortModeEffective,
+        effort_escalated: effortEscalated,
+        effort_escalation_reason: effortReason,
+        tool_calls: toolCalls,
+        context_chars: contextChars,
       }).filter(([, value]) => value !== undefined),
     ),
   };

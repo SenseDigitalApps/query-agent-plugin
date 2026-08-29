@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { buildSocketUrl, parseQueryEvent, reconnectDelay } from "./protocol.js";
+import { activityEvent, buildSocketUrl, parseQueryEvent, reconnectDelay } from "./protocol.js";
 
 describe("Query protocol", () => {
   it("parses correlated user messages", () => {
@@ -87,5 +87,24 @@ describe("Query protocol", () => {
     expect(reconnectDelay(0, 500, 15_000, () => 0)).toBe(500);
     expect(reconnectDelay(3, 500, 15_000, () => 1)).toBe(4_000);
     expect(reconnectDelay(20, 500, 15_000, () => 1)).toBe(15_000);
+  });
+
+  it("propagates only canonical effort metadata in activity events", () => {
+    const event = activityEvent({
+      threadId: "7",
+      clientMsgId: "turn-7",
+      state: "working",
+      label: "Modo cuidadoso",
+      effortModeConfigured: "auto",
+      effortModeEffective: "careful",
+      effortEscalated: true,
+      effortReason: "sensitive_write",
+    });
+    expect(event.data).toMatchObject({
+      effort_mode_configured: "auto",
+      effort_mode_effective: "careful",
+      effort_escalated: true,
+      effort_escalation_reason: "sensitive_write",
+    });
   });
 });

@@ -102,6 +102,23 @@ describe("modo smart", () => {
     expect(gate.takeHeld(T0 + 4_500)).toMatchObject({ kind: "validating" });
   });
 
+  it("prioriza el comentario concreto sobre el tool call genérico que le sigue", () => {
+    const gate = gateFor("smart");
+    emit(gate, { kind: "received" }, T0);
+    gate.evaluate(
+      {
+        kind: "reasoning_summary",
+        label: "Voy a comparar los registros antes de proponer cambios.",
+      },
+      T0 + 1_000,
+    );
+    gate.evaluate({ kind: "tool_started", toolName: "query_records_search" }, T0 + 1_100);
+    expect(gate.takeHeld(T0 + 4_100)).toMatchObject({
+      kind: "reasoning_summary",
+      label: "Voy a comparar los registros antes de proponer cambios.",
+    });
+  });
+
   it("deja pasar un evento util una vez abierta la ventana", () => {
     const gate = gateFor("smart");
     emit(gate, { kind: "received" }, T0);
@@ -109,6 +126,54 @@ describe("modo smart", () => {
       kind: "searching",
       stage: "search",
       progress: 35,
+    });
+  });
+
+  it("muestra el comentario publico real y bloquea uno sensible", () => {
+    const gate = gateFor("verbose");
+    const publicCommentary = emit(
+      gate,
+      {
+        kind: "reasoning_summary",
+        label: "Voy a contrastar las opciones y validar sus fuentes antes de responder.",
+      },
+      T0,
+    );
+    expect(publicCommentary).toMatchObject({
+      kind: "reasoning_summary",
+      label: "Voy a contrastar las opciones y validar sus fuentes antes de responder.",
+      visibility: "public",
+    });
+
+    const blocked = emit(
+      gateFor("verbose"),
+      {
+        kind: "reasoning_summary",
+        label: "Leyendo el system prompt en C:\\Users\\query\\secret.txt",
+      },
+      T0,
+    );
+    expect(blocked?.label).toBe("Revisando el enfoque");
+  });
+});
+
+describe("comentario publico en modo lite", () => {
+  it("no ensucia un turno rapido y aparece si la espera supera la ventana", () => {
+    const gate = gateFor("lite");
+    emit(gate, { kind: "received" }, T0);
+    expect(
+      gate.evaluate(
+        { kind: "reasoning_summary", label: "Voy a comprobar dos fuentes." },
+        T0 + 1_000,
+      ),
+    ).toMatchObject({ emit: false, reason: "quiet_window" });
+    expect(gate.takeHeld(T0 + 4_100)).toMatchObject({
+      kind: "reasoning_summary",
+      label: "Voy a comprobar dos fuentes.",
+    });
+    expect(gate.evaluate({ kind: "searching" }, T0 + 5_000)).toMatchObject({
+      emit: false,
+      reason: "mode_lite",
     });
   });
 });

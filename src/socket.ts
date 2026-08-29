@@ -13,6 +13,10 @@ import {
   type NormalizedActivity,
 } from "./activity-policy.js";
 import {
+  activityModeForEffort,
+  resolveEffortMode,
+} from "./effort-policy.js";
+import {
   activityEvent,
   buildSocketUrl,
   cachedResponseEvent,
@@ -586,6 +590,14 @@ export class QuerySocketMonitor {
     }
 
     this.inFlight.add(turnKey);
+    const effort = resolveEffortMode({
+      configuredMode: event.data?.effort_mode ?? this.options.account.effortMode,
+      content: event.content,
+      actionType: typeof event.data?.action_type === "string" ? event.data.action_type : undefined,
+      riskSignals: Array.isArray(event.data?.risk_signals)
+        ? event.data.risk_signals.filter((value): value is string => typeof value === "string")
+        : undefined,
+    });
     this.options.log?.info?.(
       `[${this.options.account.accountId}] ${event.client_msg_id}: query_received attachments=${event.data?.attachments?.length ?? 0}`,
     );
@@ -593,7 +605,7 @@ export class QuerySocketMonitor {
     // traduce el evento tecnico a una plantilla fija, descarta lo repetido y
     // calla mientras el turno todavia pueda resolverse rapido.
     const gate = createActivityGate({
-      mode: this.options.account.activityMode,
+      mode: activityModeForEffort(this.options.account.activityMode, effort.effectiveMode),
       startedAt: receivedAt,
     });
     let firstVisibleAt: number | undefined;
@@ -617,6 +629,10 @@ export class QuerySocketMonitor {
             heartbeat: activity.heartbeat || undefined,
             visibility: activity.visibility,
             elapsedMs: Date.now() - receivedAt,
+            effortModeConfigured: effort.configuredMode,
+            effortModeEffective: effort.effectiveMode,
+            effortEscalated: effort.escalated,
+            effortReason: effort.reason,
           }),
         );
       } catch (error) {
@@ -672,12 +688,22 @@ export class QuerySocketMonitor {
           onActivity: (activity) =>
             emitTurnActivity({ ...activity, kind: activity.kind ?? "working" }),
           log: this.options.log,
+          effort,
         }),
         this.options.account.responseTimeoutMs,
       );
       const agentDoneAt = Date.now();
+      const turnMetrics = {
+        effort_mode_configured: effort.configuredMode,
+        effort_mode_effective: effort.effectiveMode,
+        effort_escalated: effort.escalated,
+        effort_escalation_reason: effort.reason,
+        tool_calls: result.diagnostics?.toolCalls ?? 0,
+        context_chars: result.diagnostics?.contextChars ?? event.content.length,
+        elapsed_ms: agentDoneAt - receivedAt,
+      };
       this.options.log?.info?.(
-        `[${this.options.account.accountId}] ${event.client_msg_id}: query_agent_done agent_ms=${agentDoneAt - dispatchAt} total_ms=${agentDoneAt - receivedAt} diagnostics=${JSON.stringify(result.diagnostics ?? {})}`,
+        `[${this.options.account.accountId}] ${event.client_msg_id}: query_agent_done agent_ms=${agentDoneAt - dispatchAt} total_ms=${agentDoneAt - receivedAt} effort_mode_configured=${effort.configuredMode} effort_mode_effective=${effort.effectiveMode} effort_escalated=${effort.escalated} effort_escalation_reason=${effort.reason} diagnostics=${JSON.stringify(result.diagnostics ?? {})}`,
       );
       let mediaAttachments = await this.buildResponseAttachments(
         event,
@@ -718,7 +744,7 @@ export class QuerySocketMonitor {
             clientMsgId: event.client_msg_id,
             type: "turn.adopted",
             content: "",
-            data: { adopted: true, delivery_mode: "intervene" },
+            data: { adopted: true, delivery_mode: "intervene", ...turnMetrics },
             completedAt: Date.now(),
           };
           await this.store.set(response);
@@ -743,7 +769,7 @@ export class QuerySocketMonitor {
           content: "El agente terminó sin devolver contenido visible.",
           data: {
             detail: "empty_agent_response",
-            diagnostics: result.diagnostics ?? {},
+            ...turnMetrics,
           },
           completedAt: Date.now(),
         };
@@ -766,6 +792,7 @@ export class QuerySocketMonitor {
         data: {
           attachments: mediaAttachments,
           ...(responseText ? { caption: responseText, text: responseText } : {}),
+          ...turnMetrics,
         },
         completedAt: Date.now(),
       };
@@ -785,7 +812,16 @@ export class QuerySocketMonitor {
         clientMsgId: event.client_msg_id,
         type: "error",
         content: "El agente no pudo procesar este mensaje.",
-        data: { detail: error instanceof Error ? error.message : String(error) },
+        data: {
+          detail: "agent_processing_failed",
+          effort_mode_configured: effort.configuredMode,
+          effort_mode_effective: effort.effectiveMode,
+          effort_escalated: effort.escalated,
+          effort_escalation_reason: effort.reason,
+          tool_calls: 0,
+          context_chars: event.content.length,
+          elapsed_ms: Date.now() - receivedAt,
+        },
         completedAt: Date.now(),
       };
       await this.store.set(response);

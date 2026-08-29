@@ -56,6 +56,7 @@ También se puede separar el secreto para que no quede dentro de la URL:
       reconnectMinMs: 500,
       reconnectMaxMs: 15000,
       activityMode: "smart",
+      effortMode: "auto",
     },
   },
 }
@@ -279,8 +280,8 @@ reconecta con espera exponencial de 0.5 a 15 segundos. Además envía un ping ca
 - `responseTimeoutMs` vale `0` de forma predeterminada (sin timeout artificial).
 - El plugin envía estados operativos seguros y un heartbeat de actividad cada
   20 segundos. Puede ajustarse con `QUERY_ACTIVITY_HEARTBEAT_MS` (mínimo 5000).
-- No se exponen pensamientos ni razonamiento interno: solo etapas genéricas,
-  herramientas utilizadas y progreso disponible.
+- No se expone el stream privado de pensamiento. Sí se transporta el comentario
+  público que el propio agente escribe antes de una tarea o herramienta.
 
 ### Actividad visible
 
@@ -291,7 +292,7 @@ lugar, `smart`.
 | Modo | Qué muestra |
 | --- | --- |
 | `off` | Nada. El latido sigue saliendo marcado como interno para que Query sepa que el turno vive. |
-| `lite` | Solo el acuse de recibo. |
+| `lite` | Acuse de recibo; si pasan 4 s, también el último comentario público concreto del agente. |
 | `smart` | Acuse inmediato y, si el turno pasa de 4 s, los pasos útiles con un máximo de uno cada 3,5 s. |
 | `verbose` | Sin espera inicial, throttle de 1,5 s y además los pasos de mantenimiento marcados `admin`. |
 | `debug-internal` | Todo, incluido lo marcado `internal`. Solo para el panel interno. |
@@ -300,10 +301,30 @@ Cada evento viaja con `kind` (paso canónico) y `visibility`
 (`public` / `admin` / `internal`). Query filtra por `visibility` antes de
 reenviar al chat, así que un paso `admin` llega al panel pero no a la persona.
 
-Las etiquetas salen de un catálogo fijo en `src/activity-policy.ts`: no hay una
-segunda llamada al modelo para narrar el progreso. Lo que aporta el agente
-(nombre de herramienta, detalle corto) pasa antes por un saneador que descarta
-credenciales, rutas del servidor, trazas, prompts y payloads crudos.
+Los estados operativos salen de un catálogo fijo en `src/activity-policy.ts` y
+no requieren una segunda llamada al modelo. El evento público
+`commentary/preamble` conserva la frase real del agente —por ejemplo, qué va a
+contrastar o validar—, pero pasa por el mismo saneador que descarta
+credenciales, rutas del servidor, trazas, prompts y payloads crudos. Los eventos
+privados `thinking/reasoning` nunca se reenvían.
+
+### Esfuerzo por turno
+
+`channels.query.effortMode` (o `QUERY_AGENT_EFFORT_MODE`) acepta `fast`,
+`normal`, `careful`, `exhaustive` y `auto`. Query Core puede enviar un override
+por agente en `data.effort_mode`; ese valor manda para el turno actual y evita
+tener que reiniciar el gateway al editar un agente.
+
+`auto` es el valor predeterminado. El router es determinista y no llama a otro
+LLM: saludos y preguntas simples parten en `fast`, una consulta ordinaria en
+`normal`, escrituras/finanzas/comunicaciones/configuración suben como mínimo a
+`careful`, y auditorías, cierres, migraciones o producción suben a
+`exhaustive`. Pedir "hazlo rápido" nunca reduce ese piso de seguridad.
+
+Cada actividad incluye solamente enums saneados:
+`effort_mode_configured`, `effort_mode_effective`, `effort_escalated` y
+`effort_escalation_reason`. Los logs de fin de turno agregan esos campos,
+latencia total, cantidad de herramientas y tamaño aproximado del contexto.
 
 `QUERY_TOOLS_CACHE_TTL_MS` (60000 por omisión, `0` desactiva) controla cuánto
 se reutiliza la metadata de módulos entre llamadas de una misma credencial.

@@ -4,6 +4,40 @@ import { listQueryAccountIds, resolveQueryAccount } from "./config.js";
 afterEach(() => {
   delete process.env.QUERY_OPENCLAW_TOKEN;
   delete process.env.QUERY_AGENT_ACTIVITY_MODE;
+  delete process.env.QUERY_AGENT_EFFORT_MODE;
+});
+
+describe("modo de esfuerzo de la cuenta", () => {
+  it("usa auto por defecto y permite override por cuenta", () => {
+    const cfg = {
+      channels: {
+        query: {
+          url: "wss://query.test/ws/?token=t",
+          effortMode: "normal",
+          accounts: {
+            auditoria: { url: "wss://query.test/ws/?token=t", effortMode: "exhaustive" },
+            ventas: { url: "wss://query.test/ws/?token=t" },
+          },
+        },
+      },
+    } as never;
+    expect(resolveQueryAccount(cfg, "auditoria").effortMode).toBe("exhaustive");
+    expect(resolveQueryAccount(cfg, "ventas").effortMode).toBe("normal");
+    expect(
+      resolveQueryAccount({
+        channels: { query: { url: "wss://query.test/ws/?token=t" } },
+      } as never).effortMode,
+    ).toBe("auto");
+  });
+
+  it("uses the environment only when config is absent or invalid", () => {
+    process.env.QUERY_AGENT_EFFORT_MODE = "careful";
+    expect(
+      resolveQueryAccount({
+        channels: { query: { url: "wss://query.test/ws/?token=t", effortMode: "unknown" } },
+      } as never).effortMode,
+    ).toBe("careful");
+  });
 });
 
 describe("Query account configuration", () => {
