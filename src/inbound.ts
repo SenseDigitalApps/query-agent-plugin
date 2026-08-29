@@ -34,6 +34,7 @@ import {
   resolveEffortMode,
   type EffortResolution,
 } from "./effort-policy.js";
+import { redactUnsafeArtifactReferences } from "./private-links.js";
 import { getQueryRuntime } from "./runtime.js";
 
 export type QueryAgentResult = {
@@ -631,6 +632,8 @@ export async function dispatchQueryMessage(params: {
   threadId: string;
   onProgress?: (detail: string) => void;
   onActivity?: (activity: QueryAgentActivity) => void;
+  /** Borrador publico acumulado; nunca incluye el reasoning privado. */
+  onPartialReply?: (text: string) => void;
   log?: QueryLog;
   /** Interno: una recuperacion nunca vuelve a abrir otra recuperacion. */
   recoveryAttempt?: boolean;
@@ -720,6 +723,7 @@ export async function dispatchQueryMessage(params: {
 
   let runId: string | undefined;
   let lastAssistantText = "";
+  let lastPartialReply = "";
   let toolCalls = 0;
   const seenToolStarts = new Set<string>();
   const unsubscribe = onAgentEvent((agentEvent) => {
@@ -789,6 +793,14 @@ export async function dispatchQueryMessage(params: {
         suppressDefaultToolProgressMessages: true,
         allowToolLifecycleWhenProgressHidden: true,
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        onPartialReply: (payload) => {
+          const publicDraft = redactUnsafeArtifactReferences(
+            typeof payload.text === "string" ? payload.text : "",
+          ).trim();
+          if (!publicDraft || publicDraft === lastPartialReply) return;
+          lastPartialReply = publicDraft;
+          params.onPartialReply?.(publicDraft);
+        },
         onToolStart: (tool) => {
           const toolName = boundedText(tool.name, 64);
           params.onActivity?.({

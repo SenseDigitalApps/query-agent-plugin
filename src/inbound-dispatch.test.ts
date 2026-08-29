@@ -20,7 +20,11 @@ const account: ResolvedQueryAccount = {
 describe("Query inbound dispatch recovery", () => {
   it("recovers assistant text when OpenClaw omits the final delivery callback", async () => {
     const onActivity = vi.fn();
+    const onPartialReply = vi.fn();
     const dispatchReply = vi.fn(async (params: any) => {
+      params.replyOptions.onPartialReply?.({
+        text: "Estoy redactando la respuesta con el dato confirmado.",
+      });
       params.replyOptions.onItemEvent?.({
         kind: "preamble",
         progressText: "Voy a revisar los leads y contrastar sus estados.",
@@ -83,6 +87,7 @@ describe("Query inbound dispatch recovery", () => {
         data: { attachments: [], effort_mode: "fast" },
       },
       onActivity,
+      onPartialReply,
     });
 
     expect(dispatchReply).toHaveBeenCalledTimes(1);
@@ -95,6 +100,7 @@ describe("Query inbound dispatch recovery", () => {
       suppressDefaultToolProgressMessages: true,
       allowToolLifecycleWhenProgressHidden: true,
       allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+      onPartialReply: expect.any(Function),
       onToolStart: expect.any(Function),
     });
     expect(dispatchReply.mock.calls[0][0].replyOptions.onReasoningStream).toBeUndefined();
@@ -109,6 +115,9 @@ describe("Query inbound dispatch recovery", () => {
         kind: "searching",
         label: "Estoy buscando los registros relacionados con tu solicitud.",
       }),
+    );
+    expect(onPartialReply).toHaveBeenCalledWith(
+      "Estoy redactando la respuesta con el dato confirmado.",
     );
     expect(result.text).toBe("Respuesta que solo aparecio en el stream.");
   });

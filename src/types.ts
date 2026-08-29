@@ -269,6 +269,7 @@ export type QueryAgentActivity = {
 export type QueryOutboundEvent = {
   type:
     | "activity"
+    | "message.delta"
     | "message"
     | "turn.adopted"
     | "error"

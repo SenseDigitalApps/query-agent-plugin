@@ -69,6 +69,7 @@ describe("QuerySocketMonitor", () => {
           toolName?: string;
           progress?: number;
         }) => void;
+        onPartialReply?: (text: string) => void;
       }) => {
         await new Promise((resolve) => setTimeout(resolve, 10));
         params.onActivity?.({
@@ -77,6 +78,7 @@ describe("QuerySocketMonitor", () => {
           toolName: "inventario",
           progress: 40,
         });
+        params.onPartialReply?.("Estoy armando la respuesta.");
         await new Promise((resolve) => setTimeout(resolve, 10));
         return { text: "¡Hola!", mediaUrls: [] };
       },
@@ -131,8 +133,14 @@ describe("QuerySocketMonitor", () => {
       data: { state: "working", stage: "received" },
     });
     // El turno se resuelve en milisegundos, asi que el paso de herramienta se
-    // queda dentro del silencio inicial: despues del acuse llega la respuesta
-    // y nada mas. Un chat rapido no se llena de cronologia.
+    // queda dentro del silencio inicial. El borrador publico si viaja como un
+    // delta reemplazable antes de la respuesta terminal.
+    await expect(receive(socket)).resolves.toMatchObject({
+      type: "message.delta",
+      content: "Estoy armando la respuesta.",
+      client_msg_id: "msg-7",
+      data: { replaceable: true, sequence: 1 },
+    });
     await expect(receive(socket)).resolves.toMatchObject({
       type: "message",
       content: "¡Hola!",

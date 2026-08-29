@@ -21,6 +21,7 @@ import {
   activityEvent,
   buildSocketUrl,
   cachedResponseEvent,
+  messageDeltaEvent,
   parseQueryEvent,
   reconnectDelay,
 } from "./protocol.js";
@@ -709,6 +710,33 @@ export class QuerySocketMonitor {
     }, QUERY_ACTIVITY_HEARTBEAT_MS);
     activityHeartbeat.unref?.();
 
+    // OpenClaw entrega el borrador completo en cada callback. Se agrupa a una
+    // frecuencia apta para UI para no convertir cada token en un frame de WS.
+    let latestPartial = "";
+    let sentPartial = "";
+    let partialSequence = 0;
+    let partialTimer: ReturnType<typeof setTimeout> | undefined;
+    const flushPartial = () => {
+      partialTimer = undefined;
+      if (!latestPartial || latestPartial === sentPartial) return;
+      sentPartial = latestPartial;
+      partialSequence += 1;
+      this.send(
+        messageDeltaEvent({
+          threadId,
+          clientMsgId: event.client_msg_id,
+          content: sentPartial,
+          sequence: partialSequence,
+        }),
+      );
+    };
+    const queuePartial = (text: string) => {
+      latestPartial = text;
+      if (partialTimer) return;
+      partialTimer = setTimeout(flushPartial, 160);
+      partialTimer.unref?.();
+    };
+
     try {
       const dispatchAt = Date.now();
       this.options.log?.info?.(
@@ -729,11 +757,14 @@ export class QuerySocketMonitor {
           // el paso generico en vez de perderse.
           onActivity: (activity) =>
             emitTurnActivity({ ...activity, kind: activity.kind ?? "working" }),
+          onPartialReply: queuePartial,
           log: this.options.log,
           effort,
         }),
         this.options.account.responseTimeoutMs,
       );
+      if (partialTimer) clearTimeout(partialTimer);
+      flushPartial();
       const agentDoneAt = Date.now();
       const turnMetrics = {
         effort_mode_configured: effort.configuredMode,
@@ -874,6 +905,7 @@ export class QuerySocketMonitor {
         `[${this.options.account.accountId}] ${event.client_msg_id}: query_error_terminal_sent total_ms=${Date.now() - receivedAt}`,
       );
     } finally {
+      if (partialTimer) clearTimeout(partialTimer);
       clearInterval(activityHeartbeat);
       clearInterval(activityRelease);
       const stats = gate.stats();

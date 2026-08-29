@@ -134,6 +134,27 @@ export function activityEvent(params: {
   };
 }
 
+export function messageDeltaEvent(params: {
+  threadId: string;
+  clientMsgId: string;
+  content: string;
+  sequence: number;
+}): QueryOutboundEvent {
+  return {
+    type: "message.delta",
+    role: "assistant",
+    content: params.content,
+    client_msg_id: params.clientMsgId,
+    thread_id: params.threadId,
+    data: {
+      state: "working",
+      visibility: "public",
+      replaceable: true,
+      sequence: params.sequence,
+    },
+  };
+}
+
 export function cachedResponseEvent(response: CachedResponse): QueryOutboundEvent {
   return {
     type: response.type,

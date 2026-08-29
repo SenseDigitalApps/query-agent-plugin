@@ -1,5 +1,11 @@
 import { describe, expect, it } from "vitest";
-import { activityEvent, buildSocketUrl, parseQueryEvent, reconnectDelay } from "./protocol.js";
+import {
+  activityEvent,
+  buildSocketUrl,
+  messageDeltaEvent,
+  parseQueryEvent,
+  reconnectDelay,
+} from "./protocol.js";
 
 describe("Query protocol", () => {
   it("parses correlated user messages", () => {
@@ -105,6 +111,24 @@ describe("Query protocol", () => {
       effort_mode_effective: "careful",
       effort_escalated: true,
       effort_escalation_reason: "sensitive_write",
+    });
+  });
+
+  it("builds replaceable public message deltas", () => {
+    expect(
+      messageDeltaEvent({
+        threadId: "7",
+        clientMsgId: "turn-7",
+        content: "Respuesta en curso",
+        sequence: 2,
+      }),
+    ).toMatchObject({
+      type: "message.delta",
+      role: "assistant",
+      content: "Respuesta en curso",
+      client_msg_id: "turn-7",
+      thread_id: "7",
+      data: { visibility: "public", replaceable: true, sequence: 2 },
     });
   });
 });

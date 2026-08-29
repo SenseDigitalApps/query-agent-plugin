@@ -232,6 +232,24 @@ function privateArtifactLinkCandidates(text: string): string[] {
     .map((match) => match.token);
 }
 
+/**
+ * Proteccion sin I/O para borradores visibles mientras el agente aun escribe.
+ * La respuesta final pasa por `rewritePrivateArtifactLinks` y puede subir el
+ * archivo; el borrador solo evita filtrar una referencia privada entretanto.
+ */
+export function redactUnsafeArtifactReferences(text: string): string {
+  let redacted = text;
+  for (const token of privateArtifactLinkCandidates(text)) {
+    const suffix = token.match(TRAILING_URL_PUNCTUATION_RE)?.[0] ?? "";
+    const source = suffix ? token.slice(0, -suffix.length) : token;
+    if (!source) continue;
+    const unsafe = isLocalAbsolutePath(source) || shouldRewritePrivateArtifactUrl(source);
+    if (!unsafe) continue;
+    redacted = redacted.split(token).join(`[archivo pendiente de adjuntar]${suffix}`);
+  }
+  return redacted;
+}
+
 export async function rewritePrivateArtifactLinks(params: {
   text: string;
   upload: (path: string, sourceUrl: string) => Promise<QueryAttachment>;

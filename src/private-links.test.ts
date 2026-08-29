@@ -4,6 +4,7 @@ import { join } from "node:path";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   localArtifactPathForPrivateUrl,
+  redactUnsafeArtifactReferences,
   rewritePrivateArtifactLinks,
 } from "./private-links.js";
 
@@ -227,5 +228,21 @@ describe("rewritePrivateArtifactLinks", () => {
 
     expect(result.text).not.toContain(leakedUrl);
     expect(result.blockedUrls).toEqual([leakedUrl]);
+  });
+});
+
+describe("redactUnsafeArtifactReferences", () => {
+  it("protects streamed drafts without changing public URLs", () => {
+    const publicUrl = "https://query.test/media/reporte.pdf";
+    const draft = redactUnsafeArtifactReferences(
+      `Linux: /tmp/query/reporte.pdf Windows: C:\\workspace\\reporte.xlsx ` +
+        `Privado: http://127.0.0.1:8000/reporte.pdf Público: ${publicUrl}`,
+    );
+
+    expect(draft).not.toContain("/tmp/query/reporte.pdf");
+    expect(draft).not.toContain("C:\\workspace\\reporte.xlsx");
+    expect(draft).not.toContain("127.0.0.1");
+    expect(draft).toContain(publicUrl);
+    expect(draft).toContain("[archivo pendiente de adjuntar]");
   });
 });
