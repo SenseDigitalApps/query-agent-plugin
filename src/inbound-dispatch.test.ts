@@ -25,6 +25,7 @@ describe("Query inbound dispatch recovery", () => {
         kind: "preamble",
         progressText: "Voy a revisar los leads y contrastar sus estados.",
       });
+      params.replyOptions.onToolStart?.({ name: "query_records_search" });
       emitAgentEvent({
         runId: "run-streamed",
         stream: "lifecycle",
@@ -91,12 +92,22 @@ describe("Query inbound dispatch recovery", () => {
       fastModeOverride: true,
       bootstrapContextMode: "lightweight",
       commentaryProgressEnabled: true,
+      suppressDefaultToolProgressMessages: true,
+      allowToolLifecycleWhenProgressHidden: true,
+      allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+      onToolStart: expect.any(Function),
     });
     expect(dispatchReply.mock.calls[0][0].replyOptions.onReasoningStream).toBeUndefined();
     expect(onActivity).toHaveBeenCalledWith(
       expect.objectContaining({
         kind: "reasoning_summary",
         label: "Voy a revisar los leads y contrastar sus estados.",
+      }),
+    );
+    expect(onActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "searching",
+        label: "Estoy buscando los registros relacionados con tu solicitud.",
       }),
     );
     expect(result.text).toBe("Respuesta que solo aparecio en el stream.");

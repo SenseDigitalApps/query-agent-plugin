@@ -697,7 +697,11 @@ export class QuerySocketMonitor {
         {
           kind: "working",
           keepalive: true,
-          label: heartbeatActivityLabel(gate.lastKind(), now - receivedAt),
+          label: heartbeatActivityLabel(
+            gate.lastKind(),
+            now - receivedAt,
+            gate.lastLabel(),
+          ),
         },
         now,
       );

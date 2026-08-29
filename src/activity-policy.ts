@@ -323,7 +323,17 @@ export function activityForTool(
 export function heartbeatActivityLabel(
   kind: QueryActivityKind,
   elapsedMs: number,
+  lastConcreteLabel?: string,
 ): string {
+  // Un comentario público, un plan o una herramienta ya explicaron qué está
+  // ocurriendo. El latido solo mantiene vivo el turno: nunca debe reemplazar
+  // esa explicación por una frase genérica.
+  if (
+    lastConcreteLabel &&
+    !["received", "routing", "working"].includes(kind)
+  ) {
+    return lastConcreteLabel;
+  }
   const delayed = elapsedMs >= 60_000;
   if (kind === "searching" || kind === "module_detected" || kind === "tool_started") {
     return delayed
@@ -342,8 +352,8 @@ export function heartbeatActivityLabel(
     return "Ya tengo el resultado y estoy terminando de redactar la respuesta.";
   }
   return delayed
-    ? "Sigo con la revisión; está tomando más de lo habitual y aún no tengo un resultado final."
-    : "Sigo revisando tu solicitud para darte una respuesta útil y concreta.";
+    ? "Todavía no tengo un avance concreto para contarte y el trabajo está tomando más de lo habitual."
+    : "Todavía no tengo un avance concreto para contarte; sigo trabajando en ello.";
 }
 
 export type ActivityCandidate = {

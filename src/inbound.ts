@@ -73,6 +73,13 @@ function boundedText(value: unknown, maxLength = 80): string | undefined {
   return text ? text.slice(0, maxLength) : undefined;
 }
 
+function firstPersonProgress(value: unknown, maxLength = 240): string | undefined {
+  const text = boundedText(value, maxLength);
+  if (!text) return undefined;
+  const gerund = text.match(/^([A-ZÁÉÍÓÚÑ][a-záéíóúñ]+ando|[A-ZÁÉÍÓÚÑ][a-záéíóúñ]+iendo)\b(.*)$/u);
+  return gerund ? `Estoy ${gerund[1].toLowerCase()}${gerund[2]}` : text;
+}
+
 function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | undefined {
   const phase = boundedText(event.data.phase ?? event.data.state, 32)?.toLowerCase();
   const toolName = boundedText(
@@ -97,7 +104,7 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
   if (event.stream === "item") {
     const itemKind = boundedText(event.data.kind, 32)?.toLowerCase();
     if (itemKind === "preamble" || itemKind === "commentary") {
-      const commentary = boundedText(
+      const commentary = firstPersonProgress(
         event.data.progressText ?? event.data.progress_text ?? event.data.summary,
         240,
       );
@@ -119,12 +126,9 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
   if (event.stream === "assistant") {
     return { kind: "finalizing" };
   }
-  // El razonamiento privado solo aporta el hecho de que el turno sigue vivo.
-  // Los avances publicos llegan por commentary/preamble y si se muestran; el
-  // contenido literal de thinking nunca cruza al chat.
-  if (event.stream === "thinking" || event.stream === "plan") {
-    return { kind: "routing" };
-  }
+  // `thinking` es privado. Tampoco lo convertimos en un estado genérico porque
+  // podría reemplazar el último comentario público y volver a fingir progreso.
+  if (event.stream === "thinking") return undefined;
   return undefined;
 }
 
@@ -779,23 +783,45 @@ export async function dispatchQueryMessage(params: {
         // OpenClaw separa el comentario publico del reasoning privado. Solo el
         // primero se usa como bitacora visible del turno.
         commentaryProgressEnabled: true,
+        // Query presenta estos eventos en su propia linea de actividad. Al
+        // suprimir el texto tecnico por defecto, OpenClaw exige habilitar
+        // expresamente los callbacks publicos para que no queden bloqueados.
+        suppressDefaultToolProgressMessages: true,
+        allowToolLifecycleWhenProgressHidden: true,
+        allowProgressCallbacksWhenSourceDeliverySuppressed: true,
+        onToolStart: (tool) => {
+          const toolName = boundedText(tool.name, 64);
+          params.onActivity?.({
+            ...activityForTool(toolName, false),
+            toolName,
+            runId,
+          });
+        },
         onItemEvent: (item) => {
           const itemKind = boundedText(item.kind, 32)?.toLowerCase();
-          if (itemKind !== "preamble" && itemKind !== "commentary") return;
-          const commentary = boundedText(
-            item.progressText ?? item.summary ?? item.title,
-            240,
-          );
+          const commentary = firstPersonProgress(item.progressText ?? item.summary, 240);
           if (commentary) {
             params.onActivity?.({
               kind: "reasoning_summary",
               label: commentary,
               runId,
             });
+            return;
+          }
+          if (itemKind === "preamble" || itemKind === "commentary") return;
+          const toolName = boundedText(item.name, 64);
+          if (toolName) {
+            const phase = boundedText(item.phase ?? item.status, 24)?.toLowerCase();
+            const finished = phase === "end" || phase === "done" || phase === "complete";
+            params.onActivity?.({
+              ...activityForTool(toolName, finished),
+              toolName,
+              runId,
+            });
           }
         },
         onPlanUpdate: (plan) => {
-          const summary = boundedText(plan.explanation ?? plan.title, 240);
+          const summary = firstPersonProgress(plan.explanation ?? plan.title, 240);
           if (summary) {
             params.onActivity?.({
               kind: "reasoning_summary",

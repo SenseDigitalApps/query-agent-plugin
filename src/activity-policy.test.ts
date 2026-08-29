@@ -392,7 +392,16 @@ describe("paso derivado de la herramienta", () => {
       "Sigo esperando el resultado porque la consulta está tomando más de lo habitual.",
     );
     expect(heartbeatActivityLabel("routing", 65_000)).toContain(
-      "aún no tengo un resultado final",
+      "no tengo un avance concreto",
+    );
+    expect(
+      heartbeatActivityLabel(
+        "reasoning_summary",
+        65_000,
+        "Voy a contrastar las fechas de las tres facturas antes de decidir cuál corregir.",
+      ),
+    ).toBe(
+      "Voy a contrastar las fechas de las tres facturas antes de decidir cuál corregir.",
     );
   });
 });
