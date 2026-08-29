@@ -736,7 +736,7 @@ export class QuerySocketMonitor {
     const queuePartial = (text: string) => {
       latestPartial = text;
       if (partialTimer) return;
-      partialTimer = setTimeout(flushPartial, 160);
+      partialTimer = setTimeout(flushPartial, 400);
       partialTimer.unref?.();
     };
 

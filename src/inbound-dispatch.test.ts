@@ -22,12 +22,15 @@ describe("Query inbound dispatch recovery", () => {
     const onActivity = vi.fn();
     const onPartialReply = vi.fn();
     const dispatchReply = vi.fn(async (params: any) => {
-      params.replyOptions.onPartialReply?.({
-        text: "💨Fast: auto-onEstoy redactando la respuesta con el dato confirmado.",
-      });
       params.replyOptions.onItemEvent?.({
         kind: "preamble",
         progressText: "Voy a revisar los leads y contrastar sus estados.",
+      });
+      params.replyOptions.onPlanUpdate?.({
+        explanation: "Después organizaré los hallazgos.",
+      });
+      params.replyOptions.onPartialReply?.({
+        text: "💨Fast: auto-onEstoy redactando la respuesta con el dato confirmado.",
       });
       params.replyOptions.onToolStart?.({ name: "query_records_search" });
       emitAgentEvent({
@@ -110,6 +113,14 @@ describe("Query inbound dispatch recovery", () => {
       expect.objectContaining({
         kind: "reasoning_summary",
         label: "Voy a revisar los leads y contrastar sus estados.",
+        source: "commentary",
+      }),
+    );
+    expect(onActivity).toHaveBeenCalledWith(
+      expect.objectContaining({
+        kind: "reasoning_summary",
+        label: "Después organizaré los hallazgos.",
+        source: "plan",
       }),
     );
     expect(onActivity).toHaveBeenCalledWith(
@@ -118,9 +129,11 @@ describe("Query inbound dispatch recovery", () => {
         label: "Estoy buscando los registros relacionados con tu solicitud.",
       }),
     );
-    expect(onPartialReply).toHaveBeenCalledWith(
+    expect(onPartialReply.mock.calls.map(([text]) => text)).toEqual([
+      "Voy a revisar los leads y contrastar sus estados.",
+      "Después organizaré los hallazgos.",
       "Estoy redactando la respuesta con el dato confirmado.",
-    );
+    ]);
     expect(result.text).toBe("Respuesta que solo aparecio en el stream.");
   });
 

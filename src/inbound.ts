@@ -103,25 +103,9 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
     const finished = phase === "end" || phase === "done" || phase === "complete";
     return { ...activityForTool(toolName, finished), toolName, progress, source: "tool" };
   }
-  if (event.stream === "item") {
-    const itemKind = boundedText(event.data.kind, 32)?.toLowerCase();
-    if (itemKind === "preamble" || itemKind === "commentary") {
-      const commentary = firstPersonProgress(
-        event.data.progressText ?? event.data.progress_text ?? event.data.summary,
-        240,
-      );
-      return commentary
-        ? { kind: "reasoning_summary", label: commentary, source: "commentary" }
-        : undefined;
-    }
-  }
-  if (event.stream === "plan") {
-    const summary = boundedText(
-      event.data.explanation ?? event.data.title ?? event.data.summary,
-      240,
-    );
-    return summary ? { kind: "reasoning_summary", label: summary, source: "plan" } : undefined;
-  }
+  // Los comentarios y planes son texto vivo reemplazable, no pasos de una
+  // bitacora. Se enrutan como `message.delta` desde `dispatchQueryMessage`.
+  if (event.stream === "item" || event.stream === "plan") return undefined;
   if (event.stream === "compaction") {
     return { kind: "context", source: "lifecycle" };
   }
@@ -738,6 +722,14 @@ export async function dispatchQueryMessage(params: {
     }
     return sanitized;
   };
+  const emitPublicDraft = (value: unknown) => {
+    const draft = publicText(
+      redactUnsafeArtifactReferences(typeof value === "string" ? value : ""),
+    ).trim();
+    if (!draft || draft === lastPartialReply) return;
+    lastPartialReply = draft;
+    params.onPartialReply?.(draft);
+  };
   const unsubscribe = onAgentEvent((agentEvent) => {
     if (agentEvent.sessionKey !== route.sessionKey) return;
     if (agentEvent.agentId && agentEvent.agentId !== route.agentId) return;
@@ -762,6 +754,27 @@ export async function dispatchQueryMessage(params: {
           ? publicText(agentEvent.data.text).trim()
           : "";
       if (streamedText) lastAssistantText = streamedText;
+    }
+    if (agentEvent.stream === "item") {
+      const itemKind = boundedText(agentEvent.data.kind, 32)?.toLowerCase();
+      if (itemKind === "preamble" || itemKind === "commentary") {
+        emitPublicDraft(
+          firstPersonProgress(
+            agentEvent.data.progressText ??
+              agentEvent.data.progress_text ??
+              agentEvent.data.summary,
+            240,
+          ),
+        );
+      }
+    }
+    if (agentEvent.stream === "plan") {
+      emitPublicDraft(
+        firstPersonProgress(
+          agentEvent.data.explanation ?? agentEvent.data.title ?? agentEvent.data.summary,
+          240,
+        ),
+      );
     }
     const activity = activityFromAgentEvent(agentEvent);
     if (activity) params.onActivity?.({ ...activity, runId });
@@ -809,14 +822,7 @@ export async function dispatchQueryMessage(params: {
         allowToolLifecycleWhenProgressHidden: true,
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onPartialReply: (payload) => {
-          const publicDraft = publicText(
-            redactUnsafeArtifactReferences(
-              typeof payload.text === "string" ? payload.text : "",
-            ),
-          ).trim();
-          if (!publicDraft || publicDraft === lastPartialReply) return;
-          lastPartialReply = publicDraft;
-          params.onPartialReply?.(publicDraft);
+          emitPublicDraft(payload.text);
         },
         onToolStart: (tool) => {
           const toolName = boundedText(tool.name, 64);
@@ -831,6 +837,7 @@ export async function dispatchQueryMessage(params: {
           const itemKind = boundedText(item.kind, 32)?.toLowerCase();
           const commentary = firstPersonProgress(item.progressText ?? item.summary, 240);
           if (commentary) {
+            emitPublicDraft(commentary);
             params.onActivity?.({
               kind: "reasoning_summary",
               label: commentary,
@@ -855,6 +862,7 @@ export async function dispatchQueryMessage(params: {
         onPlanUpdate: (plan) => {
           const summary = firstPersonProgress(plan.explanation ?? plan.title, 240);
           if (summary) {
+            emitPublicDraft(summary);
             params.onActivity?.({
               kind: "reasoning_summary",
               label: summary,
