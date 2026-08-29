@@ -1,11 +1,16 @@
 import { readdir, stat } from "node:fs/promises";
 import { homedir } from "node:os";
-import { basename, delimiter, isAbsolute, join, normalize } from "node:path";
+import { basename, delimiter, join, normalize, posix, resolve, win32 } from "node:path";
 import type { QueryAttachment } from "./types.js";
 
 const PRIVATE_LINK_RE = /\bhttps?:\/\/[^\s<>"')\]]+/gi;
-const LOCAL_ABSOLUTE_PATH_RE =
-  /\/(?:home|tmp|var|mnt|opt|srv|Users|private\/var)\/[^\s<>"')\]]+/g;
+const LOCAL_UNIX_PATH_RE =
+  /\/(?:home|tmp|var|mnt|opt|srv|Users|private\/var|workspace|workspaces|root)\/[^\s<>"')\]]+/gi;
+const LOCAL_WINDOWS_PATH_RE =
+  /(?:^|[\s("'\[])([a-z]:[\\/][^\s<>"')\]]+)/gi;
+const EMBEDDED_LOCAL_PATH_RE =
+  /^\/(?:home|tmp|var|mnt|opt|srv|Users|private\/var|workspace|workspaces|root)(?:\/|$)/i;
+const EMBEDDED_WINDOWS_PATH_RE = /^\/[a-z]:[\\/]/i;
 const TRAILING_URL_PUNCTUATION_RE = /[.,!?;:]+$/;
 const MAX_ARTIFACT_SEARCH_DIRS = 8_000;
 const ARTIFACT_FILENAME_RE =
@@ -43,21 +48,43 @@ function configuredRoots(): string[] {
 }
 
 function isPrivateHostname(hostname: string): boolean {
-  const host = hostname.toLowerCase();
+  const host = hostname.toLowerCase().replace(/^\[|\]$/g, "");
   if (host === "localhost" || host.endsWith(".localhost")) return true;
+  if (host === "::1" || host.startsWith("fc") || host.startsWith("fd") || host.startsWith("fe80:")) {
+    return true;
+  }
+  if (host.endsWith(".ts.net") || host.endsWith(".tailscale.net")) return true;
+  // MagicDNS puede entregar nombres de una sola etiqueta dentro del tailnet.
+  if (!host.includes(".") && host !== "") return true;
   const match = host.match(/^(\d+)\.(\d+)\.(\d+)\.(\d+)$/);
   if (!match) return false;
   const [a, b] = match.slice(1).map(Number);
-  if (a === 10 || a === 127) return true;
+  if (a === 0 || a === 10 || a === 127) return true;
   if (a === 100 && b >= 64 && b <= 127) return true; // Tailscale/CGNAT.
   if (a === 172 && b >= 16 && b <= 31) return true;
   return a === 192 && b === 168;
 }
 
+function isLocalAbsolutePath(value: string): boolean {
+  return posix.isAbsolute(value) || win32.isAbsolute(value);
+}
+
+function embeddedLocalPath(pathname: string): string | undefined {
+  let decoded: string;
+  try {
+    decoded = decodeURIComponent(pathname);
+  } catch {
+    decoded = pathname;
+  }
+  if (EMBEDDED_LOCAL_PATH_RE.test(decoded)) return decoded;
+  if (EMBEDDED_WINDOWS_PATH_RE.test(decoded)) return decoded.slice(1);
+  return undefined;
+}
+
 async function existingFile(path: string): Promise<string | undefined> {
   try {
     const stats = await stat(path);
-    if (stats.isFile()) return path;
+    if (stats.isFile()) return resolve(path);
   } catch {
     // Candidate did not map to a local file.
   }
@@ -109,7 +136,7 @@ export async function localArtifactPathForPrivateUrl(rawUrl: string): Promise<st
   }
 
   const direct = decodeURIComponent(parsed.pathname);
-  if (isAbsolute(direct)) {
+  if (isLocalAbsolutePath(direct)) {
     const found = await existingFile(direct);
     if (found) return found;
   }
@@ -136,7 +163,7 @@ async function localArtifactPathForLocalPath(rawPath: string): Promise<string | 
   } catch {
     decoded = rawPath;
   }
-  if (!isAbsolute(decoded)) return undefined;
+  if (!isLocalAbsolutePath(decoded)) return undefined;
   return existingFile(decoded);
 }
 
@@ -151,7 +178,8 @@ async function localArtifactPathForUrl(rawUrl: string): Promise<string | undefin
     return undefined;
   }
   if (!["http:", "https:"].includes(parsed.protocol)) return undefined;
-  return localArtifactPathForLocalPath(parsed.pathname);
+  const leakedPath = embeddedLocalPath(parsed.pathname);
+  return leakedPath ? localArtifactPathForLocalPath(leakedPath) : undefined;
 }
 
 export function shouldRewritePrivateArtifactUrl(rawUrl: string): boolean {
@@ -161,7 +189,18 @@ export function shouldRewritePrivateArtifactUrl(rawUrl: string): boolean {
   } catch {
     return false;
   }
-  return ["http:", "https:"].includes(parsed.protocol) && isPrivateHostname(parsed.hostname);
+  return (
+    ["http:", "https:"].includes(parsed.protocol) &&
+    (isPrivateHostname(parsed.hostname) || Boolean(embeddedLocalPath(parsed.pathname)))
+  );
+}
+
+/** Referencia que nunca debe viajar al cliente final tal como la produjo el agente. */
+export function isUnsafeArtifactReference(rawValue: string): boolean {
+  const value = rawValue.trim();
+  if (!value) return false;
+  if (isLocalAbsolutePath(value)) return true;
+  return shouldRewritePrivateArtifactUrl(value);
 }
 
 function privateArtifactLinkCandidates(text: string): string[] {
@@ -169,7 +208,7 @@ function privateArtifactLinkCandidates(text: string): string[] {
     token: match[0],
     index: match.index ?? -1,
   }));
-  const localPaths = Array.from(text.matchAll(LOCAL_ABSOLUTE_PATH_RE), (match) => {
+  const unixPaths = Array.from(text.matchAll(LOCAL_UNIX_PATH_RE), (match) => {
     const index = match.index ?? -1;
     const isInsideUrl = urls.some((url) => {
       const urlEnd = url.index + url.token.length;
@@ -177,8 +216,18 @@ function privateArtifactLinkCandidates(text: string): string[] {
     });
     return isInsideUrl ? undefined : { token: match[0], index };
   }).filter((match): match is { token: string; index: number } => Boolean(match));
+  const windowsPaths = Array.from(text.matchAll(LOCAL_WINDOWS_PATH_RE), (match) => {
+    const token = match[1];
+    if (!token) return undefined;
+    const index = (match.index ?? -1) + match[0].indexOf(token);
+    const isInsideUrl = urls.some((url) => {
+      const urlEnd = url.index + url.token.length;
+      return index >= url.index && index < urlEnd;
+    });
+    return isInsideUrl ? undefined : { token, index };
+  }).filter((match): match is { token: string; index: number } => Boolean(match));
 
-  return [...urls, ...localPaths]
+  return [...urls, ...unixPaths, ...windowsPaths]
     .sort((left, right) => left.index - right.index)
     .map((match) => match.token);
 }
@@ -203,7 +252,7 @@ export async function rewritePrivateArtifactLinks(params: {
     if (!sourceUrl || replacements.has(token)) continue;
     const isUrl = /^https?:\/\//i.test(sourceUrl);
     const isPrivateUrl = isUrl && shouldRewritePrivateArtifactUrl(sourceUrl);
-    const isLocalPath = isAbsolute(sourceUrl);
+    const isLocalPath = isLocalAbsolutePath(sourceUrl);
     if (!isUrl && !isLocalPath) continue;
     const path = isLocalPath
       ? await localArtifactPathForLocalPath(sourceUrl)
@@ -217,6 +266,9 @@ export async function rewritePrivateArtifactLinks(params: {
     }
     try {
       const attachment = await params.upload(path, sourceUrl);
+      if (!attachment.url || isUnsafeArtifactReference(attachment.url)) {
+        throw new Error("Query returned an unsafe attachment URL.");
+      }
       attachments.push(attachment);
       replacements.set(token, `${attachment.url}${suffix}`);
     } catch {

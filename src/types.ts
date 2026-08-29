@@ -190,6 +190,17 @@ export type QueryResolvedAction = {
   }>;
 };
 
+export type QueryPendingRecordProposal = {
+  action_id: string;
+  action_type: "create_record" | "update_record" | "bulk_update" | string;
+  module?: string;
+  module_label?: string;
+  record_id?: number | null;
+  intent?: string;
+  changed_fields?: string[];
+  tool?: "query_record_propose" | "query_records_propose_batch" | string;
+};
+
 export type QueryUserMessageEvent = {
   type: "message";
   role: "user";
@@ -200,6 +211,7 @@ export type QueryUserMessageEvent = {
   data?: {
     attachments?: QueryAttachment[];
     resolved_action?: QueryResolvedAction;
+    pending_record_proposals?: QueryPendingRecordProposal[];
     thread_id?: string | number;
     thread_type?: QueryThreadType;
     thread_name?: string;

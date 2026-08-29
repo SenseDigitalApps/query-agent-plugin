@@ -24,7 +24,10 @@ import {
   reconnectDelay,
 } from "./protocol.js";
 import { queryAttachmentForMediaSource, queryAttachmentForMediaUrl } from "./media.js";
-import { rewritePrivateArtifactLinks } from "./private-links.js";
+import {
+  isUnsafeArtifactReference,
+  rewritePrivateArtifactLinks,
+} from "./private-links.js";
 import {
   isLocalArtifactPath,
   QueryUploadError,
@@ -37,6 +40,11 @@ import {
   rememberDelegatedAuth,
 } from "./delegated-store.js";
 import { defaultResponseStorePath, ResponseStore } from "./response-store.js";
+import {
+  forgetArtifact,
+  rememberArtifact,
+  rememberedArtifact,
+} from "./artifact-store.js";
 import type {
   CachedResponse,
   QueryAgentProfile,
@@ -60,6 +68,13 @@ const QUERY_AUTH_REFRESH_TIMEOUT_MS = 10_000;
 // Escapado y no el byte crudo: un NUL literal en el fuente hace que git y
 // grep traten el archivo como binario.
 const AUTH_KEY_SEPARATOR = "\u0000";
+
+function safeUploadError(error: unknown): string {
+  if (error instanceof QueryUploadError) {
+    return `code=${error.code}${error.status ? ` status=${error.status}` : ""}`;
+  }
+  return `type=${error instanceof Error ? error.name : "unknown"}`;
+}
 
 function turnAuthKey(threadId: string, clientMsgId: string): string {
   return `${threadId}${AUTH_KEY_SEPARATOR}${clientMsgId}`;
@@ -873,22 +888,52 @@ export class QuerySocketMonitor {
     mediaUrls: string[],
   ): Promise<QueryAttachment[]> {
     const attachments: QueryAttachment[] = [];
+    const delegated = event.data?.delegated_auth;
     for (const mediaUrl of mediaUrls) {
-      const delegated = event.data?.delegated_auth;
-      if (!isLocalArtifactPath(mediaUrl) || !delegated?.token) {
-        attachments.push(await queryAttachmentForMediaSource(mediaUrl));
+      const localPath = isLocalArtifactPath(mediaUrl);
+      const unsafeReference = isUnsafeArtifactReference(mediaUrl);
+      if (!localPath && !unsafeReference) {
+        try {
+          attachments.push(await queryAttachmentForMediaSource(mediaUrl));
+        } catch (error) {
+          this.options.log?.warn?.(
+            `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
+              `query_media_attachment_failed ${safeUploadError(error)}`,
+          );
+        }
+        continue;
+      }
+      if (!delegated?.token) {
+        this.options.log?.warn?.(
+          `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
+            "query_artifact_upload_blocked reason=delegated_credential_missing",
+        );
         continue;
       }
       try {
-        attachments.push(
-          await this.uploadArtifact(event, threadId, mediaUrl, delegated),
-        );
+        if (localPath) {
+          attachments.push(
+            await this.uploadArtifact(event, threadId, mediaUrl, delegated),
+          );
+          continue;
+        }
+        const rewritten = await rewritePrivateArtifactLinks({
+          text: mediaUrl,
+          upload: async (path) => this.uploadArtifact(event, threadId, path, delegated),
+          onBlocked: () => {
+            this.options.log?.warn?.(
+              `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
+                "query_media_reference_blocked source=unsafe_artifact_reference",
+            );
+          },
+        });
+        attachments.push(...rewritten.attachments);
       } catch (error) {
         // Se pierde el archivo, no el turno: el usuario recibe la respuesta y
         // el fallo queda en el log en vez de un enlace que no abre.
         this.options.log?.warn?.(
           `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
-            `query_artifact_upload_failed path=${mediaUrl} error=${String(error)}`,
+            `query_artifact_upload_failed ${safeUploadError(error)}`,
         );
       }
     }
@@ -903,25 +948,54 @@ export class QuerySocketMonitor {
   ): Promise<QueryAttachment> {
     const uploadUrl = queryUploadUrlFor(this.options.account.url, threadId);
     const attachment = queryAttachmentForMediaUrl(mediaUrl);
-    try {
-      return await uploadArtifactToQuery({
+    // El agente reescribe el mismo archivo del workspace una y otra vez. Si ya
+    // salio de aqui un asset por esta ruta, se reemplaza su contenido: la URL
+    // no cambia, asi que el enlace que la persona ya tiene sigue sirviendo el
+    // archivo al dia en vez de quedarse en la version de hace dos correcciones.
+    const reuseId = rememberedArtifact(threadId, mediaUrl);
+
+    const send = async (token: string, replaceAttachmentId?: string | number) =>
+      uploadArtifactToQuery({
         uploadUrl,
-        token: delegated.token,
+        token,
         path: mediaUrl,
         attachment,
+        replaceAttachmentId,
       });
-    } catch (error) {
-      if (!(error instanceof QueryUploadError) || !error.isExpiredCredential) {
-        throw error;
+
+    const remember = (uploaded: QueryAttachment) => {
+      // Un asset fijado es un template o algo ya publicado: se congela. Query
+      // no lo impide del lado del servidor, asi que la regla vive aqui, que es
+      // donde se decide reemplazar.
+      if (uploaded.is_pinned) {
+        forgetArtifact(threadId, mediaUrl);
+        return uploaded;
       }
+      rememberArtifact(threadId, mediaUrl, uploaded.id);
+      return uploaded;
+    };
+
+    try {
+      return remember(await send(delegated.token, reuseId));
+    } catch (error) {
+      if (!(error instanceof QueryUploadError)) throw error;
+
+      // El asset que recordabamos ya no admite reemplazo: lo borraron, caduco
+      // o Query lo congelo. Se olvida y se sube como nuevo, que es peor que
+      // reutilizarlo pero mucho mejor que perder el archivo.
+      if (reuseId !== undefined && !error.isExpiredCredential) {
+        this.options.log?.info?.(
+          `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
+            `query_artifact_replace_rejected ${safeUploadError(error)}`,
+        );
+        forgetArtifact(threadId, mediaUrl);
+        return remember(await send(delegated.token));
+      }
+
+      if (!error.isExpiredCredential) throw error;
       const renewed = await this.refreshDelegatedAuth(threadId, event.client_msg_id);
       if (!renewed?.token) throw error;
-      return uploadArtifactToQuery({
-        uploadUrl,
-        token: renewed.token,
-        path: mediaUrl,
-        attachment,
-      });
+      return remember(await send(renewed.token, reuseId));
     }
   }
 
@@ -931,14 +1005,19 @@ export class QuerySocketMonitor {
     text: string,
   ): Promise<{ text: string; attachments: QueryAttachment[] }> {
     const delegated = event.data?.delegated_auth;
-    if (!text || !delegated?.token) return { text, attachments: [] };
+    if (!text) return { text, attachments: [] };
     const rewritten = await rewritePrivateArtifactLinks({
       text,
-      upload: async (path) => this.uploadArtifact(event, threadId, path, delegated),
-      onBlocked: (sourceUrl) => {
+      upload: async (path) => {
+        if (!delegated?.token) {
+          throw new QueryUploadError("token_missing", "Query did not provide a token.");
+        }
+        return this.uploadArtifact(event, threadId, path, delegated);
+      },
+      onBlocked: () => {
         this.options.log?.warn?.(
           `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
-            `query_private_link_blocked url=${sourceUrl}`,
+            "query_private_link_blocked source=unsafe_artifact_reference",
         );
       },
     });

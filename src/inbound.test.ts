@@ -12,6 +12,73 @@ import {
 import type { QueryResolvedAction, QueryUserMessageEvent } from "./types.js";
 
 describe("Query inbound body", () => {
+  it("separates channel metadata from personal scheduled-delivery rules", () => {
+    const body = bodyForAgent({
+      type: "message",
+      role: "user",
+      content: "recuerdame revisar el guion",
+      client_msg_id: "schedule-1",
+      thread_id: "topic-video",
+      data: {
+        thread_name: "Video",
+        thread_type: "topic",
+        sender: { private_thread_id: "22" },
+      },
+    });
+
+    expect(body).toContain("[Contexto de Query: Canal actual: Video");
+    expect(body).toContain("Tipo de canal: topic compartido");
+    expect(body).toContain("Canal privado del remitente: 22");
+    expect(body).toContain("[Entrega de tareas programadas:");
+    expect(body).toContain("entrega el resultado en su canal privado 22");
+  });
+
+  it("does not invent a private destination when Query did not provide one", () => {
+    const body = bodyForAgent({
+      type: "message",
+      role: "user",
+      content: "hola",
+      client_msg_id: "no-private-thread",
+      thread_id: "topic-general",
+      data: { thread_name: "General", thread_type: "topic" },
+    });
+
+    expect(body).toContain("Tipo de canal: topic compartido");
+    expect(body).not.toContain("Entrega de tareas programadas");
+    expect(body).not.toContain("canal privado indicado");
+  });
+
+  it("tells the agent to revise the same pending proposal card", () => {
+    const body = bodyForAgent({
+      type: "message",
+      role: "user",
+      content: "el correo correcto es nuevo@example.com",
+      client_msg_id: "revise-pending-action",
+      thread_id: "topic-clientes",
+      data: {
+        pending_record_proposals: [
+          {
+            action_id: "348be349-a33d-11f1-a7b2-d843ae899220",
+            action_type: "update_record",
+            module: "clientes",
+            module_label: "Clientes",
+            record_id: 81,
+            changed_fields: ["correo", "nombre"],
+            tool: "query_record_propose",
+          },
+        ],
+      },
+    });
+
+    expect(body).toContain(
+      "Propuesta pendiente: action_id=348be349-a33d-11f1-a7b2-d843ae899220",
+    );
+    expect(body).toContain("tool=query_record_propose");
+    expect(body).toContain("campos: correo, nombre");
+    expect(body).toContain("Query actualizara la misma tarjeta");
+    expect(body).toContain("no le pidas descartarla ni crees otra propuesta");
+  });
+
   it("labels audio-only messages as voice notes instead of generic attachments", () => {
     const event: QueryUserMessageEvent = {
       type: "message",

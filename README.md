@@ -331,14 +331,52 @@ se reutiliza la metadata de módulos entre llamadas de una misma credencial.
 - Los adjuntos entrantes se entregan al contexto multimedia del agente; las
   URLs multimedia devueltas por el agente regresan como adjuntos de Query.
 
+### Entrega obligatoria de archivos
+
+Cada turno del canal Query recibe una directiva central que exige entregar los
+archivos generados mediante attachments/assets y prohÃ­be presentar rutas del
+workspace, localhost, redes privadas o Tailscale como resultado final. La regla
+vive en `src/inbound.ts`: aplica desde el primer mensaje de cualquier agente y
+no depende de `AGENTS.md` ni `TOOLS.md`. Los `LocalPath` de adjuntos entrantes
+siguen disponibles para que el agente pueda leerlos.
+
+La tool `query_attachment_send` recibe `file_path` y opcionalmente `thread_id`,
+`message`, `name`, `mime_type` y `kind`. Reutiliza `uploadArtifactToQuery()` con
+la credencial delegada, devuelve la URL opaca de Query y publica media
+estructurada para que OpenClaw la incorpore a `mediaUrls`; el socket la entrega
+finalmente en `data.attachments`. En outbound y cron se usa el mismo uploader
+con la credencial del bot mediante `uploadOutboundArtifactToQuery()`.
+
+Como defensa final, `src/private-links.ts` reescribe rutas Linux/Windows, hosts
+privados y URLs fabricadas con rutas locales. Si el archivo no existe, falta
+credencial o falla la subida, elimina la referencia insegura, conserva una
+explicaciÃ³n visible y registra solo un cÃ³digo seguro del error.
+
 ### Artifacts editables
 
 `uploadArtifactToQuery()` y `uploadOutboundArtifactToQuery()` aceptan el campo
 opcional `replaceAttachmentId`. Al enviarlo usan `PUT` y reemplazan el blob del
-adjunto conservando su ID; al omitirlo mantienen el `POST` de creación actual.
-El caller debe usar reemplazo únicamente para previews o drafts editables. Un
-artifact final, aprobado o publicado se congela y se vuelve a subir sin
-`replaceAttachmentId`, creando una versión nueva.
+adjunto conservando su ID; al omitirlo mantienen el `POST` de creación.
+
+**Reemplazar es el comportamiento por defecto.** El canal recuerda, por hilo y
+ruta local, qué asset salió de cada archivo (`src/artifact-store.ts`,
+persistido en `<OPENCLAW_STATE_DIR>/query-artifacts.json`). Reenviar el mismo
+archivo reemplaza su contenido: la URL pública no cambia, así que el enlace que
+la persona ya tiene sigue sirviendo y muestra la versión al día. Sin esto, una
+tarde de correcciones dejaba diez copias y nueve enlaces obsoletos.
+
+Conservar la versión anterior es una decisión explícita, no un accidente: el
+agente llama a `query_artifact_new_version` con la ruta antes de reenviar, y ese
+envío crea un asset nuevo dejando el anterior intacto.
+
+Dos salvaguardas: un asset **fijado** (`pinned`) no se reemplaza nunca —es un
+template o algo ya publicado, y Query no lo impide del lado del servidor, así
+que la regla vive aquí—, y si Query rechaza el reemplazo se olvida la ruta y se
+sube como nuevo, que es peor que reutilizarlo pero mucho mejor que perder el
+archivo.
+
+`QUERY_ARTIFACT_REUSE_TTL_MS` permite caducar el reuso (0 = sin límite, el
+valor por defecto).
 
 Para templates u otros artifacts permanentes se puede pasar `pinned: true` al
 crear o reemplazar. Query responderá `is_pinned: true` y `expires_at: null`, y

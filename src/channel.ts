@@ -6,7 +6,10 @@ import {
 } from "openclaw/plugin-sdk/channel-core";
 import { inspectQueryAccount, listQueryAccountIds, resolveQueryAccount } from "./config.js";
 import { queryAttachmentForMediaSource, queryAttachmentForMediaUrl } from "./media.js";
-import { rewritePrivateArtifactLinks } from "./private-links.js";
+import {
+  isUnsafeArtifactReference,
+  rewritePrivateArtifactLinks,
+} from "./private-links.js";
 import {
   botIdFromSocketUrl,
   isLocalArtifactPath,
@@ -60,23 +63,29 @@ async function resolveOutboundAttachment(
   mediaUrl: string,
   options: { audioAsVoice?: boolean; forceDocument?: boolean },
 ) {
-  if (!isLocalArtifactPath(mediaUrl)) {
+  const localPath = isLocalArtifactPath(mediaUrl);
+  const unsafeReference = isUnsafeArtifactReference(mediaUrl);
+  if (!localPath && !unsafeReference) {
     return queryAttachmentForMediaSource(mediaUrl, options);
   }
   const account = await resolveAccountForOutbound(cfg, accountId ?? DEFAULT_ACCOUNT_ID);
   const botId = account ? botIdFromSocketUrl(account.url) : "";
   if (!account || !botId) {
-    // Sin cuenta activa no hay a donde subir; se mantiene el comportamiento
-    // anterior en vez de perder el envio entero.
-    return queryAttachmentForMediaSource(mediaUrl, options);
+    // Sin credencial no se degrada a una ruta local o privada que el navegador
+    // no puede abrir. El texto del outbound se conserva en el caller.
+    return undefined;
   }
-  return uploadOutboundArtifactToQuery({
-    uploadUrl: queryOutboundUploadUrlFor(account.url, botId),
-    token: account.token,
-    to: uploadTargetForOutbound(to, threadId),
-    path: mediaUrl,
-    attachment: queryAttachmentForMediaUrl(mediaUrl, options),
-  });
+  const upload = async (path: string) =>
+    uploadOutboundArtifactToQuery({
+      uploadUrl: queryOutboundUploadUrlFor(account.url, botId),
+      token: account.token,
+      to: uploadTargetForOutbound(to, threadId),
+      path,
+      attachment: queryAttachmentForMediaUrl(path, options),
+    });
+  if (localPath) return upload(mediaUrl);
+  const rewritten = await rewritePrivateArtifactLinks({ text: mediaUrl, upload });
+  return rewritten.attachments[0];
 }
 
 async function rewritePrivateLinksForOutbound(
@@ -89,17 +98,30 @@ async function rewritePrivateLinksForOutbound(
   if (!text) return { text, attachments: [] };
   const account = await resolveAccountForOutbound(cfg, accountId);
   const botId = account ? botIdFromSocketUrl(account.url) : "";
-  if (!account || !botId) return { text, attachments: [] };
   return rewritePrivateArtifactLinks({
     text,
-    upload: async (path) =>
-      uploadOutboundArtifactToQuery({
+    upload: async (path) => {
+      if (!account || !botId) throw new Error("Query outbound upload is unavailable.");
+      return uploadOutboundArtifactToQuery({
         uploadUrl: queryOutboundUploadUrlFor(account.url, botId),
         token: account.token,
         to: uploadTargetForOutbound(to, threadId),
         path,
         attachment: queryAttachmentForMediaUrl(path),
-      }),
+      });
+    },
+  });
+}
+
+function safeExistingOutboundAttachments(value: unknown): unknown[] {
+  if (!Array.isArray(value)) return [];
+  return value.flatMap((candidate) => {
+    if (!candidate || typeof candidate !== "object") return [];
+    const attachment = candidate as Record<string, unknown>;
+    const url = typeof attachment.url === "string" ? attachment.url : "";
+    if (!url || isUnsafeArtifactReference(url)) return [];
+    const { local_path: _localPath, ...safeAttachment } = attachment;
+    return [safeAttachment];
   });
 }
 
@@ -122,14 +144,20 @@ export async function sendOutboundEvent(params: {
     params.text,
   );
   const clientMsgId = newOutboundClientMsgId(params.deliveryQueueId);
-  const existingAttachments = Array.isArray(params.data?.attachments)
-    ? (params.data.attachments as unknown[])
-    : [];
+  const existingAttachments = safeExistingOutboundAttachments(params.data?.attachments);
   const attachments = [...existingAttachments, ...rewritten.attachments];
+  const { attachments: _unsafeAttachments, ...safeData } = params.data ?? {};
+  const hadAttachmentCandidates = Array.isArray(params.data?.attachments)
+    && params.data.attachments.length > 0;
+  const content =
+    rewritten.text.trim() ||
+    (hadAttachmentCandidates && attachments.length === 0
+      ? "No pude adjuntar el archivo generado. Intenta nuevamente."
+      : rewritten.text);
   const event: QueryOutboundEvent = {
     type: "message",
     role: "assistant",
-    content: rewritten.text,
+    content,
     client_msg_id: clientMsgId,
     thread_id: String(params.threadId ?? params.to),
     data: {
@@ -138,7 +166,7 @@ export async function sendOutboundEvent(params: {
       ...(params.threadId === undefined || params.threadId === null
         ? {}
         : { thread_id: String(params.threadId) }),
-      ...(params.data ?? {}),
+      ...safeData,
       ...(attachments.length > 0 ? { attachments } : {}),
     },
   };
@@ -293,16 +321,28 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
         }),
       sendMedia: async (ctx) => {
         const attachment = ctx.mediaUrl
-          ? await resolveOutboundAttachment(ctx.cfg as QueryConfig, ctx.accountId, ctx.to, ctx.threadId, ctx.mediaUrl, {
-              audioAsVoice: ctx.audioAsVoice,
-              forceDocument: ctx.forceDocument,
-            })
+          ? await resolveOutboundAttachment(
+              ctx.cfg as QueryConfig,
+              ctx.accountId,
+              ctx.to,
+              ctx.threadId,
+              ctx.mediaUrl,
+              {
+                audioAsVoice: ctx.audioAsVoice,
+                forceDocument: ctx.forceDocument,
+              },
+            ).catch(() => undefined)
           : undefined;
+        const text =
+          ctx.text?.trim() ||
+          (ctx.mediaUrl && !attachment
+            ? "No pude adjuntar el archivo generado. Intenta nuevamente."
+            : ctx.text);
         return sendOutboundEvent({
           cfg: ctx.cfg as QueryConfig,
           accountId: ctx.accountId,
           to: ctx.to,
-          text: ctx.text,
+          text,
           threadId: ctx.threadId,
           deliveryQueueId: ctx.deliveryQueueId,
           data: attachment ? { attachments: [attachment] } : undefined,

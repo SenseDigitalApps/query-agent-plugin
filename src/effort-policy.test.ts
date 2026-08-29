@@ -1,6 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   activityModeForEffort,
+  effortInstruction,
   parseEffortMode,
   resolveEffortMode,
 } from "./effort-policy.js";
@@ -56,5 +57,12 @@ describe("Query effort policy", () => {
     expect(activityModeForEffort("smart", "fast")).toBe("lite");
     expect(activityModeForEffort("lite", "careful")).toBe("verbose");
     expect(activityModeForEffort("off", "exhaustive")).toBe("off");
+  });
+
+  it("asks for useful public progress without exposing private reasoning", () => {
+    const instruction = effortInstruction("normal");
+    expect(instruction).toContain("[Modo de trabajo Query: normal.");
+    expect(instruction).toContain("publica avances breves y concretos");
+    expect(instruction).toContain("No muestres cadenas privadas de razonamiento");
   });
 });

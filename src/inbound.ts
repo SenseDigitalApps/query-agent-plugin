@@ -59,6 +59,14 @@ export type QueryDispatchDiagnostics = {
   effortEscalationReason?: string;
 };
 
+export const QUERY_DELIVERY_POLICY =
+  "[Respuesta y archivos en Query: cierra este turno con contenido visible para la persona: texto, attachments o ambos, incluso si usaste herramientas. " +
+  "No uses NO_REPLY ni termines unicamente con llamadas de herramientas. " +
+  "El usuario final esta en otro computador y no puede acceder al sistema de archivos del agente ni del servidor: una ruta local no cuenta como entrega. " +
+  "Si generas o modificas cualquier archivo, subelo con query_attachment_send para que quede visible y descargable en Query. " +
+  "Puedes usar LocalPath y rutas locales para leer adjuntos recibidos o crear archivos internamente, pero nunca las muestres como entrega final. " +
+  "No envies localhost, 127.0.0.1, 0.0.0.0, IP privadas, Tailscale, rutas Windows/Linux ni enlaces privados. No uses registros de negocio para entregar archivos.]";
+
 function boundedText(value: unknown, maxLength = 80): string | undefined {
   if (typeof value !== "string") return undefined;
   const text = value.trim();
@@ -474,8 +482,37 @@ function resolvedActionLine(event: QueryUserMessageEvent): string {
   return `Query intento cerrar tu propuesta${target} con este mensaje y no pudo (${resolved.error ?? "error"}). No des el cambio por hecho: cuentaselo a la persona`;
 }
 
+function pendingRecordProposalLines(event: QueryUserMessageEvent): string[] {
+  const proposals = event.data?.pending_record_proposals ?? [];
+  if (!proposals.length) return [];
+  const summaries = proposals.map((proposal) => {
+    const target =
+      proposal.record_id === null || proposal.record_id === undefined
+        ? "registro nuevo"
+        : `registro ${proposal.record_id}`;
+    const fields = proposal.changed_fields?.length
+      ? `; campos: ${proposal.changed_fields.join(", ")}`
+      : "";
+    const intent = proposal.intent?.trim() ? `; intencion: ${proposal.intent.trim()}` : "";
+    return (
+      `Propuesta pendiente: action_id=${proposal.action_id}; ` +
+      `tool=${proposal.tool || "query_record_propose"}; ` +
+      `modulo=${proposal.module || proposal.module_label || "desconocido"}; ` +
+      `${target}${fields}${intent}`
+    );
+  });
+  return [
+    ...summaries,
+    "Instruction: si la persona pide corregir una propuesta pendiente, vuelve a llamar la misma tool con su action_id y los datos corregidos. Query actualizara la misma tarjeta mientras siga pendiente; no le pidas descartarla ni crees otra propuesta. Para quitar campos anteriores de una propuesta individual usa replace_proposal=true y envia la version completa corregida",
+  ];
+}
+
 export function bodyForAgent(event: QueryUserMessageEvent): string {
   const rawBody = rawBodyForAgent(event);
+  const threadName = event.data?.thread_name || event.thread_id || "desconocido";
+  const threadType = event.data?.thread_type || "desconocido";
+  const sharedType = threadType === "general" || threadType === "topic";
+  const privateThreadId = event.data?.sender?.private_thread_id;
   const audioLines = audioAttachments(event).flatMap((attachment, index) => {
     const transcript = attachmentTranscript(attachment);
     const filename = originalFilename(attachment, index);
@@ -547,23 +584,24 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
   });
 
   const context = [
-    `Canal Query: ${event.data?.thread_name || event.thread_id || "desconocido"}`,
-    `Tipo: ${event.data?.thread_type || "desconocido"}`,
-    event.data?.sender?.private_thread_id
-      ? `Canal privado del remitente: ${event.data.sender.private_thread_id}`
-      : "",
+    `Canal actual: ${threadName}`,
+    `Tipo de canal: ${threadType}${sharedType ? " compartido" : ""}`,
+    privateThreadId ? `Canal privado del remitente: ${privateThreadId}` : "",
     resolvedActionLine(event),
+    ...pendingRecordProposalLines(event),
     ...audioLines,
     ...imageLines,
     ...documentLines,
-    "Si creas una tarea programada para una persona, configura la entrega al canal privado indicado; no uses un canal compartido como destino individual.",
   ]
     .filter(Boolean)
     .join(". ");
-  const audioHint = messageRequestsAudio(event)
-    ? "\n\n[Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]"
+  const scheduledDeliveryHint = privateThreadId
+    ? `\n\n[Entrega de tareas programadas: si programas una tarea personal para este remitente, entrega el resultado en su canal privado ${privateThreadId}. No uses un canal compartido como destino individual.]`
     : "";
-  return `${rawBody}\n\n[Contexto de Query: ${context}]${audioHint}`;
+  const audioHint = messageRequestsAudio(event)
+    ? "\n\n[Respuesta de audio en Query: Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]"
+    : "";
+  return `${rawBody}\n\n[Contexto de Query: ${context}]${scheduledDeliveryHint}${audioHint}`;
 }
 
 export function mediaForAgent(event: QueryUserMessageEvent) {
@@ -631,10 +669,11 @@ export async function dispatchQueryMessage(params: {
   // aun si la configuracion global de OpenClaw usa otro modo de cola. Los
   // mensajes normales no llevan directiva: Query ya los serializo y OpenClaw
   // debe tratarlos como el turno base, sin recordar ``steer`` en la sesion.
+  const deliveryPolicy = QUERY_DELIVERY_POLICY;
   const agentBody =
     event.data?.delivery_mode === "intervene"
-      ? `/queue steer\n${body}\n\n${policy}`
-      : `${body}\n\n${policy}\n[Entrega requerida de Query: este mensaje viene de una persona que espera una respuesta en el chat. Termina siempre con texto visible o un archivo visible para esa persona, incluso si usaste herramientas. No termines con NO_REPLY ni dejes el turno solo en llamadas de herramientas.]`;
+      ? `/queue steer\n${body}\n\n${policy}\n${deliveryPolicy}`
+      : `${body}\n\n${policy}\n${deliveryPolicy}`;
   const ctxPayload = buildChannelInboundEventContext({
     channel: CHANNEL_ID,
     accountId: route.accountId,

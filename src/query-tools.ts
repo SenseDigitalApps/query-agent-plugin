@@ -11,6 +11,13 @@ import {
   threadsWithDelegatedAuth,
 } from "./delegated-store.js";
 import { queryApiUrl } from "./query-api.js";
+import { queryAttachmentForMediaUrl } from "./media.js";
+import {
+  isLocalArtifactPath,
+  QueryUploadError,
+  queryUploadUrlFor,
+  uploadArtifactToQuery,
+} from "./query-upload.js";
 
 /**
  * Herramientas para consultar Query en nombre de la persona que escribe.
@@ -27,7 +34,7 @@ const THREAD_PARAM = Type.String({
 });
 
 const LOCAL_GENERATED_ARTIFACT_RE =
-  /(?:^|[\s"'([{])(?:https?:\/\/[^\s<>"')\]]*)?\/(?:home|tmp|var|mnt|opt|srv|Users|private\/var)\/[^\s<>"')\]]+\.(?:html?|pdf|csv|json|md|txt|xlsx?|docx?|pptx?|zip|png|jpe?g|gif|webp|mp4|mov|m4v|webm)(?:[.,!?;:]?)(?:$|[\s"')\]}])/i;
+  /(?:^|[\s"'([{])(?:(?:https?:\/\/[^\s<>"')\]]*)?\/(?:home|tmp|var|mnt|opt|srv|Users|private\/var|workspace|workspaces|root)\/|[a-z]:[\\/])[^\s<>"')\]]+\.(?:html?|pdf|csv|json|md|txt|xlsx?|docx?|pptx?|zip|png|jpe?g|gif|webp|mp4|mov|m4v|webm)(?:[.,!?;:]?)(?:$|[\s"')\]}])/i;
 
 type QueryToolLog = ToolPluginExecutionContext["api"]["logger"];
 
@@ -136,6 +143,109 @@ function generatedArtifactAsRecordError() {
   };
 }
 
+export function recordProposalRequestBody(params: {
+  actionId?: string;
+  title?: string;
+  fields?: Record<string, unknown>;
+  intent?: string;
+  replaceProposal?: boolean;
+}): Record<string, unknown> {
+  const body: Record<string, unknown> = { fields: params.fields ?? {} };
+  if (params.intent !== undefined) body.intent = params.intent;
+  if (params.title !== undefined) body.title = params.title;
+  if (params.actionId !== undefined) body.action_id = params.actionId;
+  if (params.replaceProposal !== undefined) {
+    body.replace_proposal = params.replaceProposal;
+  }
+  return body;
+}
+
+export function batchProposalRequestBody(params: {
+  actionId?: string;
+  items: unknown[];
+  intent?: string;
+}): Record<string, unknown> {
+  return {
+    items: params.items,
+    ...(params.intent !== undefined ? { intent: params.intent } : {}),
+    ...(params.actionId ? { action_id: params.actionId } : {}),
+  };
+}
+
+function attachmentThreadId(requested: string | undefined): string | undefined {
+  const explicit = requested?.trim();
+  if (explicit) return explicit;
+  const available = threadsWithDelegatedAuth();
+  return available.length === 1 ? available[0] : undefined;
+}
+
+export async function uploadQueryAttachmentForThread(params: {
+  threadId?: string;
+  filePath: string;
+  message?: string;
+  name?: string;
+  mimeType?: string;
+  kind?: string;
+  log: QueryToolLog;
+}): Promise<unknown> {
+  const threadId = attachmentThreadId(params.threadId);
+  if (!threadId) {
+    return {
+      ok: false,
+      error: "thread_required",
+      detail:
+        "Indica thread_id; solo puede omitirse cuando hay exactamente una conversacion Query activa.",
+    };
+  }
+  if (!isLocalArtifactPath(params.filePath)) {
+    return {
+      ok: false,
+      error: "local_file_required",
+      detail: "file_path debe ser una ruta local absoluta del archivo generado.",
+    };
+  }
+  const stored = await delegatedAuthForTool(threadId, "query_attachment_send", params.log);
+  if (!stored) return noCredential();
+  const inferred = queryAttachmentForMediaUrl(params.filePath);
+  try {
+    const attachment = await uploadArtifactToQuery({
+      uploadUrl: queryUploadUrlFor(stored.socketUrl, threadId),
+      token: stored.auth.token,
+      path: params.filePath,
+      attachment: {
+        ...inferred,
+        ...(params.name?.trim() ? { name: params.name.trim() } : {}),
+        ...(params.mimeType?.trim() ? { mime_type: params.mimeType.trim() } : {}),
+        ...(params.kind?.trim() ? { kind: params.kind.trim() } : {}),
+      },
+    });
+    return {
+      ok: true,
+      thread_id: threadId,
+      attachment,
+      public_url: attachment.url,
+      // OpenClaw recoge `details.media` de las tools y lo agrega a mediaUrls
+      // del turno. Asi el socket lo convierte en data.attachments sin pedirle
+      // al agente que copie una ruta o enlace en su texto final.
+      media: {
+        url: attachment.url,
+        attachments: [attachment],
+      },
+      ...(params.message?.trim() ? { message: params.message.trim() } : {}),
+    };
+  } catch (error) {
+    params.log.warn(
+      `query_attachment_send_failed thread_id=${JSON.stringify(threadId)} ` +
+        `error=${error instanceof QueryUploadError ? error.code : "upload_failed"}`,
+    );
+    return {
+      ok: false,
+      error: error instanceof QueryUploadError ? error.code : "upload_failed",
+      detail: "Query no pudo subir el archivo. No compartas la ruta local; informa el fallo en texto.",
+    };
+  }
+}
+
 export async function callQuery(
   threadId: string,
   path: string,
@@ -228,6 +338,40 @@ export default defineToolPlugin({
     "Consulta modulos, campos y registros de Query en nombre de la persona con la que conversas.",
   tools: (tool) => [
     tool({
+      name: "query_attachment_send",
+      label: "Query: entregar archivo",
+      description:
+        "Sube un archivo generado o modificado al sistema nativo de attachments de Query para dejarlo visible y descargable en el chat. Usa esta herramienta para HTML, PDF, Word, Excel, CSV, imagenes, audio, video, ZIP, dashboards y presentaciones. Nunca muestres file_path al usuario ni uses registros de negocio para entregar archivos.",
+      parameters: Type.Object({
+        file_path: Type.String({
+          description: "Ruta local absoluta del archivo que el agente ya genero.",
+        }),
+        thread_id: Type.Optional(THREAD_PARAM),
+        message: Type.Optional(
+          Type.String({ description: "Texto corto opcional que acompana el archivo." }),
+        ),
+        name: Type.Optional(Type.String({ description: "Nombre visible opcional." })),
+        mime_type: Type.Optional(Type.String({ description: "MIME type opcional." })),
+        kind: Type.Optional(
+          Type.String({ description: "Tipo opcional: file, image, audio o video." }),
+        ),
+      }),
+      execute: async (
+        { file_path, thread_id, message, name, mime_type, kind },
+        _config,
+        context,
+      ) =>
+        uploadQueryAttachmentForThread({
+          threadId: thread_id,
+          filePath: file_path,
+          message,
+          name,
+          mimeType: mime_type,
+          kind,
+          log: context.api.logger,
+        }),
+    }),
+    tool({
       name: "query_modules_list",
       label: "Query: listar modulos",
       description:
@@ -312,9 +456,15 @@ export default defineToolPlugin({
       name: "query_record_propose",
       label: "Query: proponer un cambio",
       description:
-        "Unica via para cambiar datos en Query. No aplica nada: deja la propuesta en el chat y una persona la confirma con un boton. Usala tanto para crear como para actualizar registros reales. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: esos se envian como attachments/public assets en una respuesta normal. Antes, consulta query_module_describe y usa los slugs exactos. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Despues, dile a la persona que revise la propuesta en el chat; no afirmes que el cambio quedo hecho.",
+        "Unica via para cambiar datos en Query. No aplica nada: deja la propuesta en el chat y una persona la confirma con un boton. Usala tanto para crear como para actualizar registros reales. Si la persona corrige una propuesta que sigue pendiente, vuelve a llamar esta tool con el action_id de esa propuesta: Query actualiza la misma tarjeta, sin pedir que la descarte ni crear otra. Los fields corregidos se mezclan con los ya propuestos; usa replace_proposal=true y envia la version completa solo cuando debas quitar cambios anteriores. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: esos se envian como attachments/public assets en una respuesta normal. Antes, consulta query_module_describe y usa los slugs exactos. Los campos calculator, calculador_initial, calculator_advanced y calculator_table tambien aceptan el valor inicial calculado por el agente; el frontend podra recalcularlo despues. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Despues, dile a la persona que revise la propuesta en el chat; no afirmes que el cambio quedo hecho.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
+        action_id: Type.Optional(
+          Type.String({
+            description:
+              "UUID de una propuesta pendiente devuelto por esta tool. Incluyelo para corregir esa misma tarjeta.",
+          }),
+        ),
         module: Type.String({ description: "Modulo donde se hara el cambio." }),
         record_id: Type.Optional(
           Type.Integer({
@@ -330,7 +480,7 @@ export default defineToolPlugin({
         ),
         fields: Type.Optional(Type.Record(Type.String(), Type.Unknown(), {
           description:
-            "Valores por slug. En campos ref_ envia preferiblemente {id: ...}; si solo conoces el consecutivo usa {consecutivo: ...}. No inventes label, type ni module.",
+            "Valores por slug, incluidos campos calculados como valor inicial. En campos ref_ envia preferiblemente {id: ...}; si solo conoces el consecutivo usa {consecutivo: ...}. No inventes label, type ni module.",
         })),
         intent: Type.Optional(
           Type.String({
@@ -338,9 +488,15 @@ export default defineToolPlugin({
               "Por que se propone, en una frase. Lo lee la persona que decide.",
           }),
         ),
+        replace_proposal: Type.Optional(
+          Type.Boolean({
+            description:
+              "false por defecto: mezcla fields corregidos con los ya propuestos. true reemplaza toda la propuesta y exige enviar su version completa.",
+          }),
+        ),
       }),
       execute: async (
-        { thread_id, module, record_id, title, fields, intent },
+        { thread_id, action_id, module, record_id, title, fields, intent, replace_proposal },
         _config,
         context,
       ) => {
@@ -350,8 +506,13 @@ export default defineToolPlugin({
         const base = `modules/${encodeURIComponent(module)}/records/`;
         const path =
           record_id === undefined ? `${base}propose/` : `${base}${record_id}/propose/`;
-        const body: Record<string, unknown> = { fields: fields ?? {}, intent };
-        if (title !== undefined) body.title = title;
+        const body = recordProposalRequestBody({
+          actionId: action_id,
+          title,
+          fields,
+          intent,
+          replaceProposal: replace_proposal,
+        });
         return postQuery(
           thread_id,
           path,
@@ -443,9 +604,15 @@ export default defineToolPlugin({
       name: "query_records_propose_batch",
       label: "Query: proponer varios cambios",
       description:
-        "Como query_record_propose pero para varios registros reales del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: esos se envian como attachments/public assets en una respuesta normal. Cada item puede traer record_id (actualizar), omitirlo (crear) o llevar delete: true con su record_id (eliminar ese registro). Un lote con borrados exige que la persona tenga permiso de eliminar en el modulo, se pinta en rojo y pide una confirmacion aparte. Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Despues, dile a la persona que revise la propuesta; no afirmes que los cambios quedaron hechos.",
+        "Como query_record_propose pero para varios registros reales del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. Si corriges un lote pendiente, incluye su action_id y envia la lista items completa corregida; Query actualiza la misma tarjeta. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: esos se envian como attachments/public assets en una respuesta normal. Cada item puede traer record_id (actualizar), omitirlo (crear) o llevar delete: true con su record_id (eliminar ese registro). Un lote con borrados exige que la persona tenga permiso de eliminar en el modulo, se pinta en rojo y pide una confirmacion aparte. Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Despues, dile a la persona que revise la propuesta; no afirmes que los cambios quedaron hechos.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
+        action_id: Type.Optional(
+          Type.String({
+            description:
+              "UUID del lote pendiente a corregir. Envia la lista items completa corregida.",
+          }),
+        ),
         module: Type.String({
           description: "Modulo donde se haran los cambios. Uno solo por lote.",
         }),
@@ -465,8 +632,8 @@ export default defineToolPlugin({
             ),
             fields: Type.Optional(
               Type.Record(Type.String(), Type.Unknown(), {
-                description:
-                  "Valores por slug, igual que en query_record_propose. En campos ref_ envia {id: ...} o {consecutivo: ...}.",
+            description:
+                  "Valores por slug, incluidos campos calculados como valor inicial, igual que en query_record_propose. En campos ref_ envia {id: ...} o {consecutivo: ...}.",
               }),
             ),
             delete: Type.Optional(
@@ -489,14 +656,14 @@ export default defineToolPlugin({
           }),
         ),
       }),
-      execute: async ({ thread_id, module, items, intent }, _config, context) => {
+      execute: async ({ thread_id, action_id, module, items, intent }, _config, context) => {
         if (containsGeneratedArtifactReference({ items, intent })) {
           return generatedArtifactAsRecordError();
         }
         return postQuery(
           thread_id,
           `modules/${encodeURIComponent(module)}/records/propose-batch/`,
-          { items, intent },
+          batchProposalRequestBody({ actionId: action_id, items, intent }),
           "query_records_propose_batch",
           context.api.logger,
         );
@@ -520,6 +687,35 @@ export default defineToolPlugin({
           "query_record_get",
           context.api.logger,
         ),
+    }),
+    tool({
+      name: "query_artifact_new_version",
+      label: "Query: conservar la version anterior de un archivo",
+      description:
+        "Usalo ANTES de volver a enviar un archivo cuando quieras conservar la version que ya mandaste. " +
+        "Por defecto, reenviar el mismo archivo reemplaza su contenido en Query: el enlace que la persona ya tiene sigue sirviendo y muestra la version al dia, sin repartir copias. " +
+        "Llama a esta herramienta solo cuando la version anterior deba seguir existiendo por separado -por ejemplo un informe que ya se aprobo y ahora preparas otra edicion-. " +
+        "Despues de llamarla, el siguiente envio de ese archivo crea un asset nuevo y deja el anterior intacto. " +
+        "No borra nada ni cambia lo ya enviado.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        path: Type.String({
+          description:
+            "Ruta local del archivo que vas a enviar, tal como la escribiste en tu workspace.",
+        }),
+      }),
+      execute: async ({ thread_id, path }, _config, context) => {
+        const { forgetArtifact } = await import("./artifact-store.js");
+        forgetArtifact(thread_id, path);
+        context.api.logger.info(
+          `query_artifact_new_version thread=${JSON.stringify(String(thread_id))}`,
+        );
+        return {
+          ok: true,
+          detail:
+            "El proximo envio de este archivo creara una copia nueva en Query y conservara la anterior.",
+        };
+      },
     }),
   ],
 });

@@ -1,11 +1,45 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 
 import { forgetDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
 import {
+  batchProposalRequestBody,
   callQuery,
   clearQueryMetadataCache,
   containsGeneratedArtifactReference,
+  recordProposalRequestBody,
+  uploadQueryAttachmentForThread,
 } from "./query-tools.js";
+
+describe("correccion de propuestas pendientes", () => {
+  it("propagates action_id and merge/replace semantics for one record", () => {
+    expect(
+      recordProposalRequestBody({
+        actionId: "348be349-a33d-11f1-a7b2-d843ae899220",
+        fields: { email: "correcto@example.com" },
+        replaceProposal: false,
+      }),
+    ).toEqual({
+      action_id: "348be349-a33d-11f1-a7b2-d843ae899220",
+      fields: { email: "correcto@example.com" },
+      replace_proposal: false,
+    });
+  });
+
+  it("propagates action_id when replacing a pending batch", () => {
+    expect(
+      batchProposalRequestBody({
+        actionId: "348be349-a33d-11f1-a7b2-d843ae899220",
+        items: [{ fields: { nombre: "Corregido" } }],
+      }),
+    ).toEqual({
+      action_id: "348be349-a33d-11f1-a7b2-d843ae899220",
+      items: [{ fields: { nombre: "Corregido" } }],
+    });
+  });
+});
 
 describe("containsGeneratedArtifactReference", () => {
   it("detects local generated artifacts in proposed record fields", () => {
@@ -30,6 +64,14 @@ describe("containsGeneratedArtifactReference", () => {
     ).toBe(true);
   });
 
+  it("detects Windows generated artifacts before a record proposal", () => {
+    expect(
+      containsGeneratedArtifactReference({
+        fields: { reporte: "C:\\workspace\\query\\artifacts\\reporte.xlsx" },
+      }),
+    ).toBe(true);
+  });
+
   it("does not block ordinary record data", () => {
     expect(
       containsGeneratedArtifactReference({
@@ -40,6 +82,78 @@ describe("containsGeneratedArtifactReference", () => {
         },
       }),
     ).toBe(false);
+  });
+});
+
+describe("query_attachment_send", () => {
+  it("reuses the delegated uploader and returns only Query attachment metadata", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-tool-attachment-"));
+    const filePath = join(directory, "dashboard.html");
+    await writeFile(filePath, "<h1>Query</h1>", "utf8");
+    rememberDelegatedAuth(
+      "thread-attachment",
+      { token: "delegated-upload-token", expires_in: 900 },
+      "wss://query.test/ws/openclaw-agent/8/",
+      "msg-attachment",
+    );
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 201,
+      json: async () => ({
+        id: 91,
+        kind: "file",
+        name: "dashboard.html",
+        mime_type: "text/html",
+        url: "https://query.test/media/agent_chat/dashboard.html",
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
+
+    try {
+      const result = (await uploadQueryAttachmentForThread({
+        threadId: "thread-attachment",
+        filePath,
+        message: "Dashboard listo",
+        log,
+      })) as Record<string, unknown>;
+
+      expect(result).toMatchObject({
+        ok: true,
+        thread_id: "thread-attachment",
+        public_url: "https://query.test/media/agent_chat/dashboard.html",
+        message: "Dashboard listo",
+        attachment: {
+          id: 91,
+          kind: "file",
+          name: "dashboard.html",
+          url: "https://query.test/media/agent_chat/dashboard.html",
+        },
+        media: {
+          url: "https://query.test/media/agent_chat/dashboard.html",
+          attachments: [
+            {
+              id: 91,
+              kind: "file",
+              name: "dashboard.html",
+              url: "https://query.test/media/agent_chat/dashboard.html",
+            },
+          ],
+        },
+      });
+      expect(JSON.stringify(result)).not.toContain(filePath);
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://query.test/api/v4/openclaw-agent/threads/thread-attachment/attachments/",
+        expect.objectContaining({
+          method: "POST",
+          headers: { "X-Query-Delegated-Token": "delegated-upload-token" },
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      forgetDelegatedAuth("thread-attachment");
+      await rm(directory, { recursive: true, force: true });
+    }
   });
 });
 

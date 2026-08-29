@@ -224,7 +224,7 @@ export function effortInstruction(mode: EffectiveQueryEffortMode): string {
     careful: "Valida duplicados, inconsistencias y el objetivo antes de una accion sensible. Comunica brevemente el enfoque y resume las validaciones realizadas.",
     exhaustive: "Haz una revision amplia, cruza la evidencia disponible y reporta riesgos residuales. Comunica avances concretos mientras trabajas.",
   };
-  return `[Politica de esfuerzo Query: ${mode}. ${instructions[mode]} La velocidad nunca reduce controles de seguridad ni autorizaciones. No expongas razonamiento interno.]`;
+  return `[Modo de trabajo Query: ${mode}. ${instructions[mode]} La velocidad nunca reduce controles de seguridad ni autorizaciones. No muestres cadenas privadas de razonamiento; publica avances breves y concretos cuando el trabajo tome tiempo.]`;
 }
 
 /** Activity remains user-configurable, but effort trims or expands its useful detail. */

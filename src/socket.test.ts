@@ -1,4 +1,5 @@
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { createServer } from "node:http";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { WebSocketServer, type WebSocket } from "ws";
@@ -152,6 +153,195 @@ describe("QuerySocketMonitor", () => {
     expect(diagnosticLog).toContain("created_by_id_present=true");
     expect(diagnosticLog).toContain("query_delegated_auth_stored");
     expect(diagnosticLog).not.toContain("delegated-secret");
+
+    controller.abort();
+    await monitor.stop();
+  });
+
+  it("uploads a local HTML from mediaUrls and sends only the Query attachment", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-socket-artifact-"));
+    const filePath = join(directory, "dashboard.html");
+    await writeFile(filePath, "<h1>Dashboard</h1>", "utf8");
+    let delegatedToken = "";
+    const httpServer = createServer((request, response) => {
+      if (request.url?.includes("/attachments/")) {
+        delegatedToken = String(request.headers["x-query-delegated-token"] ?? "");
+        request.resume();
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            id: 73,
+            kind: "file",
+            name: "dashboard.html",
+            mime_type: "text/html",
+            url: "https://query.test/media/agent_chat/dashboard.html",
+          }),
+        );
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    const server = new WebSocketServer({ server: httpServer });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const controller = new AbortController();
+    cleanupTasks.push(async () => {
+      controller.abort();
+      for (const client of server.clients) client.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      forgetDelegatedAuth("thread-artifact");
+      await rm(directory, { recursive: true, force: true });
+    });
+    const account: ResolvedQueryAccount = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      url: `ws://127.0.0.1:${address.port}/ws/openclaw-agent/8/`,
+      token: "bot-secret",
+      heartbeatMs: 5_000,
+      reconnectMinMs: 100,
+      reconnectMaxMs: 1_000,
+      responseTimeoutMs: 0,
+      stateFile: join(directory, "responses.json"),
+    };
+    let status = { accountId: "default" } as never;
+    const monitor = new QuerySocketMonitor({
+      cfg: { channels: { query: {} } } as never,
+      account,
+      runtime: { error: vi.fn() } as never,
+      abortSignal: controller.signal,
+      getStatus: () => status,
+      setStatus: (next) => {
+        status = next as never;
+      },
+      dispatchMessage: vi.fn(async () => ({
+        text: "Dashboard listo.",
+        mediaUrls: [filePath],
+      })),
+    });
+
+    const connection = new Promise<WebSocket>((resolve) => server.once("connection", resolve));
+    await monitor.start();
+    const socket = await connection;
+    socket.send(
+      JSON.stringify({
+        type: "session.ready",
+        role: "system",
+        content: "",
+        data: { protocol: "query-openclaw.v2", thread_id: "thread-artifact" },
+      }),
+    );
+    socket.send(
+      JSON.stringify({
+        type: "message",
+        role: "user",
+        content: "genera un dashboard html",
+        client_msg_id: "msg-artifact",
+        thread_id: "thread-artifact",
+        data: {
+          attachments: [],
+          delegated_auth: { token: "delegated-artifact-token", expires_in: 900 },
+        },
+      }),
+    );
+
+    await expect(receive(socket)).resolves.toMatchObject({ type: "activity" });
+    const response = await receive(socket);
+    expect(delegatedToken).toBe("delegated-artifact-token");
+    expect(response).toMatchObject({
+      type: "message",
+      content: "Dashboard listo.",
+      data: {
+        attachments: [
+          {
+            id: 73,
+            kind: "file",
+            name: "dashboard.html",
+            url: "https://query.test/media/agent_chat/dashboard.html",
+          },
+        ],
+      },
+    });
+    expect(JSON.stringify(response)).not.toContain(filePath);
+
+    controller.abort();
+    await monitor.stop();
+  }, 10_000);
+
+  it("removes a local path from final text even when no upload credential exists", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-socket-blocked-path-"));
+    const server = new WebSocketServer({ port: 0 });
+    const address = server.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    const controller = new AbortController();
+    cleanupTasks.push(async () => {
+      controller.abort();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    });
+    const leakedPath = "C:\\workspace\\query\\secret-report.pdf";
+    const warnings = vi.fn();
+    const account: ResolvedQueryAccount = {
+      accountId: "default",
+      enabled: true,
+      configured: true,
+      url: `ws://127.0.0.1:${address.port}/ws/openclaw-agent/8/`,
+      token: "bot-secret",
+      heartbeatMs: 5_000,
+      reconnectMinMs: 100,
+      reconnectMaxMs: 1_000,
+      responseTimeoutMs: 0,
+      stateFile: join(directory, "responses.json"),
+    };
+    let status = { accountId: "default" } as never;
+    const monitor = new QuerySocketMonitor({
+      cfg: { channels: { query: {} } } as never,
+      account,
+      runtime: { error: vi.fn() } as never,
+      abortSignal: controller.signal,
+      getStatus: () => status,
+      setStatus: (next) => {
+        status = next as never;
+      },
+      dispatchMessage: vi.fn(async () => ({
+        text: `Reporte listo: ${leakedPath}`,
+        mediaUrls: [],
+      })),
+      log: { warn: warnings },
+    });
+
+    const connection = new Promise<WebSocket>((resolve) => server.once("connection", resolve));
+    await monitor.start();
+    const socket = await connection;
+    socket.send(
+      JSON.stringify({
+        type: "session.ready",
+        role: "system",
+        content: "",
+        data: { protocol: "query-openclaw.v2", thread_id: "thread-no-auth" },
+      }),
+    );
+    socket.send(
+      JSON.stringify({
+        type: "message",
+        role: "user",
+        content: "genera el reporte",
+        client_msg_id: "msg-no-auth",
+        thread_id: "thread-no-auth",
+        data: { attachments: [] },
+      }),
+    );
+
+    await expect(receive(socket)).resolves.toMatchObject({ type: "activity" });
+    const response = await receive(socket);
+    expect(response.type).toBe("message");
+    expect(response.content).toContain("Reporte listo");
+    expect(response.content).toContain("archivo privado no entregado");
+    expect(response.content).not.toContain(leakedPath);
+    expect(warnings.mock.calls.flat().join("\n")).not.toContain(leakedPath);
 
     controller.abort();
     await monitor.stop();

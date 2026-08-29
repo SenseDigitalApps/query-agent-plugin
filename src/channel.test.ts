@@ -1,5 +1,9 @@
 import { WebSocketServer, type WebSocket } from "ws";
 import { afterEach, describe, expect, it } from "vitest";
+import { createServer } from "node:http";
+import { mkdtemp, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
 import { sendOutboundEvent, uploadTargetForOutbound } from "./channel.js";
 import type { QueryConfig, QueryOutboundEvent } from "./types.js";
 
@@ -88,5 +92,80 @@ describe("sendOutboundEvent", () => {
       conversationId: "53",
       meta: { accountId: "cli" },
     });
+  }, 10_000);
+
+  it("uploads an outbound local artifact with the bot credential and never sends its path", async () => {
+    const directory = await mkdtemp(join(tmpdir(), "query-outbound-artifact-"));
+    const filePath = join(directory, "reporte.html");
+    await writeFile(filePath, "<h1>Reporte</h1>", "utf8");
+    let uploadToken = "";
+    const httpServer = createServer((request, response) => {
+      if (request.url?.includes("/attachments/")) {
+        uploadToken = String(request.headers["x-agent-token"] ?? "");
+        request.resume();
+        response.writeHead(201, { "content-type": "application/json" });
+        response.end(
+          JSON.stringify({
+            id: 44,
+            kind: "file",
+            name: "reporte.html",
+            mime_type: "text/html",
+            url: "https://query.test/media/agent_chat/reporte.html",
+          }),
+        );
+        return;
+      }
+      response.writeHead(404);
+      response.end();
+    });
+    const server = new WebSocketServer({ server: httpServer });
+    await new Promise<void>((resolve) => httpServer.listen(0, "127.0.0.1", resolve));
+    const address = httpServer.address();
+    if (!address || typeof address === "string") throw new Error("No test server address");
+    cleanupTasks.push(async () => {
+      for (const client of server.clients) client.terminate();
+      await new Promise<void>((resolve) => server.close(() => resolve()));
+      await new Promise<void>((resolve) => httpServer.close(() => resolve()));
+      await rm(directory, { recursive: true, force: true });
+    });
+
+    const event = new Promise<QueryOutboundEvent>((resolve, reject) => {
+      server.once("connection", (socket) => receive(socket).then(resolve, reject));
+      server.once("error", reject);
+    });
+    await sendOutboundEvent({
+      cfg: {
+        channels: {
+          query: {
+            accounts: {
+              cron: {
+                enabled: true,
+                url: `ws://127.0.0.1:${address.port}/ws/openclaw-agent/8/`,
+                token: "bot-cron-token",
+              },
+            },
+          },
+        },
+      } as QueryConfig,
+      accountId: "cron",
+      to: "channel:53",
+      threadId: "53",
+      text: `Reporte listo: ${filePath}`,
+      deliveryQueueId: "cron-artifact-1",
+    });
+
+    const sent = await event;
+    expect(uploadToken).toBe("bot-cron-token");
+    expect(sent.content).toBe(
+      "Reporte listo: https://query.test/media/agent_chat/reporte.html",
+    );
+    expect(sent.content).not.toContain(filePath);
+    expect(sent.data.attachments).toEqual([
+      expect.objectContaining({
+        id: 44,
+        name: "reporte.html",
+        url: "https://query.test/media/agent_chat/reporte.html",
+      }),
+    ]);
   }, 10_000);
 });

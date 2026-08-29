@@ -175,7 +175,19 @@ describe("Query inbound dispatch recovery", () => {
     });
     expect(dispatchReply.mock.calls[0][0].toolsAllow).toBeUndefined();
     expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
-      "Termina siempre con texto visible o un archivo visible",
+      "cierra este turno con contenido visible para la persona",
+    );
+    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
+      "query_attachment_send",
+    );
+    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
+      "Puedes usar LocalPath y rutas locales para leer adjuntos recibidos o crear archivos internamente",
+    );
+    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
+      "No uses registros de negocio para entregar archivos",
+    );
+    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
+      "El usuario final esta en otro computador",
     );
     expect(dispatchReply.mock.calls[1][0].toolsAllow).toEqual([]);
     expect(dispatchReply.mock.calls[1][0].ctxPayload.BodyForAgent).toContain(
@@ -186,5 +198,61 @@ describe("Query inbound dispatch recovery", () => {
     expect(warn).toHaveBeenCalledWith(
       expect.stringContaining("query_empty_reply_recovery msg=turn-empty-1"),
     );
+  });
+
+  it("keeps asset, visible-response, intervention, and private-cron rules together", async () => {
+    const dispatchReply = vi.fn(async (params: any) => {
+      await params.delivery.deliver({ text: "Intervencion recibida." });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: "agent:query:test-thread",
+      };
+    });
+    setQueryRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "agent",
+            accountId: "default",
+            sessionKey: "agent:query:test-thread",
+          }),
+        },
+        session: {
+          resolveStorePath: () => "sessions.json",
+          recordInboundSession: vi.fn(),
+        },
+        inbound: { dispatchReply },
+        reply: { dispatchReplyWithBufferedBlockDispatcher: vi.fn() },
+      },
+    } as never);
+
+    await dispatchQueryMessage({
+      cfg: { channels: { query: {} } } as QueryConfig,
+      account,
+      threadId: "test-thread",
+      event: {
+        type: "message",
+        role: "user",
+        content: "agrega este dato",
+        client_msg_id: "turn-intervene-policy",
+        thread_id: "test-thread",
+        data: {
+          attachments: [],
+          delivery_mode: "intervene",
+          sender: { private_thread_id: "private-22" },
+        },
+      },
+    });
+
+    const body = dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent as string;
+    expect(body).toContain("/queue steer");
+    expect(body).toContain("No uses NO_REPLY");
+    expect(body).toContain("subelo con query_attachment_send");
+    expect(body).toContain("nunca las muestres como entrega final");
+    expect(body).toContain("Canal privado del remitente: private-22");
+    expect(body).toContain("[Entrega de tareas programadas:");
+    expect(body).toContain("entrega el resultado en su canal privado private-22");
   });
 });

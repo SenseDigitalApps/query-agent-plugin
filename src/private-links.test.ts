@@ -180,4 +180,52 @@ describe("rewritePrivateArtifactLinks", () => {
     expect(result.text).not.toContain("100.114.172.42");
     expect(result.blockedUrls).toEqual(["http://100.114.172.42:8787/fallo.html"]);
   });
+
+  it.each([
+    "http://localhost:8787/reporte.pdf",
+    "http://0.0.0.0:3000/reporte.pdf",
+    "http://10.20.30.40/reporte.pdf",
+    "http://172.20.0.8/reporte.pdf",
+    "http://192.168.1.9/reporte.pdf",
+    "http://100.100.10.20/reporte.pdf",
+    "https://agente.tailnet-name.ts.net/reporte.pdf",
+  ])("never exposes private delivery URL %s", async (privateUrl) => {
+    const result = await rewritePrivateArtifactLinks({
+      text: `Archivo listo: ${privateUrl}`,
+      upload: async () => {
+        throw new Error("unavailable");
+      },
+    });
+
+    expect(result.text).not.toContain(privateUrl);
+    expect(result.blockedUrls).toEqual([privateUrl]);
+  });
+
+  it("removes unresolved Linux and Windows paths", async () => {
+    const linux = "/tmp/query/no-existe/reporte.pdf";
+    const windows = "C:\\workspace\\query\\reporte.xlsx";
+    const result = await rewritePrivateArtifactLinks({
+      text: `Linux: ${linux}\nWindows: ${windows}`,
+      upload: async () => {
+        throw new Error("should not upload missing files");
+      },
+    });
+
+    expect(result.text).not.toContain(linux);
+    expect(result.text).not.toContain(windows);
+    expect(result.blockedUrls).toEqual([linux, windows]);
+  });
+
+  it("blocks a fabricated public URL with an unresolved local path", async () => {
+    const leakedUrl = "https://downloads.example.com/home/ubuntu/workspace/no-existe.html";
+    const result = await rewritePrivateArtifactLinks({
+      text: `Mira ${leakedUrl}`,
+      upload: async () => {
+        throw new Error("should not upload missing files");
+      },
+    });
+
+    expect(result.text).not.toContain(leakedUrl);
+    expect(result.blockedUrls).toEqual([leakedUrl]);
+  });
 });
