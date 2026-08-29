@@ -364,6 +364,8 @@ export type ActivityCandidate = {
   toolName?: string;
   progress?: number;
   runId?: string;
+  /** Origen publico del paso: comentario, plan, herramienta o ciclo de vida. */
+  source?: string;
   /**
    * Latido: repite el ultimo estado para que el turno conserve el lease. No
    * cuenta como paso nuevo ni reinicia el throttle.
@@ -379,6 +381,7 @@ export type NormalizedActivity = {
   toolName?: string;
   progress?: number;
   runId?: string;
+  source?: string;
   visibility: QueryActivityVisibility;
   heartbeat: boolean;
 };
@@ -405,10 +408,11 @@ export type ActivityGateOptions = {
   throttleMs?: number;
 };
 
+/** Solo `lite` conserva el comportamiento silencioso para instalaciones que lo pidan. */
 export const DEFAULT_QUIET_MS = 4_000;
 export const DEFAULT_THROTTLE_MS = 3_500;
-/** En verbose quien mira quiere ver el detalle, no una version comoda. */
-export const VERBOSE_THROTTLE_MS = 1_500;
+/** Smart y verbose forman una bitacora: no descartan pasos por tiempo. */
+export const TRACE_THROTTLE_MS = 0;
 
 export type ActivityGate = {
   readonly mode: QueryActivityMode;
@@ -452,6 +456,7 @@ function normalize(
     toolName,
     progress: candidate.keepalive ? undefined : progress,
     runId: candidate.runId,
+    source: sanitizeToolName(candidate.source),
     visibility: template.visibility,
     heartbeat: Boolean(candidate.keepalive),
   };
@@ -478,15 +483,10 @@ export function createActivityGate(options: ActivityGateOptions): ActivityGate {
   // defecto es preferible a que la telemetria tumbe el turno que decoraba.
   const mode = parseActivityMode(options.mode) ?? DEFAULT_ACTIVITY_MODE;
   const audience = MODE_AUDIENCE[mode];
-  const quietMs =
-    mode === "smart" || mode === "lite"
-      ? (options.quietMs ?? DEFAULT_QUIET_MS)
-      : 0;
+  const quietMs = mode === "lite" ? (options.quietMs ?? DEFAULT_QUIET_MS) : 0;
   const throttleMs =
     options.throttleMs ??
-    (mode === "verbose" || mode === "debug-internal"
-      ? VERBOSE_THROTTLE_MS
-      : DEFAULT_THROTTLE_MS);
+    (mode === "lite" ? DEFAULT_THROTTLE_MS : TRACE_THROTTLE_MS);
 
   let lastLabel = ACTIVITY_CATALOG.working.label;
   let lastKind: QueryActivityKind = "working";

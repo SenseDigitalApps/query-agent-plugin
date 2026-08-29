@@ -54,7 +54,7 @@ describe("Query effort policy", () => {
   });
 
   it("coordinates activity verbosity with effective effort", () => {
-    expect(activityModeForEffort("smart", "fast")).toBe("lite");
+    expect(activityModeForEffort("smart", "fast")).toBe("smart");
     expect(activityModeForEffort("lite", "careful")).toBe("verbose");
     expect(activityModeForEffort("off", "exhaustive")).toBe("off");
   });
@@ -62,9 +62,9 @@ describe("Query effort policy", () => {
   it("asks for useful public progress without exposing private reasoning", () => {
     const instruction = effortInstruction("normal");
     expect(instruction).toContain("[Modo de trabajo Query: normal.");
-    expect(instruction).toContain("publica comentarios breves en primera persona");
-    expect(instruction).toContain("subproblema concreto");
+    expect(instruction).toContain("bitácora pública breve y fiel");
+    expect(instruction).toContain("antes de cada decisión");
     expect(instruction).toContain("No uses frases vacías");
-    expect(instruction).toContain("No muestres cadenas privadas de razonamiento");
+    expect(instruction).toContain("no muestres razonamiento interno");
   });
 });

@@ -132,9 +132,17 @@ describe("QuerySocketMonitor", () => {
       client_msg_id: "msg-7",
       data: { state: "working", stage: "received" },
     });
-    // El turno se resuelve en milisegundos, asi que el paso de herramienta se
-    // queda dentro del silencio inicial. El borrador publico si viaja como un
-    // delta reemplazable antes de la respuesta terminal.
+    // Smart conserva cada paso semantico incluso en turnos rapidos.
+    await expect(receive(socket)).resolves.toMatchObject({
+      type: "activity",
+      client_msg_id: "msg-7",
+      data: {
+        label: "Consultando inventario",
+        sequence: 2,
+      },
+    });
+    // El borrador publico sigue viajando como delta reemplazable antes de la
+    // respuesta terminal.
     await expect(receive(socket)).resolves.toMatchObject({
       type: "message.delta",
       content: "Estoy armando la respuesta.",

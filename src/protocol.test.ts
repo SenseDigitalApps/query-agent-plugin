@@ -105,12 +105,18 @@ describe("Query protocol", () => {
       effortModeEffective: "careful",
       effortEscalated: true,
       effortReason: "sensitive_write",
+      runId: "run-7",
+      sequence: 3,
+      source: "commentary",
     });
     expect(event.data).toMatchObject({
       effort_mode_configured: "auto",
       effort_mode_effective: "careful",
       effort_escalated: true,
       effort_escalation_reason: "sensitive_write",
+      run_id: "run-7",
+      sequence: 3,
+      source: "commentary",
     });
   });
 

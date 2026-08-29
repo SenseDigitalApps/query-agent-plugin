@@ -81,6 +81,8 @@ export function activityEvent(params: {
   progress?: number;
   toolName?: string;
   runId?: string;
+  sequence?: number;
+  source?: string;
   heartbeat?: boolean;
   elapsedMs?: number;
   /** Paso canonico; deja que Query agrupe sin volver a leer la etiqueta. */
@@ -102,6 +104,8 @@ export function activityEvent(params: {
     clientMsgId,
     toolName,
     runId,
+    sequence,
+    source,
     elapsedMs,
     effortModeConfigured,
     effortModeEffective,
@@ -122,6 +126,8 @@ export function activityEvent(params: {
         ...data,
         tool_name: toolName,
         run_id: runId,
+        sequence,
+        source,
         elapsed_ms: elapsedMs,
         effort_mode_configured: effortModeConfigured,
         effort_mode_effective: effortModeEffective,

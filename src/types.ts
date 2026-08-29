@@ -259,6 +259,7 @@ export type QueryAgentActivity = {
   toolName?: string;
   progress?: number;
   runId?: string;
+  source?: string;
   visibility?: QueryActivityVisibility;
   effortModeConfigured?: QueryEffortMode;
   effortModeEffective?: Exclude<QueryEffortMode, "auto">;

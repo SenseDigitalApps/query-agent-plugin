@@ -293,13 +293,15 @@ lugar, `smart`.
 | --- | --- |
 | `off` | Nada. El latido sigue saliendo marcado como interno para que Query sepa que el turno vive. |
 | `lite` | Acuse de recibo; si pasan 4 s, también el último comentario público concreto del agente. |
-| `smart` | Acuse inmediato y, si el turno pasa de 4 s, los pasos útiles con un máximo de uno cada 3,5 s. |
-| `verbose` | Sin espera inicial, throttle de 1,5 s y además los pasos de mantenimiento marcados `admin`. |
+| `smart` | Bitácora pública inmediata: comentarios, planes y ciclos de herramientas, sin descartar pasos por tiempo. |
+| `verbose` | La misma bitácora completa y además los pasos de mantenimiento marcados `admin`. |
 | `debug-internal` | Todo, incluido lo marcado `internal`. Solo para el panel interno. |
 
-Cada evento viaja con `kind` (paso canónico) y `visibility`
-(`public` / `admin` / `internal`). Query filtra por `visibility` antes de
+Cada evento viaja con `kind` (paso canónico), `run_id`, `sequence`, `source` y
+`visibility` (`public` / `admin` / `internal`). Query filtra por `visibility` antes de
 reenviar al chat, así que un paso `admin` llega al panel pero no a la persona.
+La secuencia permite que Query persista reintentos de forma idempotente sin
+confundir dos pasos iguales que sí ocurrieron en momentos distintos.
 
 Los estados operativos salen de un catálogo fijo en `src/activity-policy.ts` y
 no requieren una segunda llamada al modelo. El evento público

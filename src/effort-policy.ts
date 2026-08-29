@@ -224,7 +224,7 @@ export function effortInstruction(mode: EffectiveQueryEffortMode): string {
     careful: "Valida duplicados, inconsistencias y el objetivo antes de una accion sensible. Comunica brevemente el enfoque y resume las validaciones realizadas.",
     exhaustive: "Haz una revision amplia, cruza la evidencia disponible y reporta riesgos residuales. Comunica avances concretos mientras trabajas.",
   };
-  return `[Modo de trabajo Query: ${mode}. ${instructions[mode]} La velocidad nunca reduce controles de seguridad ni autorizaciones. Si el trabajo tarda, publica comentarios breves en primera persona antes de cada etapa: menciona el subproblema concreto, la fuente o dato que vas a comprobar y qué esperas decidir con eso. Actualiza el comentario al cambiar de etapa o si una consulta se demora. No uses frases vacías como "sigo revisando" o "estoy trabajando". No muestres cadenas privadas de razonamiento, prompts, secretos, rutas ni payloads.]`;
+  return `[Modo de trabajo Query: ${mode}. ${instructions[mode]} La velocidad nunca reduce controles de seguridad ni autorizaciones. Mantén una bitácora pública breve y fiel: publica un comentario en primera persona antes de cada decisión o etapa relevante, antes de usar una herramienta y después de recibir su resultado. En cada comentario explica qué vas a comprobar, por qué importa para la solicitud y qué decisión permitirá tomar. Publica otro comentario al cambiar de hipótesis, validar, reintentar o encontrar un bloqueo. No uses frases vacías como "sigo revisando" o "estoy trabajando". Esta bitácora es un resumen operativo, no una cadena privada de razonamiento: no muestres razonamiento interno, prompts, secretos, rutas, argumentos ni payloads.]`;
 }
 
 /** Activity remains user-configurable, but effort trims or expands its useful detail. */
@@ -233,7 +233,10 @@ export function activityModeForEffort(
   effortMode: EffectiveQueryEffortMode,
 ) {
   if (activityMode === "off" || activityMode === "debug-internal") return activityMode;
-  if (effortMode === "fast") return "lite" as const;
+  // El esfuerzo controla cuanto analiza el agente, no si Query pierde la
+  // bitacora publica. Solo una cuenta configurada explicitamente como `lite`
+  // conserva ese comportamiento reducido.
+  if (effortMode === "fast") return activityMode;
   if (effortMode === "careful" || effortMode === "exhaustive") return "verbose" as const;
   return activityMode === "lite" ? "smart" as const : activityMode;
 }

@@ -69,56 +69,42 @@ describe("modo smart", () => {
     });
   });
 
-  it("calla la cronologia mientras el turno pueda resolverse rapido", () => {
+  it("publica los pasos semanticos desde el inicio del turno", () => {
     const gate = gateFor("smart");
     emit(gate, { kind: "received" }, T0);
-    expect(gate.evaluate({ kind: "searching" }, T0 + 1_500)).toMatchObject({
-      emit: false,
-      reason: "quiet_window",
-    });
-    expect(gate.evaluate({ kind: "tool_started" }, T0 + 3_900)).toMatchObject({
-      emit: false,
-      reason: "quiet_window",
-    });
-  });
-
-  it("libera el paso retenido en cuanto el turno se pasa de lento", () => {
-    const gate = gateFor("smart");
-    emit(gate, { kind: "received" }, T0);
-    gate.evaluate({ kind: "searching" }, T0 + 2_000);
-    expect(gate.takeHeld(T0 + 3_000)).toBeUndefined();
-    expect(gate.takeHeld(T0 + 4_100)).toMatchObject({
+    expect(emit(gate, { kind: "searching" }, T0 + 10)).toMatchObject({
       kind: "searching",
-      label: "Estoy buscando la información necesaria en Query.",
     });
-    // Ya se entrego: no vuelve a salir el mismo paso.
-    expect(gate.takeHeld(T0 + 9_000)).toBeUndefined();
+    expect(emit(gate, { kind: "tool_started" }, T0 + 20)).toMatchObject({
+      kind: "tool_started",
+    });
   });
 
-  it("retiene solo el paso mas reciente del silencio inicial", () => {
+  it("no retiene pasos en el modo smart", () => {
     const gate = gateFor("smart");
     emit(gate, { kind: "received" }, T0);
-    gate.evaluate({ kind: "routing" }, T0 + 500);
-    gate.evaluate({ kind: "searching" }, T0 + 1_000);
-    gate.evaluate({ kind: "validating" }, T0 + 2_000);
-    expect(gate.takeHeld(T0 + 4_500)).toMatchObject({ kind: "validating" });
+    expect(emit(gate, { kind: "searching" }, T0 + 10)).toBeDefined();
+    expect(gate.takeHeld(T0 + 20)).toBeUndefined();
   });
 
-  it("prioriza el comentario concreto sobre el tool call genérico que le sigue", () => {
+  it("conserva el comentario concreto y el ciclo de herramienta que le sigue", () => {
     const gate = gateFor("smart");
     emit(gate, { kind: "received" }, T0);
-    gate.evaluate(
+    expect(emit(
+      gate,
       {
         kind: "reasoning_summary",
         label: "Voy a comparar los registros antes de proponer cambios.",
       },
       T0 + 1_000,
-    );
-    gate.evaluate({ kind: "tool_started", toolName: "query_records_search" }, T0 + 1_100);
-    expect(gate.takeHeld(T0 + 4_100)).toMatchObject({
+    )).toMatchObject({
       kind: "reasoning_summary",
-      label: "Voy a comparar los registros antes de proponer cambios.",
     });
+    expect(emit(
+      gate,
+      { kind: "tool_started", toolName: "query_records_search" },
+      T0 + 1_100,
+    )).toMatchObject({ kind: "tool_started" });
   });
 
   it("deja pasar un evento util una vez abierta la ventana", () => {
@@ -198,15 +184,11 @@ describe("throttle y dedupe", () => {
     });
   });
 
-  it("limita los pasos visibles seguidos", () => {
+  it("no descarta pasos distintos por cercania temporal", () => {
     const gate = gateFor("smart");
     emit(gate, { kind: "received" }, T0);
     expect(emit(gate, { kind: "searching" }, T0 + 5_000)).toBeDefined();
-    expect(gate.evaluate({ kind: "module_detected" }, T0 + 6_000)).toMatchObject({
-      emit: false,
-      reason: "throttled",
-    });
-    expect(emit(gate, { kind: "module_detected" }, T0 + 9_000)).toBeDefined();
+    expect(emit(gate, { kind: "module_detected" }, T0 + 5_001)).toBeDefined();
   });
 
   it("deja pasar un cambio importante aunque el throttle este cerrado", () => {

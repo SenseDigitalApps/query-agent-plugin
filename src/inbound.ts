@@ -93,14 +93,14 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
     : undefined;
 
   if (event.stream === "lifecycle") {
-    if (phase === "start") return { kind: "routing" };
-    if (phase === "finishing") return { kind: "finalizing" };
-    if (phase === "fallback_step") return { kind: "retrying" };
+    if (phase === "start") return { kind: "routing", source: "lifecycle" };
+    if (phase === "finishing") return { kind: "finalizing", source: "lifecycle" };
+    if (phase === "fallback_step") return { kind: "retrying", source: "lifecycle" };
     return undefined;
   }
   if (event.stream === "tool") {
     const finished = phase === "end" || phase === "done" || phase === "complete";
-    return { ...activityForTool(toolName, finished), toolName, progress };
+    return { ...activityForTool(toolName, finished), toolName, progress, source: "tool" };
   }
   if (event.stream === "item") {
     const itemKind = boundedText(event.data.kind, 32)?.toLowerCase();
@@ -110,7 +110,7 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
         240,
       );
       return commentary
-        ? { kind: "reasoning_summary", label: commentary }
+        ? { kind: "reasoning_summary", label: commentary, source: "commentary" }
         : undefined;
     }
   }
@@ -119,13 +119,13 @@ function activityFromAgentEvent(event: AgentEventPayload): QueryAgentActivity | 
       event.data.explanation ?? event.data.title ?? event.data.summary,
       240,
     );
-    return summary ? { kind: "reasoning_summary", label: summary } : undefined;
+    return summary ? { kind: "reasoning_summary", label: summary, source: "plan" } : undefined;
   }
   if (event.stream === "compaction") {
-    return { kind: "context" };
+    return { kind: "context", source: "lifecycle" };
   }
   if (event.stream === "assistant") {
-    return { kind: "finalizing" };
+    return { kind: "finalizing", source: "assistant" };
   }
   // `thinking` es privado. Tampoco lo convertimos en un estado genérico porque
   // podría reemplazar el último comentario público y volver a fingir progreso.
@@ -807,6 +807,7 @@ export async function dispatchQueryMessage(params: {
             ...activityForTool(toolName, false),
             toolName,
             runId,
+            source: "tool",
           });
         },
         onItemEvent: (item) => {
@@ -817,6 +818,7 @@ export async function dispatchQueryMessage(params: {
               kind: "reasoning_summary",
               label: commentary,
               runId,
+              source: itemKind === "preamble" ? "commentary" : "item",
             });
             return;
           }
@@ -829,6 +831,7 @@ export async function dispatchQueryMessage(params: {
               ...activityForTool(toolName, finished),
               toolName,
               runId,
+              source: "tool",
             });
           }
         },
@@ -839,6 +842,7 @@ export async function dispatchQueryMessage(params: {
               kind: "reasoning_summary",
               label: summary,
               runId,
+              source: "plan",
             });
           }
         },

@@ -640,6 +640,7 @@ export class QuerySocketMonitor {
       startedAt: receivedAt,
     });
     let firstVisibleAt: number | undefined;
+    let activitySequence = 0;
     const deliverActivity = (activity: NormalizedActivity) => {
       if (firstVisibleAt === undefined && activity.visibility === "public") {
         firstVisibleAt = Date.now();
@@ -657,6 +658,8 @@ export class QuerySocketMonitor {
             toolName: activity.toolName,
             progress: activity.progress,
             runId: activity.runId,
+            sequence: ++activitySequence,
+            source: activity.source,
             heartbeat: activity.heartbeat || undefined,
             visibility: activity.visibility,
             elapsedMs: Date.now() - receivedAt,
