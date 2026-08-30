@@ -339,7 +339,10 @@ describe("Query inbound dispatch recovery", () => {
     expect(body).toContain("subelo con query_attachment_send");
     expect(body).toContain("nunca las muestres como entrega final");
     expect(body).toContain("Canal privado del remitente: private-22");
-    expect(body).toContain("[Entrega de tareas programadas:");
-    expect(body).toContain("entrega el resultado en su canal privado private-22");
+    expect(body).toContain("[Destino de tareas programadas:");
+    expect(body).toContain("conserva el canal actual como destino");
+    expect(body).toContain(
+      "canal privado private-22 solo si el usuario pide expresamente",
+    );
   });
 });

@@ -12,7 +12,7 @@ import {
 import type { QueryResolvedAction, QueryUserMessageEvent } from "./types.js";
 
 describe("Query inbound body", () => {
-  it("separates channel metadata from personal scheduled-delivery rules", () => {
+  it("preserves the current topic unless private delivery is explicit", () => {
     const body = bodyForAgent({
       type: "message",
       role: "user",
@@ -29,8 +29,12 @@ describe("Query inbound body", () => {
     expect(body).toContain("[Contexto de Query: Canal actual: Video");
     expect(body).toContain("Tipo de canal: topic compartido");
     expect(body).toContain("Canal privado del remitente: 22");
-    expect(body).toContain("[Entrega de tareas programadas:");
-    expect(body).toContain("entrega el resultado en su canal privado 22");
+    expect(body).toContain("[Destino de tareas programadas:");
+    expect(body).toContain("conserva el canal actual como destino");
+    expect(body).toContain("canal privado 22 solo si el usuario pide expresamente");
+    expect(body).toContain(
+      "No interpretes la mera existencia de un canal privado como señal",
+    );
   });
 
   it("does not invent a private destination when Query did not provide one", () => {
@@ -44,7 +48,7 @@ describe("Query inbound body", () => {
     });
 
     expect(body).toContain("Tipo de canal: topic compartido");
-    expect(body).not.toContain("Entrega de tareas programadas");
+    expect(body).not.toContain("Destino de tareas programadas");
     expect(body).not.toContain("canal privado indicado");
   });
 

@@ -586,7 +586,7 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
     .filter(Boolean)
     .join(". ");
   const scheduledDeliveryHint = privateThreadId
-    ? `\n\n[Entrega de tareas programadas: si programas una tarea personal para este remitente, entrega el resultado en su canal privado ${privateThreadId}. No uses un canal compartido como destino individual.]`
+    ? `\n\n[Destino de tareas programadas: conserva el canal actual como destino cuando el usuario pida publicar aqui, en este canal, o cuando la automatizacion sea tematica para este topic. Usa el canal privado ${privateThreadId} solo si el usuario pide expresamente una entrega personal o privada. No interpretes la mera existencia de un canal privado como señal de que la tarea es personal. Si el destino es realmente ambiguo, preguntalo antes de crear la tarea.]`
     : "";
   const audioHint = messageRequestsAudio(event)
     ? "\n\n[Respuesta de audio en Query: Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]"
