@@ -48,7 +48,9 @@ describe("Query inbound body", () => {
     });
 
     expect(body).toContain("Tipo de canal: topic compartido");
-    expect(body).not.toContain("Destino de tareas programadas");
+    expect(body).toContain("Destino de tareas programadas");
+    expect(body).toContain("conserva el canal actual como destino");
+    expect(body).toContain("query_delivery_targets");
     expect(body).not.toContain("canal privado indicado");
   });
 

@@ -12,6 +12,7 @@ import type {
   QueryOutboundEvent,
   QuerySessionReadyEvent,
   QueryScheduleCancelEvent,
+  QueryScheduleProbeEvent,
   QueryUserMessageEvent,
 } from "./types.js";
 
@@ -45,6 +46,16 @@ export function parseQueryEvent(raw: string): QueryInboundEvent | null {
     Array.isArray(value.data.external_ids)
   ) {
     return value as QueryScheduleCancelEvent;
+  }
+  if (
+    value.type === "schedule.probe" &&
+    value.role === "system" &&
+    isRecord(value.data) &&
+    typeof value.data.probe_id === "string" &&
+    typeof value.data.external_id === "string" &&
+    (typeof value.thread_id === "string" || typeof value.thread_id === "number")
+  ) {
+    return value as QueryScheduleProbeEvent;
   }
   if (
     value.type === "message" &&

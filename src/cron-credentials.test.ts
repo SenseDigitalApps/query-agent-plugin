@@ -17,10 +17,14 @@ import {
   rememberDelegatedAuth,
 } from "./delegated-store.js";
 import { evaluateGoogleToolCall } from "./google-guard.js";
-import { forgetQuerySession } from "./query-session-store.js";
+import {
+  forgetQuerySession,
+  rememberQuerySession,
+} from "./query-session-store.js";
 
 const SOCKET = "wss://apius.itsquery.com/ws/openclaw-agent/3/?token=x";
 const THREAD = "private-42";
+const ORIGIN_THREAD = "private-admin";
 const SESSION = "query:agente:private-42";
 
 let stateDirectory: string;
@@ -33,6 +37,7 @@ const requestQueryScheduleAuth = vi.fn();
 // para no levantar un WebSocket real en las pruebas.
 vi.mock("./socket.js", () => ({
   sendQueryOutboundEvent: vi.fn(),
+  queryAccountIdForSocketUrl: vi.fn(() => "sales"),
   requestQueryScheduleAuth: (...args: unknown[]) =>
     requestQueryScheduleAuth(...args),
 }));
@@ -67,6 +72,7 @@ afterAll(() => {
 
 afterEach(() => {
   forgetDelegatedAuth(THREAD);
+  forgetDelegatedAuth(ORIGIN_THREAD);
   forgetQuerySession(SESSION);
   requestQueryScheduleAuth.mockReset();
 });
@@ -95,13 +101,77 @@ function cronAdded(jobId = "cron-1") {
 }
 
 describe("registro de la tarea", () => {
-  it("adjunta la credencial del turno para probar de quien es", () => {
+  it("usa la credencial del hilo creador aunque el destino sea otro", async () => {
+    const { api, hooks } = fakeApi();
+    const send = vi.fn();
+    const fullJob = {
+      id: "cron-cross-thread",
+      delivery: { channel: "query", accountId: "sales", threadId: THREAD },
+    };
+    const list = vi
+      .fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([fullJob]);
+    registerQueryCronSync(api as never, send);
+    await hooks.get("gateway_start")?.({}, { getCron: () => ({ list }) });
+    rememberDelegatedAuth(
+      ORIGIN_THREAD,
+      { token: "token-del-admin", expires_in: 900 },
+      SOCKET,
+      "mensaje-admin",
+    );
+    rememberQuerySession(SESSION, {
+      threadId: ORIGIN_THREAD,
+      accountId: "sales",
+    });
+
+    hooks.get("before_tool_call")?.(
+      {
+        toolName: "cron",
+        params: { action: "add", job: { delivery: fullJob.delivery } },
+      },
+      { sessionKey: SESSION },
+    );
+    // La proyeccion publica de cron_changed no incluye delivery; el plugin lo
+    // recupera del inventario y conserva por separado el turno creador.
+    await hooks.get("cron_changed")?.({
+      action: "added",
+      jobId: "cron-cross-thread",
+      job: { id: "cron-cross-thread" },
+    });
+
+    expect(send).toHaveBeenLastCalledWith(
+      "sales",
+      expect.objectContaining({
+        thread_id: THREAD,
+        data: expect.objectContaining({
+          delegated_token: "token-del-admin",
+          origin_thread_id: ORIGIN_THREAD,
+          origin_client_msg_id: "mensaje-admin",
+        }),
+      }),
+    );
+    hooks.get("gateway_stop")?.();
+  });
+
+  it("adjunta la credencial del turno creador para probar de quien es", async () => {
     const { api, hooks } = fakeApi();
     const send = vi.fn();
     registerQueryCronSync(api as never, send);
     rememberDelegatedAuth(THREAD, { token: "de-julian", expires_in: 900 }, SOCKET);
+    rememberQuerySession(SESSION, { threadId: THREAD, accountId: "sales" });
 
-    hooks.get("cron_changed")?.(cronAdded());
+    hooks.get("before_tool_call")?.(
+      {
+        toolName: "cron",
+        params: {
+          action: "add",
+          job: { delivery: { channel: "query", accountId: "sales", threadId: THREAD } },
+        },
+      },
+      { sessionKey: SESSION },
+    );
+    await hooks.get("cron_changed")?.(cronAdded());
 
     expect(send).toHaveBeenLastCalledWith(
       "sales",
@@ -111,22 +181,53 @@ describe("registro de la tarea", () => {
     );
   });
 
-  it("registra la tarea sin token y avisa cuando no hay credencial", () => {
+  it("registra la tarea sin token y avisa cuando no hay credencial", async () => {
     const { api, hooks } = fakeApi();
     const send = vi.fn();
     registerQueryCronSync(api as never, send);
+    rememberQuerySession(SESSION, { threadId: THREAD, accountId: "sales" });
 
-    hooks.get("cron_changed")?.(cronAdded());
+    hooks.get("before_tool_call")?.(
+      {
+        toolName: "cron",
+        params: {
+          action: "add",
+          job: { delivery: { channel: "query", accountId: "sales", threadId: THREAD } },
+        },
+      },
+      { sessionKey: SESSION },
+    );
+    await hooks.get("cron_changed")?.(cronAdded());
 
     const [, event] = send.mock.calls.at(-1) as [string, { data: object }];
     expect(event.data).not.toHaveProperty("delegated_token");
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("sin credencial"),
+      expect.stringContaining("sin evidencia del turno creador"),
     );
   });
 });
 
 describe("arranque del turno de un cron", () => {
+  it("corrige el contexto accidental y pide auth para el destino canonico", async () => {
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("cron_changed")?.(cronAdded());
+    requestQueryScheduleAuth.mockResolvedValue({
+      auth: { token: "canonico", expires_in: 900 },
+      socketUrl: SOCKET,
+    });
+
+    await hooks.get("before_agent_start")?.(
+      {},
+      { jobId: "cron-1", channel: "query", chatId: ORIGIN_THREAD },
+    );
+
+    expect(requestQueryScheduleAuth).toHaveBeenCalledWith(THREAD, "cron-1", "sales");
+    expect(api.logger.warn).toHaveBeenCalledWith(
+      expect.stringContaining("destino canonico"),
+    );
+  });
+
   it("pide credencial y la guarda para que las tools la encuentren", async () => {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, vi.fn());
@@ -153,7 +254,7 @@ describe("arranque del turno de un cron", () => {
   it("usa la cuenta con la que se sincronizo la tarea", async () => {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, vi.fn());
-    hooks.get("cron_changed")?.(cronAdded());
+    await hooks.get("cron_changed")?.(cronAdded());
     requestQueryScheduleAuth.mockResolvedValue({
       auth: { token: "del-autor", expires_in: 900 },
       socketUrl: SOCKET,
@@ -191,18 +292,22 @@ describe("arranque del turno de un cron", () => {
     expect(requestQueryScheduleAuth).not.toHaveBeenCalled();
   });
 
-  it("reusa la credencial viva en lugar de pedir otra", async () => {
+  it("reemplaza una credencial humana viva por la credencial propia del cron", async () => {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, vi.fn());
     rememberDelegatedAuth(THREAD, { token: "aun-viva", expires_in: 900 }, SOCKET);
+    requestQueryScheduleAuth.mockResolvedValue({
+      auth: { token: "solo-del-cron", expires_in: 900 },
+      socketUrl: SOCKET,
+    });
 
     await hooks.get("before_agent_start")?.(
       {},
       { jobId: "cron-1", channel: "query", chatId: THREAD },
     );
 
-    expect(requestQueryScheduleAuth).not.toHaveBeenCalled();
-    expect(getDelegatedAuth(THREAD)?.auth.token).toBe("aun-viva");
+    expect(requestQueryScheduleAuth).toHaveBeenCalledWith(THREAD, "cron-1", "sales");
+    expect(getDelegatedAuth(THREAD)?.auth.token).toBe("solo-del-cron");
   });
 
   it("avisa con instrucciones cuando Query niega la credencial", async () => {
@@ -217,7 +322,7 @@ describe("arranque del turno de un cron", () => {
 
     expect(getDelegatedAuth(THREAD)).toBeUndefined();
     expect(api.logger.warn).toHaveBeenCalledWith(
-      expect.stringContaining("Vuelve a crear la tarea"),
+      expect.stringContaining("autorizacion programada no esta vigente"),
     );
   });
 

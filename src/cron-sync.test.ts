@@ -1,11 +1,36 @@
-import { describe, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { afterAll, beforeAll, describe, expect, it, vi } from "vitest";
 import {
   backfillQuerySchedules,
   cancelQuerySchedules,
+  probeQuerySchedule,
   registerQueryCronSync,
 } from "./cron-sync.js";
+import { forgetDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
+import { setOpenClawConfigLoader } from "./google-accounts.js";
 
 type Hook = (...args: any[]) => unknown;
+
+const stateDirectory = mkdtempSync(join(tmpdir(), "query-cron-sync-"));
+const previousStateFile = process.env.QUERY_DELEGATED_AUTH_STATE_FILE;
+
+beforeAll(() => {
+  process.env.QUERY_DELEGATED_AUTH_STATE_FILE = join(
+    stateDirectory,
+    "delegated.json",
+  );
+});
+
+afterAll(() => {
+  if (previousStateFile === undefined) {
+    delete process.env.QUERY_DELEGATED_AUTH_STATE_FILE;
+  } else {
+    process.env.QUERY_DELEGATED_AUTH_STATE_FILE = previousStateFile;
+  }
+  rmSync(stateDirectory, { recursive: true, force: true });
+});
 
 function fakeApi() {
   const hooks = new Map<string, Hook>();
@@ -22,12 +47,12 @@ function fakeApi() {
 }
 
 describe("Query cron sync", () => {
-  it("syncs add/remove with the account and thread that own the delivery", () => {
+  it("syncs add/remove with the account and thread that own the delivery", async () => {
     const { api, hooks } = fakeApi();
     const send = vi.fn();
     registerQueryCronSync(api as never, send);
 
-    hooks.get("cron_changed")?.({
+    await hooks.get("cron_changed")?.({
       action: "added",
       jobId: "cron-sales-1",
       job: {
@@ -50,25 +75,53 @@ describe("Query cron sync", () => {
       }),
     );
 
-    hooks.get("cron_changed")?.({
+    await hooks.get("cron_changed")?.({
+      action: "updated",
+      jobId: "cron-sales-1",
+      job: {
+        delivery: {
+          channel: "query",
+          accountId: "sales",
+          threadId: "private-43",
+        },
+      },
+    });
+    expect(send.mock.calls.slice(-2)).toEqual([
+      [
+        "sales",
+        expect.objectContaining({
+          thread_id: "private-42",
+          data: expect.objectContaining({ action: "removed" }),
+        }),
+      ],
+      [
+        "sales",
+        expect.objectContaining({
+          thread_id: "private-43",
+          data: expect.objectContaining({ action: "added" }),
+        }),
+      ],
+    ]);
+
+    await hooks.get("cron_changed")?.({
       action: "removed",
       jobId: "cron-sales-1",
     });
     expect(send).toHaveBeenLastCalledWith(
       "sales",
       expect.objectContaining({
-        thread_id: "private-42",
+        thread_id: "private-43",
         data: expect.objectContaining({ action: "removed" }),
       }),
     );
   });
 
-  it("refuses to sync Query cron delivery without an explicit accountId", () => {
+  it("refuses to sync Query cron delivery without an explicit accountId", async () => {
     const { api, hooks } = fakeApi();
     const send = vi.fn();
     registerQueryCronSync(api as never, send);
 
-    hooks.get("cron_changed")?.({
+    await hooks.get("cron_changed")?.({
       action: "added",
       jobId: "cron-ambiguous-1",
       job: {
@@ -82,6 +135,35 @@ describe("Query cron sync", () => {
     expect(send).not.toHaveBeenCalled();
     expect(api.logger.warn).toHaveBeenCalledWith(
       expect.stringContaining("delivery Query sin accountId"),
+    );
+  });
+
+  it("removes the old Query target when delivery moves to another channel", async () => {
+    const { api, hooks } = fakeApi();
+    const send = vi.fn();
+    registerQueryCronSync(api as never, send);
+    await hooks.get("cron_changed")?.({
+      action: "added",
+      jobId: "cron-leaves-query",
+      job: {
+        delivery: { channel: "query", accountId: "sales", threadId: "42" },
+      },
+    });
+    send.mockClear();
+
+    await hooks.get("cron_changed")?.({
+      action: "updated",
+      jobId: "cron-leaves-query",
+      job: { delivery: { channel: "discord", to: "alerts" } },
+    });
+
+    expect(send).toHaveBeenCalledTimes(1);
+    expect(send).toHaveBeenCalledWith(
+      "sales",
+      expect.objectContaining({
+        thread_id: "42",
+        data: expect.objectContaining({ action: "removed" }),
+      }),
     );
   });
 
@@ -151,6 +233,25 @@ describe("backfill de crones preexistentes", () => {
     );
   });
 
+  it("no atribuye un cron histórico a la credencial casualmente viva del canal", async () => {
+    const { send } = await startWithExistingCrons([existingJob]);
+    rememberDelegatedAuth(
+      "private-42",
+      { token: "turno-posterior", identity: { id: 99 } },
+      "wss://query.example/ws",
+      "mensaje-posterior",
+    );
+
+    backfillQuerySchedules("sales", send);
+
+    expect(send.mock.calls[0][1].data).toMatchObject({
+      sync_source: "startup_adoption",
+    });
+    expect(send.mock.calls[0][1].data).not.toHaveProperty("delegated_token");
+    expect(send.mock.calls[0][1].data).not.toHaveProperty("origin_client_msg_id");
+    forgetDelegatedAuth("private-42");
+  });
+
   it("no repite el anuncio al reconectar", async () => {
     const { send } = await startWithExistingCrons([existingJob]);
 
@@ -191,7 +292,7 @@ describe("backfill de crones preexistentes", () => {
     const { hooks, send } = await startWithExistingCrons([existingJob]);
 
     // Su propio `cron_changed` ya la anuncia; el backfill no debe duplicarla.
-    hooks.get("cron_changed")?.({
+    await hooks.get("cron_changed")?.({
       action: "updated",
       jobId: "cron-viejo",
       job: existingJob,
@@ -209,5 +310,86 @@ describe("backfill de crones preexistentes", () => {
 
     backfillQuerySchedules("sales", send);
     expect(send).not.toHaveBeenCalled();
+  });
+});
+
+describe("prueba no destructiva de cron", () => {
+  it("valida cron, destino y Google configurado sin ejecutarlo", async () => {
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("gateway_start")?.(
+      {},
+      {
+        getCron: () => ({
+          list: async () => [
+            {
+              id: "cron-google",
+              delivery: {
+                channel: "query",
+                accountId: "sales",
+                threadId: "42",
+              },
+            },
+          ],
+        }),
+      },
+    );
+    setOpenClawConfigLoader(() => ({
+      plugins: {
+        entries: {
+          "openclaw-google-workspace": {
+            config: {
+              accounts: { juli: { expectedEmail: "juli@example.com" } },
+            },
+          },
+        },
+      },
+    }));
+
+    const result = await probeQuerySchedule({
+      externalId: "cron-google",
+      threadId: "42",
+      queryAccountId: "sales",
+      googleAccountId: "juli",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks).toMatchObject({
+      cron_exists: true,
+      query_delivery: true,
+      delivery_target: true,
+      gmail_available: true,
+      drive_available: true,
+    });
+    setOpenClawConfigLoader(undefined);
+    hooks.get("gateway_stop")?.();
+  });
+
+  it("no exige Google cuando el cron no lo declara", async () => {
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("gateway_start")?.(
+      {},
+      {
+        getCron: () => ({
+          list: async () => [
+            {
+              id: "cron-query",
+              delivery: { channel: "query", accountId: "sales", to: "42" },
+            },
+          ],
+        }),
+      },
+    );
+
+    const result = await probeQuerySchedule({
+      externalId: "cron-query",
+      threadId: "42",
+      queryAccountId: "sales",
+    });
+
+    expect(result.ok).toBe(true);
+    expect(result.checks.google_not_required).toBe(true);
+    hooks.get("gateway_stop")?.();
   });
 });

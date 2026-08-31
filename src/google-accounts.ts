@@ -112,6 +112,28 @@ function emailFromPluginConfig(pluginConfig: unknown, accountId: string): string
   return emailFromContainer(pluginConfig, accountId);
 }
 
+function accountExistsInPluginConfig(pluginConfig: unknown, accountId: string): boolean {
+  if (!isObject(pluginConfig)) return false;
+  for (const key of ACCOUNT_CONTAINER_KEYS) {
+    const container = pluginConfig[key];
+    if (Array.isArray(container)) {
+      if (container.some((entry) => entryDeclaresAccount(entry, accountId))) return true;
+      continue;
+    }
+    if (!isObject(container)) continue;
+    if (Object.keys(container).some((key) => normalizeAccountId(key) === accountId)) {
+      return true;
+    }
+    if (Object.values(container).some((entry) => entryDeclaresAccount(entry, accountId))) {
+      return true;
+    }
+  }
+  return Object.entries(pluginConfig).some(
+    ([key, entry]) =>
+      normalizeAccountId(key) === accountId || entryDeclaresAccount(entry, accountId),
+  );
+}
+
 function configuredPluginIds(): string[] {
   const raw = process.env.QUERY_GOOGLE_WORKSPACE_PLUGIN_IDS?.trim();
   if (!raw) return [];
@@ -237,4 +259,23 @@ export async function readConfiguredGoogleAccountEmail(
     if (email) return email;
   }
   return "";
+}
+
+/** Inventario local, sin llamar a Google ni devolver correos o secretos. */
+export async function inspectGoogleWorkspaceConfiguration(
+  accountId: string,
+): Promise<{ pluginConfigured: boolean; accountConfigured: boolean }> {
+  const wanted = normalizeAccountId(accountId);
+  if (!wanted) return { pluginConfigured: false, accountConfigured: false };
+  const config = await loadOpenClawConfig();
+  const pluginConfigs = googlePluginConfigs(config);
+  const fileEmail = accountsFileEmail(wanted);
+  return {
+    pluginConfigured: pluginConfigs.length > 0 || Boolean(fileEmail),
+    accountConfigured:
+      Boolean(fileEmail) ||
+      pluginConfigs.some((pluginConfig) =>
+        accountExistsInPluginConfig(pluginConfig, wanted),
+      ),
+  };
 }

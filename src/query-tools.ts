@@ -146,6 +146,47 @@ async function postQuery(
   return payload;
 }
 
+export async function queryDeliveryTargetsForThread(
+  threadId: string,
+  log: QueryToolLog,
+): Promise<unknown> {
+  const stored = await delegatedAuthForTool(
+    threadId,
+    "query_delivery_targets",
+    log,
+  );
+  if (!stored) return noCredential();
+  const response = await fetch(
+    queryApiUrl(
+      stored.socketUrl,
+      `threads/${encodeURIComponent(threadId)}/delivery-targets/`,
+    ),
+    {
+      method: "POST",
+      headers: {
+        "X-Query-Delegated-Token": stored.auth.token,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    },
+  );
+  const payload = await response.json().catch(() => undefined);
+  if (!response.ok) {
+    return {
+      ok: false,
+      error:
+        (payload as { error?: string } | undefined)?.error ??
+        `http_${response.status}`,
+      ...(payload && typeof payload === "object" ? payload : {}),
+    };
+  }
+  const { queryAccountIdForSocketUrl } = await import("./socket.js");
+  return {
+    ...(payload && typeof payload === "object" ? payload : {}),
+    query_account_id: queryAccountIdForSocketUrl(stored.socketUrl),
+  };
+}
+
 function noCredential() {
   const alive = threadsWithDelegatedAuth();
   return {
@@ -455,6 +496,15 @@ export default defineToolPlugin({
   description:
     "Consulta modulos, campos y registros de Query en nombre de la persona con la que conversas.",
   tools: (tool) => [
+    tool({
+      name: "query_delivery_targets",
+      label: "Query: destinos de tareas programadas",
+      description:
+        "Lista los canales Query en los que la persona de este turno puede programar entregas. Usala antes de crear o mover un cron hacia otro canal; no adivines threadId ni accountId. Un administrador puede recibir destinos adicionales del mismo agente y un usuario normal solo los que tiene autorizados.",
+      parameters: Type.Object({ thread_id: THREAD_PARAM }),
+      execute: async ({ thread_id }, _config, context) =>
+        queryDeliveryTargetsForThread(thread_id, context.api.logger),
+    }),
     tool({
       name: "query_attachment_send",
       label: "Query: entregar archivo",

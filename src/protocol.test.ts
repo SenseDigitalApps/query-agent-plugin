@@ -8,6 +8,22 @@ import {
 } from "./protocol.js";
 
 describe("Query protocol", () => {
+  it("acepta una solicitud administrativa de prueba de cron", () => {
+    expect(
+      parseQueryEvent(
+        JSON.stringify({
+          type: "schedule.probe",
+          role: "system",
+          thread_id: "42",
+          data: { probe_id: "probe-1", external_id: "cron-1" },
+        }),
+      ),
+    ).toMatchObject({
+      type: "schedule.probe",
+      thread_id: "42",
+      data: { probe_id: "probe-1", external_id: "cron-1" },
+    });
+  });
   it("parses correlated user messages", () => {
     expect(
       parseQueryEvent(

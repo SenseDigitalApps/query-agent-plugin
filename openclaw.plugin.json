@@ -211,6 +211,7 @@
   "version": "0.1.0",
   "contracts": {
     "tools": [
+      "query_delivery_targets",
       "query_attachment_send",
       "query_modules_list",
       "query_module_describe",

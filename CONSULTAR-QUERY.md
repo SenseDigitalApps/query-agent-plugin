@@ -67,8 +67,12 @@ eso: cada quien sigue viendo lo suyo.
 
 Si un recordatorio te dice que no pudo consultar, casi siempre es que quedó
 registrado sin dueño (por ejemplo, se creó antes de que esto existiera en un
-canal compartido). Se arregla volviéndolo a crear desde una conversación con la
-persona en cuyo nombre debe correr.
+canal compartido). Se arregla volviéndolo a crear o mover desde un canal donde
+tengas autorizado el destino; un administrador también puede reautorizarlo.
+
+El canal donde pides el recordatorio no tiene que ser el canal donde se entrega.
+Un administrador puede elegir otro canal del mismo agente. Un usuario normal
+puede elegir otro destino solo si ya tiene acceso a ese canal.
 
 ## Consultar sí, cambiar no
 

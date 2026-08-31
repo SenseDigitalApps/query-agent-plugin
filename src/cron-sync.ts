@@ -4,9 +4,20 @@ import type {
   PluginHookGatewayCronJob,
   PluginHookGatewayCronService,
 } from "openclaw/plugin-sdk/plugin-runtime";
-import { sendQueryOutboundEvent } from "./socket.js";
-import { getDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
-import { rememberQuerySession } from "./query-session-store.js";
+import {
+  queryAccountIdForSocketUrl,
+  sendQueryOutboundEvent,
+} from "./socket.js";
+import {
+  forgetDelegatedAuth,
+  getDelegatedAuth,
+  rememberDelegatedAuth,
+} from "./delegated-store.js";
+import {
+  getQuerySession,
+  rememberQuerySession,
+} from "./query-session-store.js";
+import { inspectGoogleWorkspaceConfiguration } from "./google-accounts.js";
 import type { QueryOutboundEvent } from "./types.js";
 
 type CronDelivery = {
@@ -19,6 +30,17 @@ type CronDelivery = {
 type SyncedCron = {
   accountId: string;
   threadId: string;
+};
+
+type PendingCronMutation = {
+  action: "added" | "updated" | "removed";
+  jobId?: string;
+  originThreadId: string;
+  originAccountId?: string;
+  requestedTarget?: SyncedCron;
+  delegatedToken?: string;
+  originClientMsgId?: string;
+  capturedAt: number;
 };
 
 const syncedCrons = new Map<string, SyncedCron>();
@@ -41,6 +63,111 @@ const pendingBackfill = new Map<
 // control de cuentas externas o se las salta.
 const queryCronIds = new Set<string>();
 let cronService: PluginHookGatewayCronService | undefined;
+const pendingCronMutations: PendingCronMutation[] = [];
+const PENDING_MUTATION_TTL_MS = 30_000;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return Boolean(value) && typeof value === "object" && !Array.isArray(value);
+}
+
+function trimmed(value: unknown): string | undefined {
+  if (typeof value !== "string" && typeof value !== "number") return undefined;
+  const text = String(value).trim();
+  return text || undefined;
+}
+
+function prunePendingMutations(now = Date.now()): void {
+  while (
+    pendingCronMutations.length &&
+    now - pendingCronMutations[0].capturedAt > PENDING_MUTATION_TTL_MS
+  ) {
+    pendingCronMutations.shift();
+  }
+}
+
+function mutationAction(value: unknown): PendingCronMutation["action"] | undefined {
+  if (value === "add") return "added";
+  if (value === "update") return "updated";
+  if (value === "remove") return "removed";
+  return undefined;
+}
+
+function deliveryFromCronParams(
+  params: Record<string, unknown>,
+  action: PendingCronMutation["action"],
+): CronDelivery | undefined {
+  const container = action === "added" ? params.job : params.patch;
+  if (!isRecord(container) || !isRecord(container.delivery)) return undefined;
+  return container.delivery as CronDelivery;
+}
+
+function targetFromDelivery(
+  delivery: CronDelivery | undefined,
+): SyncedCron | undefined {
+  if (!delivery || (delivery.channel && delivery.channel !== "query")) return undefined;
+  const threadId = trimmed(delivery.threadId ?? delivery.to);
+  const accountId = explicitQueryAccountId(delivery);
+  if (!threadId || !accountId) return undefined;
+  return { threadId, accountId };
+}
+
+function captureCronMutation(
+  event: { toolName: string; params: Record<string, unknown> },
+  context: { sessionKey?: string },
+): void {
+  if (event.toolName.trim().toLowerCase() !== "cron") return;
+  const action = mutationAction(event.params.action);
+  if (!action) return;
+  const session = getQuerySession(context.sessionKey);
+  if (!session?.threadId || session.jobId) return;
+
+  const stored = getDelegatedAuth(session.threadId);
+  const accountId =
+    session.accountId ??
+    (stored?.socketUrl ? queryAccountIdForSocketUrl(stored.socketUrl) : undefined);
+  const delivery = deliveryFromCronParams(event.params, action);
+  if (action === "added" && delivery?.channel && delivery.channel !== "query") {
+    return;
+  }
+  const requestedTarget = targetFromDelivery(delivery);
+
+  prunePendingMutations();
+  pendingCronMutations.push({
+    action,
+    jobId: trimmed(event.params.jobId ?? event.params.id),
+    originThreadId: session.threadId,
+    originAccountId: accountId,
+    requestedTarget,
+    delegatedToken: stored?.auth.token,
+    originClientMsgId: stored?.clientMsgId,
+    capturedAt: Date.now(),
+  });
+}
+
+function takePendingMutation(
+  event: PluginHookCronChangedEvent,
+  target?: SyncedCron,
+): PendingCronMutation | undefined {
+  prunePendingMutations();
+  let index = pendingCronMutations.findIndex(
+    (candidate) =>
+      candidate.action === event.action &&
+      Boolean(candidate.jobId) &&
+      candidate.jobId === event.jobId,
+  );
+  if (index < 0 && event.action === "added") {
+    index = pendingCronMutations.findIndex(
+      (candidate) =>
+        candidate.action === "added" &&
+        (!candidate.requestedTarget ||
+          !target ||
+          (candidate.requestedTarget.accountId === target.accountId &&
+            candidate.requestedTarget.threadId === target.threadId)),
+    );
+  }
+  if (index < 0) return undefined;
+  return pendingCronMutations.splice(index, 1)[0];
+}
 
 function explicitQueryAccountId(delivery: CronDelivery): string | undefined {
   const accountId = delivery.accountId?.trim();
@@ -104,9 +231,10 @@ async function adoptExistingQueryCrons(api: OpenClawPluginApi): Promise<void> {
  * mandarselo. Cada tarea se suelta una sola vez por proceso -se borra del mapa
  * al conseguirlo-, asi que reconectar no repite el anuncio.
  *
- * Sin credencial delegada la tarea se registra igual pero sin identidad. Es
- * deliberado: un cron viejo sin turno humano detras no puede probar de quien
- * es, y perderlo de vista seria peor que verlo sin autor.
+ * La adopción nunca reutiliza la credencial corta que casualmente esté viva en
+ * el canal: esa credencial puede pertenecer a una conversación posterior y no
+ * prueba quién creó el cron histórico. Query lo registra para que su migración
+ * administrativa resuelva la identidad con evidencia durable.
  */
 export function backfillQuerySchedules(
   accountId: string,
@@ -117,7 +245,6 @@ export function backfillQuerySchedules(
   let announced = 0;
   for (const [jobId, entry] of [...pendingBackfill]) {
     if (entry.target.accountId !== accountId) continue;
-    const stored = getDelegatedAuth(entry.target.threadId);
     const outbound: QueryOutboundEvent = {
       type: "schedule.sync",
       role: "system",
@@ -128,7 +255,7 @@ export function backfillQuerySchedules(
         action: "added",
         external_id: jobId,
         job: entry.job,
-        ...(stored ? { delegated_token: stored.auth.token } : {}),
+        sync_source: "startup_adoption",
       },
     };
     try {
@@ -172,24 +299,83 @@ export async function cancelQuerySchedules(
   }
 }
 
-function targetFrom(event: PluginHookCronChangedEvent): SyncedCron | undefined {
-  const job = event.job as
-    | (NonNullable<PluginHookCronChangedEvent["job"]> & {
-        delivery?: CronDelivery;
-      })
-    | undefined;
-  const delivery = job?.delivery;
-  if (delivery?.channel !== "query") return syncedCrons.get(event.jobId);
-  const target = delivery.threadId ?? delivery.to;
-  if (target === undefined || target === null || String(target).trim() === "") {
-    return undefined;
+export async function probeQuerySchedule(params: {
+  externalId: string;
+  threadId: string;
+  queryAccountId: string;
+  googleAccountId?: string;
+}): Promise<{ ok: boolean; checks: Record<string, boolean>; detail: string }> {
+  let jobs: Awaited<ReturnType<PluginHookGatewayCronService["list"]>> = [];
+  try {
+    jobs = (await cronService?.list?.({ includeDisabled: true })) ?? [];
+  } catch {
+    return {
+      ok: false,
+      checks: { cron_inventory: false },
+      detail: "OpenClaw no pudo leer su inventario de tareas.",
+    };
   }
-  const accountId = explicitQueryAccountId(delivery);
-  if (!accountId) return undefined;
-  return {
-    accountId,
-    threadId: String(target),
+  const job = (jobs ?? []).find(
+    (candidate) => String((candidate as { id?: string }).id ?? "") === params.externalId,
+  ) as (PluginHookGatewayCronJob & { delivery?: CronDelivery }) | undefined;
+  const delivery = job?.delivery;
+  const target = delivery?.threadId ?? delivery?.to;
+  const checks: Record<string, boolean> = {
+    cron_exists: Boolean(job),
+    query_delivery: delivery?.channel === "query",
+    query_account: explicitQueryAccountId(delivery ?? {}) === params.queryAccountId,
+    delivery_target: String(target ?? "").trim() === params.threadId,
   };
+  const googleAccountId = params.googleAccountId?.trim();
+  if (googleAccountId) {
+    const google = await inspectGoogleWorkspaceConfiguration(googleAccountId);
+    checks.google_plugin = google.pluginConfigured;
+    checks.google_account = google.accountConfigured;
+    // Gmail y Drive pertenecen al mismo plugin; este chequeo confirma que las
+    // tools pueden cargarse para la cuenta, sin ejecutar ninguna de ellas.
+    checks.gmail_available = google.pluginConfigured && google.accountConfigured;
+    checks.drive_available = google.pluginConfigured && google.accountConfigured;
+  } else {
+    checks.google_not_required = true;
+  }
+  const ok = Object.values(checks).every(Boolean);
+  return {
+    ok,
+    checks,
+    detail: ok
+      ? "La tarea, su destino y sus integraciones requeridas están configurados."
+      : "La prueba encontró una configuración incompleta; no se ejecutó el cron.",
+  };
+}
+
+async function currentCronJob(
+  api: OpenClawPluginApi,
+  event: PluginHookCronChangedEvent,
+): Promise<(PluginHookGatewayCronJob & { delivery?: CronDelivery }) | undefined> {
+  const announced = event.job as
+    | (PluginHookGatewayCronJob & { delivery?: CronDelivery })
+    | undefined;
+  if (announced?.delivery || event.action === "removed") return announced;
+  try {
+    const jobs = (await cronService?.list?.({ includeDisabled: true })) ?? [];
+    return jobs.find(
+      (candidate) => String((candidate as { id?: string }).id ?? "") === event.jobId,
+    ) as (PluginHookGatewayCronJob & { delivery?: CronDelivery }) | undefined;
+  } catch (error) {
+    api.logger.warn(
+      `query cron ${event.jobId}: no se pudo resolver el delivery real: ${String(error)}`,
+    );
+    return announced;
+  }
+}
+
+function sameTarget(left: SyncedCron | undefined, right: SyncedCron | undefined): boolean {
+  return Boolean(
+    left &&
+      right &&
+      left.accountId === right.accountId &&
+      left.threadId === right.threadId,
+  );
 }
 
 /**
@@ -215,9 +401,6 @@ async function primeScheduleCredential(
   const externalId = context.jobId?.trim();
   if (!externalId) return;
   if (context.channel && context.channel !== "query") return;
-  const threadId = (context.chatId ?? context.channelId ?? "").trim();
-  if (!threadId) return;
-
   const synced = syncedCrons.get(externalId);
   // Que la tarea es de Query hay que poder afirmarlo, no suponerlo: o el
   // contexto lo dice, o la sincronizacion la registro como nuestra. Lo que se
@@ -225,6 +408,16 @@ async function primeScheduleCredential(
   // que adoptar de mas seria bloquear crones de otras integraciones.
   const isQueryCron =
     context.channel === "query" || Boolean(synced) || queryCronIds.has(externalId);
+  if (!isQueryCron) return;
+  const contextualThreadId = (context.chatId ?? context.channelId ?? "").trim();
+  const threadId = synced?.threadId ?? contextualThreadId;
+  if (!threadId) return;
+  if (synced?.threadId && contextualThreadId && synced.threadId !== contextualThreadId) {
+    api.logger.warn(
+      `query cron ${externalId}: OpenClaw inicio el turno en ${contextualThreadId}, ` +
+        `pero el destino canonico es ${synced.threadId}; se usa el destino canonico.`,
+    );
+  }
   if (isQueryCron) {
     rememberQuerySession(context.sessionKey, {
       threadId,
@@ -233,9 +426,10 @@ async function primeScheduleCredential(
     });
   }
 
-  // Un reintento dentro de la misma ventana reusa la credencial que ya hay.
-  if (getDelegatedAuth(threadId)) return;
-
+  // Nunca reutilices la credencial humana que casualmente este viva en el
+  // destino. Una ejecucion programada solo puede correr con la credencial que
+  // Query emite para ese cron y su autorizacion durable.
+  forgetDelegatedAuth(threadId);
   try {
     const { requestQueryScheduleAuth } = await import("./socket.js");
     const granted = await requestQueryScheduleAuth(
@@ -246,8 +440,7 @@ async function primeScheduleCredential(
     if (!granted) {
       api.logger.warn(
         `query cron ${externalId}: Query no entrego credencial para el hilo ` +
-          `${threadId}. Vuelve a crear la tarea desde una conversacion con la ` +
-          `persona en cuyo nombre debe correr.`,
+          `${threadId}; la autorizacion programada no esta vigente.`,
       );
       return;
     }
@@ -278,59 +471,86 @@ export function registerQueryCronSync(
     syncedCrons.clear();
     queryCronIds.clear();
     pendingBackfill.clear();
+    pendingCronMutations.length = 0;
   });
   api.on("before_agent_start", async (_event, context) => {
     await primeScheduleCredential(api, context ?? {});
   });
-  api.on("cron_changed", (event: PluginHookCronChangedEvent) => {
+  api.on("before_tool_call", (event, context) => {
+    captureCronMutation(
+      {
+        toolName: String(event.toolName ?? ""),
+        params: isRecord(event.params) ? event.params : {},
+      },
+      context ?? {},
+    );
+  });
+  api.on("cron_changed", async (event: PluginHookCronChangedEvent) => {
     if (!["added", "updated", "removed"].includes(event.action)) return;
-    const delivery = (
-      event.job as
-        | (NonNullable<PluginHookCronChangedEvent["job"]> & { delivery?: CronDelivery })
-        | undefined
-    )?.delivery;
+    const previous = syncedCrons.get(event.jobId);
+    const job = await currentCronJob(api, event);
+    const delivery = job?.delivery;
+    const resolvedTarget = targetFromDelivery(delivery);
+    const mutation = takePendingMutation(event, resolvedTarget);
+    const target =
+      event.action === "removed" ||
+      (delivery?.channel !== undefined && delivery.channel !== "query")
+        ? undefined
+        : resolvedTarget ?? mutation?.requestedTarget ?? previous;
     if (
       delivery?.channel === "query" &&
       !explicitQueryAccountId(delivery) &&
-      (delivery.threadId ?? delivery.to) !== undefined
+      (delivery.threadId ?? delivery.to) !== undefined &&
+      !mutation?.requestedTarget
     ) {
       api.logger.warn(
         `query cron ${event.jobId} tiene delivery Query sin accountId; ` +
           `no se sincroniza para evitar enrutarlo por una cuenta equivocada.`,
       );
     }
-    const target = targetFrom(event);
-    if (!target) return;
-
-    // Query no acepta que le digamos de quien es la tarea: hay que probarlo con
-    // la credencial del turno en que se pidio. Aqui todavia existe, porque
-    // ``cron_changed`` se dispara mientras esa conversacion sigue viva. Si no
-    // esta, la tarea se registra igual pero sin identidad y no podra consultar.
-    const stored = getDelegatedAuth(target.threadId);
-    if (!stored) {
+    if (!target && !previous) return;
+    if (event.action === "added" && !mutation?.delegatedToken) {
       api.logger.warn(
-        `query cron ${event.jobId} se registro sin credencial: no podra ` +
-          `consultar Query hasta que se vuelva a crear desde una conversacion.`,
+        `query cron ${event.jobId} se registro sin evidencia del turno creador; ` +
+          `Query debera resolver su autor mediante migracion administrativa.`,
       );
     }
 
-    const outbound: QueryOutboundEvent = {
-      type: "schedule.sync",
-      role: "system",
-      content: "",
-      client_msg_id: "",
-      thread_id: target.threadId,
-      data: {
-        action: event.action,
-        external_id: event.jobId,
-        job: event.job ?? null,
-        ...(stored ? { delegated_token: stored.auth.token } : {}),
-      },
+    const publish = (destination: SyncedCron, action: "added" | "updated" | "removed") => {
+      const outbound: QueryOutboundEvent = {
+        type: "schedule.sync",
+        role: "system",
+        content: "",
+        client_msg_id: "",
+        thread_id: destination.threadId,
+        data: {
+          action,
+          external_id: event.jobId,
+          job: job ?? event.job ?? null,
+          sync_source: "live_hook",
+          ...(mutation?.originThreadId
+            ? { origin_thread_id: mutation.originThreadId }
+            : {}),
+          ...(mutation?.originClientMsgId
+            ? { origin_client_msg_id: mutation.originClientMsgId }
+            : {}),
+          ...(mutation?.delegatedToken
+            ? { delegated_token: mutation.delegatedToken }
+            : {}),
+        },
+      };
+      sendEvent(destination.accountId, outbound);
     };
+
     try {
-      sendEvent(target.accountId, outbound);
+      if (previous && (event.action === "removed" || !sameTarget(previous, target))) {
+        publish(previous, "removed");
+      }
+      if (target && event.action !== "removed") {
+        publish(target, previous && sameTarget(previous, target) ? "updated" : "added");
+      }
       pendingBackfill.delete(event.jobId);
-      if (event.action === "removed") {
+      if (!target || event.action === "removed") {
         syncedCrons.delete(event.jobId);
         queryCronIds.delete(event.jobId);
       } else {

@@ -357,6 +357,9 @@ describe("Query inbound dispatch recovery", () => {
     expect(body).toContain("Canal privado del remitente: private-22");
     expect(body).toContain("[Destino de tareas programadas:");
     expect(body).toContain("conserva el canal actual como destino");
+    expect(body).toContain("query_delivery_targets es una herramienta diferida");
+    expect(body).toContain("localizala y cargala con tool_search");
+    expect(body).toContain("no adivines ni reutilices el destino de otra sesion");
     expect(body).toContain(
       "canal privado private-22 solo si el usuario pide expresamente",
     );
@@ -434,5 +437,7 @@ describe("Query inbound dispatch recovery", () => {
       "No afirmes que query_attachment_send esta ausente o no disponible sin haber ejecutado antes tool_search",
     );
     expect(body).toContain("nunca muestres file_path ni ninguna ruta local al usuario");
+    expect(body).toContain("query_delivery_targets es una herramienta diferida");
+    expect(body).toContain("copia exactamente el thread_id y query_account_id autorizados");
   });
 });

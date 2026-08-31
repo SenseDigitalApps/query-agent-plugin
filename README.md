@@ -145,9 +145,13 @@ Los cambios del servicio cron de OpenClaw se sincronizan con Query mediante
 `schedule.sync`. Query materializa una entrega por usuario/hilo y puede enviar
 `schedule.cancel` cuando se revoca el acceso de su último destinatario.
 
-Las tareas personales creadas desde un canal compartido deben dirigirse al
-`private_thread_id` del solicitante. Una cancelación queda registrada en Query
-y se reenvía si el plugin estaba desconectado.
+El hilo donde se pide una tarea y el hilo donde se entrega son datos distintos.
+Por defecto se conserva el canal actual. Si la persona pide otro destino, el
+agente carga de forma diferida `query_delivery_targets` mediante `tool_search`
+y usa exactamente el `thread_id` y `query_account_id` autorizados que devuelve:
+un administrador puede elegir otros canales del mismo agente y un usuario
+normal solo canales a los que ya tiene acceso. Una cancelación queda registrada
+en Query y se reenvía si el plugin estaba desconectado.
 
 ### Cuentas de Google por persona
 

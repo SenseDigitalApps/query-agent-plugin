@@ -589,9 +589,22 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
   ]
     .filter(Boolean)
     .join(". ");
-  const scheduledDeliveryHint = privateThreadId
-    ? `\n\n[Destino de tareas programadas: conserva el canal actual como destino cuando el usuario pida publicar aqui, en este canal, o cuando la automatizacion sea tematica para este topic. Usa el canal privado ${privateThreadId} solo si el usuario pide expresamente una entrega personal o privada. No interpretes la mera existencia de un canal privado como señal de que la tarea es personal. Si el destino es realmente ambiguo, preguntalo antes de crear la tarea.]`
-    : "";
+  const scheduledDeliveryHint =
+    `\n\n[Destino de tareas programadas: conserva el canal actual como destino ` +
+    `cuando el usuario pida publicar aqui, en este canal, o cuando la ` +
+    `automatizacion sea tematica para este topic. Si pide otro canal, no ` +
+    `adivines ni reutilices el destino de otra sesion: query_delivery_targets ` +
+    `es una herramienta diferida; si no esta cargada, localizala y cargala ` +
+    `con tool_search. Usala antes de crear o mover el cron y copia exactamente ` +
+    `el thread_id y query_account_id autorizados que devuelve. Un admin puede ` +
+    `elegir otros canales del mismo agente; un usuario normal solo los ` +
+    `destinos que la herramienta le autorice. ` +
+    (privateThreadId
+      ? `Usa el canal privado ${privateThreadId} solo si el usuario pide ` +
+        `expresamente una entrega personal o privada. No interpretes la mera ` +
+        `existencia de un canal privado como señal de que la tarea es personal. `
+      : "") +
+    `Si el destino es realmente ambiguo, preguntalo antes de crear la tarea.]`;
   const audioHint = messageRequestsAudio(event)
     ? "\n\n[Respuesta de audio en Query: Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]"
     : "";

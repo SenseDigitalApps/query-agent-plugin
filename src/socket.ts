@@ -479,6 +479,29 @@ export class QuerySocketMonitor {
       await cancelQuerySchedules(event.data.external_ids, this.options.log);
       return;
     }
+    if (event.type === "schedule.probe") {
+      const { probeQuerySchedule } = await import("./cron-sync.js");
+      const threadId = String(event.thread_id ?? "").trim();
+      const probe = await probeQuerySchedule({
+        externalId: event.data.external_id,
+        threadId,
+        queryAccountId: this.options.account.accountId,
+        googleAccountId: event.data.google_account_id,
+      });
+      this.send({
+        type: "schedule.probe.result",
+        role: "system",
+        content: "",
+        client_msg_id: "",
+        thread_id: threadId,
+        data: {
+          probe_id: event.data.probe_id,
+          external_id: event.data.external_id,
+          ...probe,
+        },
+      });
+      return;
+    }
     await this.handleUserMessage(event);
   }
 
@@ -1179,6 +1202,18 @@ export class QuerySocketMonitor {
 }
 
 const activeMonitors = new Map<string, QuerySocketMonitor>();
+
+/** Cuenta Query activa a la que pertenece una URL de socket ya autenticada. */
+export function queryAccountIdForSocketUrl(
+  socketUrl: string,
+): string | undefined {
+  const expected = socketUrl.trim();
+  if (!expected) return undefined;
+  for (const [accountId, monitor] of activeMonitors) {
+    if (monitor.account.url === expected) return accountId;
+  }
+  return undefined;
+}
 
 /** Cuenta viva de una sesion, para derivar el endpoint de subida y su token. */
 export function getQueryAccountForUpload(

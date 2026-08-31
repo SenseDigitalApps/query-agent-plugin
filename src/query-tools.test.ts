@@ -1,4 +1,13 @@
-import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
+import {
+  afterAll,
+  afterEach,
+  beforeAll,
+  beforeEach,
+  describe,
+  expect,
+  it,
+  vi,
+} from "vitest";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -10,10 +19,73 @@ import {
   callQuery,
   clearQueryMetadataCache,
   containsGeneratedArtifactReference,
+  queryDeliveryTargetsForThread,
   queryRecordsForThread,
   recordProposalRequestBody,
   uploadQueryAttachmentForThread,
 } from "./query-tools.js";
+
+let stateDirectory: string;
+let previousStateFile: string | undefined;
+
+beforeAll(async () => {
+  stateDirectory = await mkdtemp(join(tmpdir(), "query-tools-state-"));
+  previousStateFile = process.env.QUERY_DELEGATED_AUTH_STATE_FILE;
+  process.env.QUERY_DELEGATED_AUTH_STATE_FILE = join(
+    stateDirectory,
+    "delegated.json",
+  );
+});
+
+afterAll(async () => {
+  if (previousStateFile === undefined) {
+    delete process.env.QUERY_DELEGATED_AUTH_STATE_FILE;
+  } else {
+    process.env.QUERY_DELEGATED_AUTH_STATE_FILE = previousStateFile;
+  }
+  await rm(stateDirectory, { recursive: true, force: true });
+});
+
+describe("query_delivery_targets", () => {
+  it("asks Query for the destinations authorized from the creator thread", async () => {
+    rememberDelegatedAuth(
+      "thread-origin",
+      { token: "delegated-origin-token", expires_in: 900 },
+      "wss://query.test/ws/openclaw-agent/8/",
+      "msg-origin",
+    );
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        origin_thread_id: "thread-origin",
+        targets: [{ thread_id: "77", name: "Reportes", thread_type: "topic" }],
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
+
+    try {
+      const result = await queryDeliveryTargetsForThread("thread-origin", log);
+      expect(result).toMatchObject({
+        origin_thread_id: "thread-origin",
+        targets: [{ thread_id: "77", name: "Reportes" }],
+      });
+      expect(fetchMock).toHaveBeenCalledWith(
+        "https://query.test/api/v4/openclaw-agent/threads/thread-origin/delivery-targets/",
+        expect.objectContaining({
+          method: "POST",
+          headers: expect.objectContaining({
+            "X-Query-Delegated-Token": "delegated-origin-token",
+          }),
+        }),
+      );
+    } finally {
+      vi.unstubAllGlobals();
+      forgetDelegatedAuth("thread-origin");
+    }
+  });
+});
 
 describe("correccion de propuestas pendientes", () => {
   it("propagates action_id and merge/replace semantics for one record", () => {

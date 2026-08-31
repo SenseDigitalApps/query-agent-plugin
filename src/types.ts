@@ -240,11 +240,25 @@ export type QueryScheduleCancelEvent = {
   };
 };
 
+export type QueryScheduleProbeEvent = {
+  type: "schedule.probe";
+  role: "system";
+  content?: string;
+  client_msg_id?: string;
+  thread_id: string | number;
+  data: {
+    probe_id: string;
+    external_id: string;
+    google_account_id?: string;
+  };
+};
+
 export type QueryInboundEvent =
   | QuerySessionReadyEvent
   | QueryAgentProfileEvent
   | QueryUserMessageEvent
   | QueryScheduleCancelEvent
+  | QueryScheduleProbeEvent
   | QueryAuthGrantedEvent;
 
 export type QueryActivityState = "queued" | "working" | "done" | "error";
@@ -275,6 +289,7 @@ export type QueryOutboundEvent = {
     | "turn.adopted"
     | "error"
     | "schedule.sync"
+    | "schedule.probe.result"
     | "profile.seed"
     | "auth.refresh"
     | "auth.request";
