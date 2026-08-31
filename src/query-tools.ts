@@ -33,6 +33,37 @@ const THREAD_PARAM = Type.String({
     "Id del canal de Query en el que estas conversando (conversation.id del mensaje).",
 });
 
+const RECORD_FILTER_PARAM = Type.Object({
+  field: Type.String({
+    description:
+      "Slug exacto devuelto por query_module_describe; tambien admite campos del sistema como author, id y title.",
+  }),
+  operator: Type.Optional(
+    Type.Union(
+      ["eq", "neq", "contains", "icontains", "in", "gt", "gte", "lt", "lte", "between", "is_empty"].map(
+        (value) => Type.Literal(value),
+      ),
+      { default: "eq" },
+    ),
+  ),
+  value: Type.Optional(Type.Unknown()),
+});
+
+const RECORD_SORT_PARAM = Type.Object({
+  field: Type.String(),
+  direction: Type.Optional(
+    Type.Union([Type.Literal("asc"), Type.Literal("desc")], { default: "asc" }),
+  ),
+});
+
+const RECORD_METRIC_PARAM = Type.Object({
+  operation: Type.Union(
+    ["count", "sum", "avg", "min", "max"].map((value) => Type.Literal(value)),
+  ),
+  field: Type.Optional(Type.String()),
+  alias: Type.Optional(Type.String()),
+});
+
 const LOCAL_GENERATED_ARTIFACT_RE =
   /(?:^|[\s"'([{])(?:(?:https?:\/\/[^\s<>"')\]]*)?\/(?:home|tmp|var|mnt|opt|srv|Users|private\/var|workspace|workspaces|root)\/|[a-z]:[\\/])[^\s<>"')\]]+\.(?:html?|pdf|csv|json|md|txt|xlsx?|docx?|pptx?|zip|png|jpe?g|gif|webp|mp4|mov|m4v|webm)(?:[.,!?;:]?)(?:$|[\s"')\]}])/i;
 
@@ -139,7 +170,8 @@ function generatedArtifactAsRecordError() {
     error: "artifact_delivery_not_record",
     detail:
       "No crees ni actualices registros de Query para entregar HTML, PDF u otros artifacts generados desde rutas locales. " +
-      "Envia una respuesta normal con la ruta local o preview del archivo; el canal Query lo subira como attachment/public asset.",
+      "Publica el archivo en el canal actual con query_attachment_send usando la ruta local solo como file_path interno y nunca la muestres al usuario. " +
+      "Si la herramienta no esta cargada, localizala y cargala primero con tool_search.",
   };
 }
 
@@ -290,6 +322,92 @@ export async function callQuery(
   return body;
 }
 
+export async function queryRecordsForThread(
+  params: {
+    threadId: string;
+    module: string;
+    q?: string;
+    field?: string;
+    value?: string;
+    page?: number;
+    pageSize?: number;
+    filters?: unknown[];
+    columns?: string[];
+    sort?: unknown[];
+    limit?: number;
+  },
+  log: QueryToolLog,
+): Promise<unknown> {
+  const structured =
+    params.filters !== undefined ||
+    params.columns !== undefined ||
+    params.sort !== undefined ||
+    params.limit !== undefined;
+  if (!structured) {
+    const query: Record<string, string> = {};
+    if (params.q) query.q = params.q;
+    if (params.field && params.value !== undefined) {
+      query[`field.${params.field}`] = params.value;
+    }
+    if (params.page) query.page = String(params.page);
+    if (params.pageSize) query.page_size = String(params.pageSize);
+    return callQuery(
+      params.threadId,
+      `modules/${encodeURIComponent(params.module)}/records/`,
+      query,
+      "query_records_search",
+      log,
+    );
+  }
+
+  const filters = [...(params.filters ?? [])];
+  if (params.q) {
+    filters.push({ field: "title", operator: "icontains", value: params.q });
+  }
+  if (params.field && params.value !== undefined) {
+    filters.push({ field: params.field, operator: "eq", value: params.value });
+  }
+  return postQuery(
+    params.threadId,
+    `modules/${encodeURIComponent(params.module)}/records/query/`,
+    {
+      filters,
+      columns: params.columns ?? [],
+      sort: params.sort ?? [],
+      limit: params.limit ?? params.pageSize ?? 50,
+    },
+    "query_records_search",
+    log,
+  );
+}
+
+export async function aggregateQueryRecordsForThread(
+  params: {
+    threadId: string;
+    module: string;
+    filters?: unknown[];
+    groupBy?: string[];
+    metrics?: unknown[];
+    dateFilters?: unknown[];
+    timeGranularity?: Record<string, string>;
+  },
+  log: QueryToolLog,
+): Promise<unknown> {
+  return postQuery(
+    params.threadId,
+    `modules/${encodeURIComponent(params.module)}/records/aggregate/`,
+    {
+      filters: params.filters ?? [],
+      group_by: params.groupBy ?? [],
+      metrics: params.metrics ?? [],
+      date_filters: params.dateFilters ?? [],
+      time_granularity: params.timeGranularity ?? {},
+    },
+    "query_records_aggregate",
+    log,
+  );
+}
+
 async function delegatedAuthForTool(
   threadId: string,
   toolName: string,
@@ -414,7 +532,7 @@ export default defineToolPlugin({
       name: "query_records_search",
       label: "Query: buscar registros",
       description:
-        "Busca registros de un modulo. Acepta texto libre y filtros por campo. Devuelve los registros con sus etiquetas humanas.",
+        "Busca registros de un modulo. Para cruzar fecha, autor u otros criterios usa filters; para evitar respuestas enormes pide solo columns. author es quien creo el registro y admite username o nombre completo. Conserva field/value para busquedas simples antiguas.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         module: Type.String({ description: "Modulo donde buscar." }),
@@ -432,31 +550,102 @@ export default defineToolPlugin({
         ),
         page: Type.Optional(Type.Integer({ minimum: 1, default: 1 })),
         page_size: Type.Optional(Type.Integer({ minimum: 1, maximum: 50, default: 20 })),
+        filters: Type.Optional(
+          Type.Array(RECORD_FILTER_PARAM, {
+            description: "Filtros simultaneos; between recibe [desde, hasta].",
+          }),
+        ),
+        columns: Type.Optional(
+          Type.Array(Type.String(), {
+            description: "Slugs exactos que deben volver; reduce el payload.",
+          }),
+        ),
+        sort: Type.Optional(Type.Array(RECORD_SORT_PARAM)),
+        limit: Type.Optional(Type.Integer({ minimum: 1, maximum: 200 })),
       }),
       execute: async (
-        { thread_id, module, q, field, value, page, page_size },
+        { thread_id, module, q, field, value, page, page_size, filters, columns, sort, limit },
         _config,
         context,
-      ) => {
-        const query: Record<string, string> = {};
-        if (q) query.q = q;
-        if (field && value !== undefined) query[`field.${field}`] = value;
-        if (page) query.page = String(page);
-        if (page_size) query.page_size = String(page_size);
-        return callQuery(
-          thread_id,
-          `modules/${encodeURIComponent(module)}/records/`,
-          query,
-          "query_records_search",
+      ) =>
+        queryRecordsForThread(
+          {
+            threadId: thread_id,
+            module,
+            q,
+            field,
+            value,
+            page,
+            pageSize: page_size,
+            filters,
+            columns,
+            sort,
+            limit,
+          },
           context.api.logger,
-        );
-      },
+        ),
+    }),
+    tool({
+      name: "query_records_aggregate",
+      label: "Query: calcular sobre registros",
+      description:
+        "Calcula en Query conteos, sumas, promedios, minimos y maximos, con filtros y agrupaciones. Usala para horas, dinero, totales o reportes: no descargues decenas de filas para sumarlas manualmente. Para quien creo el registro filtra por author; para detalle diario agrupa por el campo de fecha.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        module: Type.String({ description: "Modulo donde calcular." }),
+        filters: Type.Optional(Type.Array(RECORD_FILTER_PARAM)),
+        group_by: Type.Optional(
+          Type.Array(Type.String(), {
+            description: "Campos por los que se separa el resultado.",
+          }),
+        ),
+        metrics: Type.Array(RECORD_METRIC_PARAM, {
+          minItems: 1,
+          description: "Calculos solicitados. sum/avg/min/max requieren field.",
+        }),
+        date_filters: Type.Optional(
+          Type.Array(
+            Type.Object({
+              field: Type.String(),
+              from: Type.String({ description: "Fecha ISO inicial inclusiva." }),
+              to: Type.String({ description: "Fecha ISO final inclusiva." }),
+            }),
+          ),
+        ),
+        time_granularity: Type.Optional(
+          Type.Record(
+            Type.String(),
+            Type.Union(
+              ["day", "week", "month", "quarter", "year"].map((value) =>
+                Type.Literal(value),
+              ),
+            ),
+          ),
+        ),
+      }),
+      execute: async (
+        { thread_id, module, filters, group_by, metrics, date_filters, time_granularity },
+        _config,
+        context,
+      ) =>
+        aggregateQueryRecordsForThread(
+          {
+            threadId: thread_id,
+            module,
+            filters,
+            groupBy: group_by,
+            metrics,
+            dateFilters: date_filters,
+            timeGranularity: time_granularity,
+          },
+          context.api.logger,
+        ),
     }),
     tool({
       name: "query_record_propose",
       label: "Query: proponer un cambio",
       description:
-        "Unica via para cambiar datos en Query. No aplica nada: deja la propuesta en el chat y una persona la confirma con un boton. Usala tanto para crear como para actualizar registros reales. Si la persona corrige una propuesta que sigue pendiente, vuelve a llamar esta tool con el action_id de esa propuesta: Query actualiza la misma tarjeta, sin pedir que la descarte ni crear otra. Los fields corregidos se mezclan con los ya propuestos; usa replace_proposal=true y envia la version completa solo cuando debas quitar cambios anteriores. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: esos se envian como attachments/public assets en una respuesta normal. Antes, consulta query_module_describe y usa los slugs exactos. Los campos calculator, calculador_initial, calculator_advanced y calculator_table tambien aceptan el valor inicial calculado por el agente; el frontend podra recalcularlo despues. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Despues, dile a la persona que revise la propuesta en el chat; no afirmes que el cambio quedo hecho.",
+        "Unica via para cambiar datos en Query. No aplica nada: deja la propuesta en el chat y una persona la confirma con un boton. Usala tanto para crear como para actualizar registros reales. Si la persona corrige una propuesta que sigue pendiente, vuelve a llamar esta tool con el action_id de esa propuesta: Query actualiza la misma tarjeta, sin pedir que la descarte ni crear otra. Los fields corregidos se mezclan con los ya propuestos; usa replace_proposal=true y envia la version completa solo cuando debas quitar cambios anteriores. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: publicalos en el canal actual con query_attachment_send, buscandola primero con tool_search si no esta cargada, y nunca muestres la ruta local. Antes, consulta query_module_describe y usa los slugs exactos. Los campos calculator, calculador_initial, calculator_advanced y calculator_table tambien aceptan el valor inicial calculado por el agente; el frontend podra recalcularlo despues. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Despues, dile a la persona que revise la propuesta en el chat; no afirmes que el cambio quedo hecho.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         action_id: Type.Optional(
@@ -604,7 +793,7 @@ export default defineToolPlugin({
       name: "query_records_propose_batch",
       label: "Query: proponer varios cambios",
       description:
-        "Como query_record_propose pero para varios registros reales del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. Si corriges un lote pendiente, incluye su action_id y envia la lista items completa corregida; Query actualiza la misma tarjeta. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: esos se envian como attachments/public assets en una respuesta normal. Cada item puede traer record_id (actualizar), omitirlo (crear) o llevar delete: true con su record_id (eliminar ese registro). Un lote con borrados exige que la persona tenga permiso de eliminar en el modulo, se pinta en rojo y pide una confirmacion aparte. Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Despues, dile a la persona que revise la propuesta; no afirmes que los cambios quedaron hechos.",
+        "Como query_record_propose pero para varios registros reales del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. Si corriges un lote pendiente, incluye su action_id y envia la lista items completa corregida; Query actualiza la misma tarjeta. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: publicalos en el canal actual con query_attachment_send, buscandola primero con tool_search si no esta cargada, y nunca muestres la ruta local. Cada item puede traer record_id (actualizar), omitirlo (crear) o llevar delete: true con su record_id (eliminar ese registro). Un lote con borrados exige que la persona tenga permiso de eliminar en el modulo, se pinta en rojo y pide una confirmacion aparte. Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Despues, dile a la persona que revise la propuesta; no afirmes que los cambios quedaron hechos.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         action_id: Type.Optional(

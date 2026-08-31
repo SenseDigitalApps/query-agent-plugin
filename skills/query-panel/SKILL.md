@@ -1,6 +1,6 @@
 ---
 name: query-panel
-description: Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Every write goes through a proposal that a human confirms; never write to Query by any other route. Discovery-first: never assume module or field names.
+description: 'Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Every write goes through a proposal that a human confirms; never write to Query by any other route. Discovery-first: never assume module or field names.'
 ---
 
 # Query Panel Reader
@@ -34,9 +34,14 @@ que lo que ves es exactamente lo que ella ve. No es tu acceso: es el suyo.
    lectura y que opciones exactas admite cada campo de seleccion. En campos
    `status`, si una opcion viene como `Etiqueta|color`, usa solo `Etiqueta` al
    proponer valores; el sufijo despues de `|` es metadata visual del estado.
-3. `query_records_search` — busca con el slug real del campo y el valor exacto
-   que devolvio el paso 2.
-4. `query_record_get` — abre un registro concreto cuando necesites todo su
+3. `query_records_search` — busca con los slugs reales y, cuando haya mas de
+   un criterio, usa `filters`. Pide solo las `columns` necesarias para no llenar
+   el contexto con campos que no vas a usar. `author` es el campo del sistema
+   para quien creo el registro y acepta username o nombre completo.
+4. `query_records_aggregate` — para horas, dinero, conteos, promedios o
+   reportes, filtra y calcula en Query. No descargues decenas de filas para
+   sumarlas manualmente. Puede agrupar por fecha, autor u otro campo real.
+5. `query_record_get` — abre un registro concreto cuando necesites todo su
    detalle.
 
 Los pasos 1 y 2 son los que te permiten *entender* el sistema. Saltartelos es la
@@ -88,9 +93,12 @@ chat y una persona la confirma con un boton.
 
 No uses propuestas de registros para **entregar archivos generados**. Si creaste
 un HTML, PDF, imagen, hoja de calculo, demo, reporte visual o cualquier artifact
-local, eso no es un registro de negocio: envialo como respuesta normal para que
-el canal Query lo suba como attachment/public asset. Nunca crees un registro
-solo para mandar un link o una ruta local del archivo generado.
+local, eso no es un registro de negocio: publicalo en el canal actual con
+`query_attachment_send`, usando la ruta local solo como `file_path` interno y
+sin mostrarla a la persona. Si la herramienta no esta cargada, localizala y
+cargala primero con `tool_search`; no afirmes que no esta disponible antes de
+buscarla. Nunca crees un registro solo para mandar un link o una ruta local del
+archivo generado.
 
 Nunca escribas en Query por otro camino, aunque dispongas de otra herramienta,
 otro token o la API general. Si crees que hace falta escribir de otra forma,

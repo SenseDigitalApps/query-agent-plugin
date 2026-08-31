@@ -65,7 +65,11 @@ export const QUERY_DELIVERY_POLICY =
   "[Respuesta y archivos en Query: cierra este turno con contenido visible para la persona: texto, attachments o ambos, incluso si usaste herramientas. " +
   "No uses NO_REPLY ni termines unicamente con llamadas de herramientas. " +
   "El usuario final esta en otro computador y no puede acceder al sistema de archivos del agente ni del servidor: una ruta local no cuenta como entrega. " +
-  "Si generas o modificas cualquier archivo, subelo con query_attachment_send para que quede visible y descargable en Query. " +
+  "Si generas o modificas cualquier archivo, publicalo en el topic o canal Query actual con query_attachment_send usando su ruta local interna como file_path. " +
+  "query_attachment_send es una herramienta diferida: si no aparece entre las herramientas ya cargadas, debes localizarla y cargarla con tool_search antes de continuar. " +
+  "No afirmes que query_attachment_send esta ausente o no disponible sin haber ejecutado antes tool_search. " +
+  "Despues de cargarla, llama query_attachment_send para publicar el archivo en el topic o canal actual; nunca muestres file_path ni ninguna ruta local al usuario. " +
+  "Solo reporta indisponibilidad si tool_search no encuentra query_attachment_send o devuelve un error tecnico real; comunica exactamente ese resultado o error y no inventes que hace falta \"exponer el conector en la sesion\". " +
   "Puedes usar LocalPath y rutas locales para leer adjuntos recibidos o crear archivos internamente, pero nunca las muestres como entrega final. " +
   "No envies localhost, 127.0.0.1, 0.0.0.0, IP privadas, Tailscale, rutas Windows/Linux ni enlaces privados. No uses registros de negocio para entregar archivos.]";
 

@@ -5,10 +5,12 @@ import { join } from "node:path";
 
 import { forgetDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
 import {
+  aggregateQueryRecordsForThread,
   batchProposalRequestBody,
   callQuery,
   clearQueryMetadataCache,
   containsGeneratedArtifactReference,
+  queryRecordsForThread,
   recordProposalRequestBody,
   uploadQueryAttachmentForThread,
 } from "./query-tools.js";
@@ -247,5 +249,148 @@ describe("cache de metadatos de modulos", () => {
     await callQuery("thread-cache", "modules/", {}, "query_modules_list", log, { cacheable: true });
     await callQuery("thread-cache", "modules/", {}, "query_modules_list", log, { cacheable: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+});
+
+describe("consultas estructuradas de registros", () => {
+  const SOCKET_URL = "wss://query.test/ws/openclaw-agent/1/";
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() } as never;
+
+  beforeEach(() => {
+    rememberDelegatedAuth(
+      "thread-records",
+      { token: "token-registros", expires_in: 900 },
+      SOCKET_URL,
+      "msg-records",
+    );
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    forgetDelegatedAuth("thread-records");
+  });
+
+  it("envia filtros simultaneos y proyeccion al endpoint estructurado", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, total_matches: 2, rows: [] }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await queryRecordsForThread(
+      {
+        threadId: "thread-records",
+        module: "registro_de_horas",
+        filters: [
+          {
+            field: "fecha_a_registrar_registro_horas",
+            operator: "between",
+            value: ["2026-08-24", "2026-08-30"],
+          },
+          { field: "author", operator: "eq", value: "JCVARGAS" },
+        ],
+        columns: ["title", "author", "fecha_a_registrar_registro_horas", "horas"],
+        limit: 20,
+      },
+      log,
+    );
+
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(
+      "https://query.test/api/v4/openclaw-agent/modules/registro_de_horas/records/query/",
+    );
+    expect(options.method).toBe("POST");
+    expect(options.headers).toEqual({
+      "X-Query-Delegated-Token": "token-registros",
+      "Content-Type": "application/json",
+    });
+    expect(JSON.parse(String(options.body))).toMatchObject({
+      filters: [
+        {
+          field: "fecha_a_registrar_registro_horas",
+          operator: "between",
+          value: ["2026-08-24", "2026-08-30"],
+        },
+        { field: "author", operator: "eq", value: "JCVARGAS" },
+      ],
+      columns: ["title", "author", "fecha_a_registrar_registro_horas", "horas"],
+      limit: 20,
+    });
+  });
+
+  it("pide a Core que sume y agrupe en vez de hacerlo en el modelo", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        ok: true,
+        total_records: 2,
+        rows: [{ fecha: "2026-08-24", total_horas: 70.5 }],
+      }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await aggregateQueryRecordsForThread(
+      {
+        threadId: "thread-records",
+        module: "registro_de_horas",
+        filters: [{ field: "author", operator: "eq", value: "JCVARGAS" }],
+        groupBy: ["fecha_a_registrar_registro_horas"],
+        metrics: [{ operation: "sum", field: "horas", alias: "total_horas" }],
+        dateFilters: [
+          {
+            field: "fecha_a_registrar_registro_horas",
+            from: "2026-08-24",
+            to: "2026-08-30",
+          },
+        ],
+      },
+      log,
+    );
+
+    const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe(
+      "https://query.test/api/v4/openclaw-agent/modules/registro_de_horas/records/aggregate/",
+    );
+    expect(JSON.parse(String(options.body))).toMatchObject({
+      filters: [{ field: "author", operator: "eq", value: "JCVARGAS" }],
+      group_by: ["fecha_a_registrar_registro_horas"],
+      metrics: [{ operation: "sum", field: "horas", alias: "total_horas" }],
+      date_filters: [
+        {
+          field: "fecha_a_registrar_registro_horas",
+          from: "2026-08-24",
+          to: "2026-08-30",
+        },
+      ],
+    });
+  });
+
+  it("conserva el GET anterior cuando solo recibe field y value", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true, results: [] }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+
+    await queryRecordsForThread(
+      {
+        threadId: "thread-records",
+        module: "clientes",
+        field: "estado",
+        value: "Activo",
+        pageSize: 20,
+      },
+      log,
+    );
+
+    const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toBe(
+      "https://query.test/api/v4/openclaw-agent/modules/clientes/records/?field.estado=Activo&page_size=20",
+    );
+    expect(options.method).toBeUndefined();
   });
 });

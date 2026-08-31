@@ -268,6 +268,21 @@ describe("Query inbound dispatch recovery", () => {
       "query_attachment_send",
     );
     expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
+      "localizarla y cargarla con tool_search",
+    );
+    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
+      "No afirmes que query_attachment_send esta ausente o no disponible sin haber ejecutado antes tool_search",
+    );
+    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
+      "nunca muestres file_path ni ninguna ruta local al usuario",
+    );
+    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
+      "Solo reporta indisponibilidad si tool_search no encuentra query_attachment_send o devuelve un error tecnico real",
+    );
+    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
+      'no inventes que hace falta "exponer el conector en la sesion"',
+    );
+    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
       "Puedes usar LocalPath y rutas locales para leer adjuntos recibidos o crear archivos internamente",
     );
     expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
@@ -336,7 +351,8 @@ describe("Query inbound dispatch recovery", () => {
     const body = dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent as string;
     expect(body).toContain("/queue steer");
     expect(body).toContain("No uses NO_REPLY");
-    expect(body).toContain("subelo con query_attachment_send");
+    expect(body).toContain("publicalo en el topic o canal Query actual con query_attachment_send");
+    expect(body).toContain("localizarla y cargarla con tool_search");
     expect(body).toContain("nunca las muestres como entrega final");
     expect(body).toContain("Canal privado del remitente: private-22");
     expect(body).toContain("[Destino de tareas programadas:");
@@ -344,5 +360,79 @@ describe("Query inbound dispatch recovery", () => {
     expect(body).toContain(
       "canal privado private-22 solo si el usuario pide expresamente",
     );
+  });
+
+  it.each([
+    ["topic compartido", "topic", "topic-reportes"],
+    ["canal privado", "private", "private-22"],
+  ] as const)("injects the deferred attachment policy in every Query %s", async (
+    _label,
+    threadType,
+    threadId,
+  ) => {
+    const dispatchReply = vi.fn(async (params: any) => {
+      await params.delivery.deliver({ text: "Respuesta visible." });
+      return {
+        admission: { kind: "dispatch" },
+        dispatched: true,
+        ctxPayload: params.ctxPayload,
+        routeSessionKey: `agent:query-tenant:${threadId}`,
+      };
+    });
+    setQueryRuntime({
+      channel: {
+        routing: {
+          resolveAgentRoute: () => ({
+            agentId: "query-tenant",
+            accountId: "tenant-acme",
+            sessionKey: `agent:query-tenant:${threadId}`,
+          }),
+        },
+        session: {
+          resolveStorePath: () => "sessions.json",
+          recordInboundSession: vi.fn(),
+        },
+        inbound: { dispatchReply },
+        reply: { dispatchReplyWithBufferedBlockDispatcher: vi.fn() },
+      },
+    } as never);
+
+    await dispatchQueryMessage({
+      cfg: { channels: { query: {} } } as QueryConfig,
+      account: { ...account, accountId: "tenant-acme" },
+      threadId,
+      event: {
+        type: "message",
+        role: "user",
+        content: "Genera y entrega el reporte",
+        client_msg_id: `turn-policy-${threadType}`,
+        thread_id: threadId,
+        data: {
+          attachments: [],
+          thread_name: threadId,
+          thread_type: threadType,
+          tenant: { schema: "acme" },
+        },
+      },
+    });
+
+    expect(dispatchReply.mock.calls[0][0]).toMatchObject({
+      accountId: "tenant-acme",
+      agentId: "query-tenant",
+    });
+    const body = dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent as string;
+    expect(body).toContain(
+      `Tipo de canal: ${threadType}${threadType === "topic" ? " compartido" : ""}`,
+    );
+    expect(body).toContain(
+      "publicalo en el topic o canal Query actual con query_attachment_send usando su ruta local interna como file_path",
+    );
+    expect(body).toContain(
+      "query_attachment_send es una herramienta diferida: si no aparece entre las herramientas ya cargadas, debes localizarla y cargarla con tool_search",
+    );
+    expect(body).toContain(
+      "No afirmes que query_attachment_send esta ausente o no disponible sin haber ejecutado antes tool_search",
+    );
+    expect(body).toContain("nunca muestres file_path ni ninguna ruta local al usuario");
   });
 });
