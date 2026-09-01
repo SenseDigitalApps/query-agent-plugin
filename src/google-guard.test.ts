@@ -97,13 +97,22 @@ function deniedResponse(body: Record<string, unknown>, status = 403) {
   } as unknown as Response;
 }
 
-function storeAuth(username = "juli", token = "token-de-juli") {
+function storeAuth(
+  username = "juli",
+  token = "token-de-juli",
+  externalAccountIdentity?: {
+    id: number;
+    username: string;
+    display_name: string;
+  },
+) {
   rememberDelegatedAuth(
     THREAD,
     {
       token,
       expires_in: 900,
       identity: { id: 1, username, display_name: username },
+      external_account_identity: externalAccountIdentity,
       source: "turn",
     },
     SOCKET,
@@ -235,6 +244,33 @@ describe("guard de cuentas de Google en sesiones Query", () => {
     expect(decision?.blockReason).toContain("juli");
     // Y le dice cual si puede usar, para que el reintento sea el correcto.
     expect(decision?.blockReason).toContain("jcvargas");
+  });
+
+  it("explica el bloqueo contra el usuario asistido y no contra el administrador", async () => {
+    querySession();
+    storeAuth("Soporte", "token-de-soporte", {
+      id: 8,
+      username: "lina.moreno",
+      display_name: "Lina Moreno",
+    });
+    fetchMock.mockResolvedValue(
+      deniedResponse({
+        ok: false,
+        error: "binding_missing",
+        detail: "La cuenta no esta vinculada.",
+        allowed_account_ids: [],
+      }),
+    );
+
+    const decision = await callGoogle({ accountId: "lina-workspace" });
+
+    expect(decision?.block).toBe(true);
+    expect(decision?.blockReason).toContain("Lina Moreno");
+    expect(decision?.blockReason).not.toContain("habilitadas para Soporte");
+    expect(requestBody()).toMatchObject({
+      account_id: "lina-workspace",
+      thread_id: THREAD,
+    });
   });
 
   it("puede vigilar herramientas que no se llaman google_*", async () => {

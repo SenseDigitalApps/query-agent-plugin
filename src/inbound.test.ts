@@ -54,6 +54,40 @@ describe("Query inbound body", () => {
     expect(body).not.toContain("canal privado indicado");
   });
 
+  it("tells administrative support to use the private owner's external accounts", () => {
+    const body = bodyForAgent({
+      type: "message",
+      role: "user",
+      content: "valida otra vez mi cuenta de Sheets",
+      client_msg_id: "support-external-account",
+      thread_id: "private-lina",
+      data: {
+        thread_name: "Proyectos · Privado",
+        thread_type: "private",
+        sender: { id: 3, name: "Soporte", type: "support" },
+        delegated_auth: {
+          token: "signed-token",
+          expires_in: 900,
+          identity: {
+            id: 3,
+            username: "admin",
+            display_name: "Soporte · Administrador",
+          },
+          external_account_identity: {
+            id: 8,
+            username: "lina.moreno",
+            display_name: "Lina Moreno",
+          },
+          source: "turn",
+        },
+      },
+    });
+
+    expect(body).toContain("Soporte administrativo");
+    expect(body).toContain("Lina Moreno");
+    expect(body).toContain("no pidas vincular la cuenta al perfil del administrador");
+  });
+
   it("tells the agent to revise the same pending proposal card", () => {
     const body = bodyForAgent({
       type: "message",

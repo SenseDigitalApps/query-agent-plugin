@@ -164,9 +164,11 @@ export async function evaluateGoogleToolCall(
     threadId: session.threadId,
   });
 
+  const accountSubject =
+    stored.auth.external_account_identity ?? stored.auth.identity;
   const actor =
-    stored.auth.identity?.display_name ??
-    stored.auth.identity?.username ??
+    accountSubject?.display_name ??
+    accountSubject?.username ??
     "la persona de este canal";
 
   if (!verdict.ok) {

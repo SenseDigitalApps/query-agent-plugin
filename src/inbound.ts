@@ -581,6 +581,17 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
     `Canal actual: ${threadName}`,
     `Tipo de canal: ${threadType}${sharedType ? " compartido" : ""}`,
     privateThreadId ? `Canal privado del remitente: ${privateThreadId}` : "",
+    event.data?.sender?.type === "support" &&
+    event.data?.delegated_auth?.external_account_identity?.id !== undefined &&
+    event.data?.delegated_auth?.external_account_identity?.id !==
+      event.data?.delegated_auth?.identity?.id
+      ? `Soporte administrativo: para Google y otras cuentas externas, este ` +
+        `turno esta autorizado contra el perfil de ${
+          event.data.delegated_auth.external_account_identity.display_name ??
+          event.data.delegated_auth.external_account_identity.username ??
+          "la persona propietaria de este privado"
+        }; no pidas vincular la cuenta al perfil del administrador`
+      : "",
     resolvedActionLine(event),
     ...pendingRecordProposalLines(event),
     ...audioLines,

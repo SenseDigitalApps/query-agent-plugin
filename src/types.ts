@@ -140,6 +140,12 @@ export type QueryDelegatedAuth = {
   scopes?: string[];
   /** Ausente en servidores Query anteriores a esta funcion. */
   identity?: QueryDelegatedIdentity;
+  /**
+   * Persona cuyas cuentas externas cubre el turno. En soporte administrativo
+   * puede ser el propietario del privado aunque ``identity`` siga siendo el
+   * administrador que escribió.
+   */
+  external_account_identity?: QueryDelegatedIdentity;
   /** ``turn`` cuando la pidio una persona; ``schedule`` cuando la pidio un cron. */
   source?: "turn" | "schedule" | string;
 };
