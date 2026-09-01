@@ -86,6 +86,8 @@ describe("Query inbound body", () => {
     expect(body).toContain("Soporte administrativo");
     expect(body).toContain("Lina Moreno");
     expect(body).toContain("no pidas vincular la cuenta al perfil del administrador");
+    expect(body).toContain("conservara al administrador como creador");
+    expect(body).toContain("la ejecutara en nombre de esa persona");
   });
 
   it("tells the agent to revise the same pending proposal card", () => {

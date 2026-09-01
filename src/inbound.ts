@@ -590,7 +590,9 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
           event.data.delegated_auth.external_account_identity.display_name ??
           event.data.delegated_auth.external_account_identity.username ??
           "la persona propietaria de este privado"
-        }; no pidas vincular la cuenta al perfil del administrador`
+        }; no pidas vincular la cuenta al perfil del administrador. Si creas ` +
+        `una tarea programada desde este privado, Query conservara al ` +
+        `administrador como creador y la ejecutara en nombre de esa persona`
       : "",
     resolvedActionLine(event),
     ...pendingRecordProposalLines(event),
