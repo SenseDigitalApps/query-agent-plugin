@@ -34,6 +34,8 @@ que lo que ves es exactamente lo que ella ve. No es tu acceso: es el suyo.
    lectura y que opciones exactas admite cada campo de seleccion. En campos
    `status`, si una opcion viene como `Etiqueta|color`, usa solo `Etiqueta` al
    proponer valores; el sufijo despues de `|` es metadata visual del estado.
+   Cada campo trae tambien su `id` interno -no el `slug`- que es lo que
+   necesitas para corregirlo despues con `query_api_plan_propose`.
 3. `query_records_search` — busca con los slugs reales y, cuando haya mas de
    un criterio, usa `filters`. Pide solo las `columns` necesarias para no llenar
    el contexto con campos que no vas a usar. `author` es el campo del sistema
@@ -179,6 +181,54 @@ Claves:
   (un campo obligatorio que falta, un valor que no existe) se rechaza aqui
   mismo, con el error de ese campo. Un paso encadenado a un valor que aun no
   existe queda diferido hasta que se confirme el plan.
+- **Corregir un campo ya creado** es un `PATCH /api/v2/custom-fields/<id>/`.
+  Ese `id` no es el `slug`: es la clave interna que devuelve
+  `query_module_describe` en cada campo (`fields[].id`). Nunca lo inventes ni
+  lo confundas con el `slug`.
+
+#### Campos de seleccion (dropdown, radio, checkbox, status)
+
+`options` es texto separado por comas, no un array JSON: `"Abierto,Cerrado"`.
+Un `field_type: "status"` ademas admite color por opcion con
+`"Etiqueta|color"`: `"Abierto|green,Cerrado|red"`. Mandar un array JSON como
+string (`'["Abierto","Cerrado"]'`) se guarda tal cual -Query no lo valida- y
+el panel lo muestra roto, fragmentado por las comas internas del JSON.
+
+#### Campos relacionales (relational, multiple_relational_select, checkbox_relational)
+
+Un campo que apunta a otro modulo necesita las tres claves juntas; ninguna
+sola alcanza y el serializer **no** las exige, asi que un plan con solo
+`field_type: "relational"` se acepta y queda roto en silencio -el panel
+muestra "Unsupported relation type" porque no sabe con que renderizarlo-:
+
+- `field_type`: `"relational"` (o `"multiple_relational_select"` /
+  `"checkbox_relational"` para selección múltiple).
+- `relations_type`: `"module"` (registros o vistas), `"master"`, `"user"` o
+  `"role"`. Nunca lo dejes vacio.
+- `related_module`: el `id` del modulo destino (usa `query_modules_list` para
+  conseguirlo; no inventes el id ni uses el nombre).
+
+El `slug` que escribas se guarda con el prefijo `ref_` puesto automaticamente
+si no lo trae ya (`estado` se guarda como `ref_estado`); no hace falta que lo
+agregues tu, pero tampoco es un error si lo haces.
+
+```json
+{
+  "method": "POST",
+  "path": "/api/v2/custom-fields/",
+  "body": {
+    "module": "$0.id",
+    "label": "Proyecto asociado",
+    "slug": "proyecto_asociado",
+    "field_type": "relational",
+    "relations_type": "module",
+    "related_module": 34,
+    "rol_sign": [],
+    "edit_roles": []
+  },
+  "label": "Crear el campo Proyecto asociado, relacionado con Proyectos"
+}
+```
 
 ### Sumar un modulo a una categoria (grupo de modulos)
 
