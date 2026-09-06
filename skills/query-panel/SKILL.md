@@ -142,7 +142,14 @@ plan completo. Y quien apruebe tiene que ser **administrador**.
     {
       "method": "POST",
       "path": "/api/v2/custom-fields/",
-      "body": { "module": "$0.id", "label": "Estado", "slug": "estado" },
+      "body": {
+        "module": "$0.id",
+        "label": "Estado",
+        "slug": "estado",
+        "field_type": "status",
+        "rol_sign": [],
+        "edit_roles": []
+      },
       "label": "Crear el campo Estado"
     }
   ],
@@ -163,6 +170,10 @@ Claves:
   por otra via: dilo y detente.
 - Antes de proponer, usa `query_module_describe` o consulta la estructura para
   no inventar slugs ni campos obligatorios.
+- **`POST /api/v2/custom-fields/` siempre exige `field_type`, `rol_sign` y
+  `edit_roles`**, aunque no vayas a restringir el campo por rol: manda
+  `"rol_sign": []` y `"edit_roles": []` cuando no aplique. Olvidarlos es el
+  motivo mas comun de que un paso de creacion de campo se rechace.
 - **El cuerpo de cada paso se comprueba contra el endpoint real al proponer**,
   no solo su forma general. Un paso sin `"$N.campo"` que ya es incompatible
   (un campo obligatorio que falta, un valor que no existe) se rechaza aqui
