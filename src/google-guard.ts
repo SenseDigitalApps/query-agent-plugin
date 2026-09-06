@@ -7,6 +7,7 @@ import type {
 import { getDelegatedAuth } from "./delegated-store.js";
 import { authorizeExternalAccount } from "./external-accounts.js";
 import { readConfiguredGoogleAccountEmail } from "./google-accounts.js";
+import { externalContextForRun } from "./external-context.js";
 import {
   findQuerySessionByThread,
   getQuerySession,
@@ -108,9 +109,19 @@ export async function evaluateGoogleToolCall(
   ctx: PluginHookToolContext,
   log?: { info?: (message: string) => void; warn?: (message: string) => void },
 ): Promise<PluginHookBeforeToolCallResult | void> {
-  if (!isGoogleTool(event.toolName)) return;
+  const linkingTool = event.toolName.startsWith("query_google_");
+  if (!isGoogleTool(event.toolName) && !linkingTool) return;
+  let scoped;
+  try {
+    scoped = await externalContextForRun(ctx.runId ?? event.runId);
+  } catch {
+    return blocked("No se pudo renovar internamente la credencial del turno de Query. Reintenta la operación; no reconectes Google.");
+  }
+  // New linking tools enforce their own backend authorization, including the
+  // internal bot credential. This hook only refreshes the trusted turn context.
+  if (linkingTool) return;
 
-  const session =
+  const session = scoped ? { threadId: scoped.threadId, jobId: undefined } :
     getQuerySession(ctx.sessionKey) ?? findQuerySessionByThread(ctx.channelId);
   // Sin sesion Query no hay nada que aislar: este guard existe para las cuentas
   // que Query administra, no para adueñarse de las herramientas de Google.
@@ -126,7 +137,7 @@ export async function evaluateGoogleToolCall(
     );
   }
 
-  const stored = getDelegatedAuth(session.threadId);
+  const stored = scoped ?? getDelegatedAuth(session.threadId);
   if (!stored) {
     // Un cron sin ``run_as`` valido nunca recibe credencial, asi que este es el
     // punto en que se detiene: no hay a nombre de quien pedir la cuenta.
@@ -187,6 +198,10 @@ export async function evaluateGoogleToolCall(
     );
   }
 
+  if (verdict.credentialMutationAllowed === false &&
+      ["google_workspace_begin_auth", "google_workspace_complete_auth"].includes(event.toolName)) {
+    return blocked("La delegación permite usar esta cuenta, pero no reemplazar sus credenciales.");
+  }
   if (
     declaredEmail &&
     verdict.authenticatedEmail &&

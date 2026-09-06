@@ -145,6 +145,28 @@ function fakeApi() {
 }
 
 describe("guard de cuentas de Google en sesiones Query", () => {
+  it("reconsulta las delegaciones nuevas después de una revocación", async () => {
+    querySession();
+    storeAuth();
+    fetchMock.mockResolvedValueOnce(grantedResponse({ ok: true, account_id: "shared",
+      authenticated_email: "shared@example.com", status: "alias_approved", cache_ttl_seconds: 0,
+      credential_mutation_allowed: false }));
+    expect(await callGoogle({ accountId: "shared" })).toBeUndefined();
+    fetchMock.mockResolvedValueOnce(deniedResponse({ ok: false, error: "binding_revoked" }));
+    expect((await callGoogle({ accountId: "shared" }))?.block).toBe(true);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it("una delegación nueva no puede reemplazar credenciales de la cuenta física", async () => {
+    querySession();
+    storeAuth();
+    fetchMock.mockResolvedValue(grantedResponse({ ok: true, account_id: "shared",
+      authenticated_email: "shared@example.com", status: "alias_approved", cache_ttl_seconds: 0,
+      credential_mutation_allowed: false }));
+    expect((await callGoogle({ accountId: "shared", authorizationCode: "a-code" },
+      "google_workspace_complete_auth"))?.block).toBe(true);
+  });
+
   it("deja pasar las herramientas que no son de Google", async () => {
     querySession();
     const decision = await evaluateGoogleToolCall(

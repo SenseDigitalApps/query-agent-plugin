@@ -37,6 +37,7 @@ import {
 import { redactUnsafeArtifactReferences } from "./private-links.js";
 import { stripOpenClawControlAnnotations } from "./public-text.js";
 import { getQueryRuntime } from "./runtime.js";
+import { rememberExternalContext, pinExternalRun } from "./external-context.js";
 
 export type QueryAgentResult = {
   text: string;
@@ -675,6 +676,13 @@ export async function dispatchQueryMessage(params: {
     accountId: account.accountId,
     peer: { kind: conversationKind, id: peerId },
   });
+  if (event.data?.delegated_auth?.token && event.client_msg_id) {
+    // Additive: legacy stores and tool contracts remain available.
+    rememberExternalContext({ sessionKey: route.sessionKey, senderId,
+      threadId: String(event.thread_id ?? event.data?.thread_id ?? peerId),
+      queryAccountId: account.accountId, socketUrl: account.url, agentToken: account.token,
+      clientMsgId: event.client_msg_id, auth: event.data.delegated_auth });
+  }
   const rawBody = rawBodyForAgent(event);
   const body = bodyForAgent(event);
   const effort = params.effort ?? resolveEffortMode({
@@ -767,6 +775,7 @@ export async function dispatchQueryMessage(params: {
     if (!runId) {
       if (agentEvent.stream !== "lifecycle" || phase !== "start") return;
       runId = agentEvent.runId;
+      pinExternalRun(runId, route.sessionKey, senderId, account.accountId);
     }
     if (agentEvent.runId !== runId) return;
     if (agentEvent.stream === "tool") {
