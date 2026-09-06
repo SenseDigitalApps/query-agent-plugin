@@ -579,6 +579,22 @@ export default defineToolPlugin({
         ),
     }),
     tool({
+      name: "query_module_categories_list",
+      label: "Query: listar categorias de modulos",
+      description:
+        "Lista las categorias (grupos de modulos) que existen hoy, con su id real, su titulo y que modulos tiene cada una. Usala antes de proponer un plan que asocie un modulo a una categoria (por ejemplo, sumar el modulo que acabas de crear a 'Productividad'): el id sale de aqui, nunca lo inventes ni supongas que el nombre visible sirve como cuerpo de la llamada.",
+      parameters: Type.Object({ thread_id: THREAD_PARAM }),
+      execute: async ({ thread_id }, _config, context) =>
+        callQuery(
+          thread_id,
+          "module-categories/",
+          {},
+          "query_module_categories_list",
+          context.api.logger,
+          { cacheable: true },
+        ),
+    }),
+    tool({
       name: "query_records_search",
       label: "Query: buscar registros",
       description:
@@ -792,7 +808,7 @@ export default defineToolPlugin({
       name: "query_api_plan_propose",
       label: "Query: proponer cambios de configuracion",
       description:
-        "Para configurar el panel: crear modulos, grupos de modulos, campos, grupos de campos, carpetas, APIs externas. Propone una SECUENCIA de llamadas a la API de Query que una persona aprueba de una vez. No aplica nada por si sola. Cada paso lleva method (POST/PUT/PATCH/DELETE), path y body. Para encadenar pasos usa \"$N.campo\" en el body: por ejemplo module: \"$0.id\" toma el id que devolvio el paso 0, util porque el modulo aun no existe cuando propones. Se ejecuta todo o nada: si un paso falla, ninguno queda aplicado. Las rutas de usuarios, roles, permisos, tokens y agentes estan bloqueadas y el plan se rechaza entero si incluyes una. Para cambiar datos de registros NO uses esto: usa query_record_propose o query_records_propose_batch.",
+        "Para configurar el panel: crear modulos, campos, carpetas, APIs externas, y sumar un modulo a una categoria existente (grupo de modulos). Propone una SECUENCIA de llamadas a la API de Query que una persona aprueba de una vez. No aplica nada por si sola: cada paso se comprueba contra el contrato real de su endpoint al proponer -si el cuerpo ya es incompatible, el plan se rechaza aqui mismo, no al aplicar- salvo que dependa de \"$N.campo\" de un paso anterior, en cuyo caso queda diferido hasta la ejecucion. Cada paso lleva method (POST/PUT/PATCH/DELETE), path y body. Para encadenar pasos usa \"$N.campo\" en el body: por ejemplo module: \"$0.id\" toma el id que devolvio el paso 0, util porque el modulo aun no existe cuando propones. Se ejecuta todo o nada: si un paso falla, ninguno queda aplicado. Las rutas de usuarios, roles, permisos, tokens y agentes estan bloqueadas y el plan se rechaza entero si incluyes una. Para sumar un modulo a una categoria usa POST en /api/v2/modulos-category/<id>/add-module/ con body {\"module\": \"$N.id\"}: es aditivo, no borra los modulos que la categoria ya tenia. Nunca mandes un campo \"group\" en el body de /api/v2/modulos/: no existe: la categoria se asocia despues, con ese paso aparte, y el id real de la categoria sale de query_module_categories_list. Para cambiar datos de registros NO uses esto: usa query_record_propose o query_records_propose_batch.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         steps: Type.Array(

@@ -163,6 +163,53 @@ Claves:
   por otra via: dilo y detente.
 - Antes de proponer, usa `query_module_describe` o consulta la estructura para
   no inventar slugs ni campos obligatorios.
+- **El cuerpo de cada paso se comprueba contra el endpoint real al proponer**,
+  no solo su forma general. Un paso sin `"$N.campo"` que ya es incompatible
+  (un campo obligatorio que falta, un valor que no existe) se rechaza aqui
+  mismo, con el error de ese campo. Un paso encadenado a un valor que aun no
+  existe queda diferido hasta que se confirme el plan.
+
+### Sumar un modulo a una categoria (grupo de modulos)
+
+Un modulo **no** lleva su categoria en su propio cuerpo: `POST /api/v2/modulos/`
+no tiene un campo `group` ni nada parecido, y mandarlo no hace nada -el paso
+puede incluso rechazarse por otra razon y dar la impresion de que fue por eso-.
+La categoria se asocia **despues**, con un paso aparte, y es **aditiva**: suma
+el modulo sin tocar los que la categoria ya tenia.
+
+1. `query_module_categories_list` — la lista real de categorias con su `id`.
+   Nunca inventes un id ni supongas que el nombre visible ("Productividad")
+   sirve como valor: si la categoria que necesitas no aparece, dilo en vez de
+   crearla a ciegas.
+2. En el plan, el ultimo paso suma el modulo con `POST` a
+   `/api/v2/modulos-category/<id>/add-module/` y body `{"module": "$0.id"}`
+   (o el id fijo de la categoria si ya la creaste en un paso anterior del
+   mismo plan).
+
+```json
+{
+  "thread_id": "conversation-id",
+  "steps": [
+    {
+      "method": "POST",
+      "path": "/api/v2/modulos/",
+      "body": { "name": "obras", "label": "Obras", "description": "..." },
+      "label": "Crear el modulo Obras"
+    },
+    {
+      "method": "POST",
+      "path": "/api/v2/modulos-category/7/add-module/",
+      "body": { "module": "$0.id" },
+      "label": "Sumar Obras a la categoria Productividad"
+    }
+  ],
+  "intent": "Crear el modulo Obras dentro de Productividad"
+}
+```
+
+Para crear una categoria nueva (no sumarse a una que ya existe), el paso es
+`POST /api/v2/modulos-category/` con `title`, `slug`, `description` y `type`;
+`add-module` sigue siendo el paso que la conecta con un modulo despues.
 
 ### Varios cambios a la vez
 

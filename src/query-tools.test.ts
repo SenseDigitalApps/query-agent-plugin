@@ -322,6 +322,39 @@ describe("cache de metadatos de modulos", () => {
     await callQuery("thread-cache", "modules/", {}, "query_modules_list", log, { cacheable: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
   });
+
+  it("query_module_categories_list pide /module-categories/, no un nombre inventado", async () => {
+    // Regresion: la unica forma correcta de descubrir el id real de una
+    // categoria antes de sumarle un modulo en un plan. Nada de adivinar un
+    // `group` en el cuerpo de /api/v2/modulos/.
+    rememberDelegatedAuth(
+      "thread-cache",
+      { token: "token-ana", expires_in: 900 },
+      SOCKET_URL,
+      "msg-1",
+    );
+    fetchMock.mockResolvedValue({
+      ok: true,
+      status: 200,
+      json: async () => ({
+        results: [{ id: 7, title: "Productividad", slug: "productividad", modules: [] }],
+      }),
+    });
+    const result = await callQuery(
+      "thread-cache",
+      "module-categories/",
+      {},
+      "query_module_categories_list",
+      log,
+      { cacheable: true },
+    );
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const requestedUrl = String(fetchMock.mock.calls[0]?.[0]);
+    expect(requestedUrl).toContain("/api/v4/openclaw-agent/module-categories/");
+    expect(result).toEqual({
+      results: [{ id: 7, title: "Productividad", slug: "productividad", modules: [] }],
+    });
+  });
 });
 
 describe("consultas estructuradas de registros", () => {
