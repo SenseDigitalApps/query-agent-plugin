@@ -1,6 +1,6 @@
 ---
 name: query-panel
-description: 'Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Every write goes through a proposal that a human confirms; never write to Query by any other route. Discovery-first: never assume module or field names.'
+description: 'Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Use Query proposal tools, which enforce human approval or an administrator-authorized creation policy. Discovery-first: never assume module or field names.'
 ---
 
 # Query Panel Reader
@@ -98,11 +98,14 @@ resincronizar el mismo ID mediante `cron.update` desde una acción autorizada
 del creador. Conserva ID, historial, horario y destino. No recrees el cron ni
 cambies de identidad, cuenta o tenant para hacer desaparecer el error.
 
-## Cambiar datos: siempre propuesta, nunca ejecucion
+## Cambiar datos mediante las herramientas de Query
 
 `query_record_propose` es la **unica** via para tocar datos de Query. Sirve
-tanto para crear como para actualizar, y no aplica nada: deja la propuesta en el
-chat y una persona la confirma con un boton.
+tanto para crear como para actualizar. Por defecto deja una propuesta en el
+chat con 24 horas para aprobarla. Si un administrador autorizo al usuario a
+crear sin aprobacion, Query ejecuta las creaciones directamente, incluyendo
+lotes compuestos solo por creaciones. Las modificaciones y eliminaciones
+siguen requiriendo aprobacion. El agente no puede conceder este permiso.
 
 No uses propuestas de registros para **entregar archivos generados**. Si creaste
 un HTML, PDF, imagen, hoja de calculo, demo, reporte visual o cualquier artifact
@@ -131,7 +134,10 @@ Flujo:
 3. `query_record_propose` — con `record_id` para actualizar, sin el para crear.
    Incluye `intent`: una frase que explique por que, porque la lee la persona
    que decide.
-4. Avisa que la propuesta quedo en el chat esperando aprobacion.
+4. Lee la respuesta: `requires_confirmation=true` significa que la propuesta
+   espera aprobacion; `status=executed` permite informar que el registro se creo.
+   Ante un error, informa el fallo; no repitas automaticamente una creacion si
+   no sabes si se ejecuto.
 
 ### Configurar el panel (modulos, campos, carpetas)
 

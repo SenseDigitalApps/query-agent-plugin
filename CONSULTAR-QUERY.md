@@ -77,9 +77,16 @@ puede elegir otro destino solo si ya tiene acceso a ese canal.
 ## Consultar sí, cambiar no
 
 Estas consultas son de lectura. Si le pides que **modifique o cree** un
-registro, no lo hace directamente: deja una propuesta en el chat con el detalle
+registro, por defecto deja una propuesta en el chat con el detalle
 de qué cambiaría, y aparece un botón para aplicarla o descartarla. Nada se
-guarda en Query hasta que una persona lo aprueba.
+guarda en Query hasta que una persona lo aprueba. Todas las propuestas nuevas
+o corregidas duran 24 horas, tanto en conversaciones como en cron.
+
+Un administrador puede activar **Permitir al agente crear registros sin
+aprobación** al editar un usuario en Query. Para ese usuario las creaciones,
+individuales o en lote, se ejecutan con sus permisos y quedan auditadas.
+Las modificaciones y eliminaciones siguen requiriendo aprobación. Desactivar
+la opción vuelve a exigir aprobación para las siguientes creaciones.
 
 Si no ves el botón y solo el texto de la propuesta, es que no tienes permiso
 para editar ese módulo; puede aplicarla alguien que sí lo tenga.
