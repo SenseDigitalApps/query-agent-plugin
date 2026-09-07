@@ -135,6 +135,10 @@ export type QueryDelegatedIdentity = {
 /** Credencial corta con la que el agente actua en nombre del usuario. */
 export type QueryDelegatedAuth = {
   token: string;
+  /** Scheduled execution context returned by Core v2; never the delivery target. */
+  thread_id?: string;
+  external_id?: string;
+  origin_context?: string;
   expires_at?: string;
   expires_in?: number;
   scopes?: string[];

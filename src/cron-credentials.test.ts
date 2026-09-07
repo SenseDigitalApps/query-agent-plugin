@@ -18,6 +18,7 @@ import {
 } from "./delegated-store.js";
 import { evaluateGoogleToolCall } from "./google-guard.js";
 import {
+  getQuerySession,
   forgetQuerySession,
   rememberQuerySession,
 } from "./query-session-store.js";
@@ -101,6 +102,51 @@ function cronAdded(jobId = "cron-1") {
 }
 
 describe("registro de la tarea", () => {
+  it("correlaciona dos creaciones nativas concurrentes por call ID y por ID real", async () => {
+    const { api, hooks } = fakeApi();
+    const send = vi.fn();
+    registerQueryCronSync(api as never, send);
+    hooks.get("gateway_stop")?.();
+    rememberQuerySession(SESSION, { threadId: ORIGIN_THREAD, accountId: "sales" });
+    for (const actor of ["alice", "bob"]) {
+      rememberDelegatedAuth(ORIGIN_THREAD, { token: actor, expires_in: 900 }, SOCKET);
+      await hooks.get("before_tool_call")?.({ toolName: "cron", toolCallId: actor,
+        params: { action: "add", job: { delivery: cronAdded().job.delivery } } },
+        { sessionKey: SESSION });
+    }
+    for (const actor of ["bob", "alice"]) {
+      const job = { id: `real-${actor}`, delivery: cronAdded().job.delivery };
+      await hooks.get("cron_changed")?.({ action: "added", jobId: job.id, job });
+      expect(send.mock.calls.at(-1)?.[1].data.delegated_token).toBeUndefined();
+      await hooks.get("after_tool_call")?.({ toolName: "cron", toolCallId: actor,
+        params: { action: "add" }, result: { content: [{ type: "text", text: JSON.stringify(job) }] } }, {});
+      expect(send.mock.calls.at(-1)?.[1].data).toMatchObject({ external_id: job.id, delegated_token: actor, authorization_version: 2 });
+    }
+    hooks.get("gateway_stop")?.();
+  });
+
+  it("mantiene isolated, limpia la sesión humana y bloquea la CLI autenticada", async () => {
+    const { api, hooks } = fakeApi();
+    const send = vi.fn();
+    registerQueryCronSync(api as never, send);
+    rememberQuerySession(SESSION, { threadId: ORIGIN_THREAD, accountId: "sales" });
+    rememberDelegatedAuth(ORIGIN_THREAD, { token: "editor-turn", expires_in: 900 }, SOCKET);
+    const native = await hooks.get("before_tool_call")?.({ toolName: "cron", toolCallId: "update-call", params: {
+      action: "update", jobId: "existing", patch: { sessionTarget: "session:direct:13", delivery: { channel: "query", accountId: "sales", to: "channel:86" } },
+    } }, { sessionKey: SESSION });
+    expect(native.params.patch).toMatchObject({ sessionTarget: "isolated", sessionKey: null });
+    await hooks.get("after_tool_call")?.({ toolName: "cron", toolCallId: "update-call", params: {},
+      result: { id: "existing", ...native.params.patch } }, {});
+    expect(send.mock.calls.at(-1)?.[1].data).toMatchObject({
+      action: "updated", external_id: "existing", delegated_token: "editor-turn", authorization_version: 2,
+    });
+    const cli = await hooks.get("before_tool_call")?.({ toolName: "exec", params: {
+      command: "openclaw cron add --name test",
+    } }, { sessionKey: SESSION });
+    expect(cli.block).toBe(true);
+    hooks.get("gateway_stop")?.();
+  });
+
   it("usa la credencial del hilo creador aunque el destino sea otro", async () => {
     const { api, hooks } = fakeApi();
     const send = vi.fn();
@@ -213,13 +259,13 @@ describe("arranque del turno de un cron", () => {
     registerQueryCronSync(api as never, vi.fn());
     await hooks.get("cron_changed")?.(cronAdded());
     requestQueryScheduleAuth.mockResolvedValue({
-      auth: { token: "canonico", expires_in: 900 },
+      auth: { source: "schedule", token: "canonico", expires_in: 900 },
       socketUrl: SOCKET,
     });
 
     await hooks.get("before_agent_start")?.(
       {},
-      { jobId: "cron-1", channel: "query", chatId: ORIGIN_THREAD },
+      { jobId: "cron-1", channel: "query", chatId: ORIGIN_THREAD, sessionKey: SESSION },
     );
 
     expect(requestQueryScheduleAuth).toHaveBeenCalledWith(THREAD, "cron-1", "sales");
@@ -228,11 +274,11 @@ describe("arranque del turno de un cron", () => {
     );
   });
 
-  it("pide credencial y la guarda para que las tools la encuentren", async () => {
+  it("no pide credencial a una cuenta desconocida", async () => {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, vi.fn());
     requestQueryScheduleAuth.mockResolvedValue({
-      auth: { token: "del-autor", expires_in: 900 },
+      auth: { source: "schedule", token: "del-autor", expires_in: 900 },
       socketUrl: SOCKET,
     });
 
@@ -240,15 +286,11 @@ describe("arranque del turno de un cron", () => {
     // OpenClaw, y entonces no se conoce la cuenta de la que salio.
     await hooks.get("before_agent_start")?.(
       { prompt: "resumen diario" },
-      { jobId: "cron-sin-sincronizar", channel: "query", chatId: THREAD },
+      { jobId: "cron-sin-sincronizar", channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
 
-    expect(requestQueryScheduleAuth).toHaveBeenCalledWith(
-      THREAD,
-      "cron-sin-sincronizar",
-      undefined,
-    );
-    expect(getDelegatedAuth(THREAD)?.auth.token).toBe("del-autor");
+    expect(requestQueryScheduleAuth).not.toHaveBeenCalled();
+    expect(getDelegatedAuth(THREAD)).toBeUndefined();
   });
 
   it("usa la cuenta con la que se sincronizo la tarea", async () => {
@@ -256,13 +298,13 @@ describe("arranque del turno de un cron", () => {
     registerQueryCronSync(api as never, vi.fn());
     await hooks.get("cron_changed")?.(cronAdded());
     requestQueryScheduleAuth.mockResolvedValue({
-      auth: { token: "del-autor", expires_in: 900 },
+      auth: { source: "schedule", token: "del-autor", expires_in: 900 },
       socketUrl: SOCKET,
     });
 
     await hooks.get("before_agent_start")?.(
       {},
-      { jobId: "cron-1", channel: "query", chatId: THREAD },
+      { jobId: "cron-1", channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
 
     expect(requestQueryScheduleAuth).toHaveBeenCalledWith(THREAD, "cron-1", "sales");
@@ -274,7 +316,7 @@ describe("arranque del turno de un cron", () => {
 
     await hooks.get("before_agent_start")?.(
       {},
-      { channel: "query", chatId: THREAD },
+      { channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
 
     expect(requestQueryScheduleAuth).not.toHaveBeenCalled();
@@ -292,22 +334,23 @@ describe("arranque del turno de un cron", () => {
     expect(requestQueryScheduleAuth).not.toHaveBeenCalled();
   });
 
-  it("reemplaza una credencial humana viva por la credencial propia del cron", async () => {
+  it("conserva la credencial humana y guarda por separado la del cron", async () => {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, vi.fn());
     rememberDelegatedAuth(THREAD, { token: "aun-viva", expires_in: 900 }, SOCKET);
     requestQueryScheduleAuth.mockResolvedValue({
-      auth: { token: "solo-del-cron", expires_in: 900 },
+      auth: { source: "schedule", token: "solo-del-cron", expires_in: 900 },
       socketUrl: SOCKET,
     });
 
     await hooks.get("before_agent_start")?.(
       {},
-      { jobId: "cron-1", channel: "query", chatId: THREAD },
+      { jobId: "cron-1", channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
 
     expect(requestQueryScheduleAuth).toHaveBeenCalledWith(THREAD, "cron-1", "sales");
-    expect(getDelegatedAuth(THREAD)?.auth.token).toBe("solo-del-cron");
+    expect(getDelegatedAuth(THREAD)?.auth.token).toBe("aun-viva");
+    expect(getDelegatedAuth(getQuerySession(SESSION)!.authKey!)?.auth.token).toBe("solo-del-cron");
   });
 
   it("avisa con instrucciones cuando Query niega la credencial", async () => {
@@ -317,7 +360,7 @@ describe("arranque del turno de un cron", () => {
 
     await hooks.get("before_agent_start")?.(
       {},
-      { jobId: "cron-1", channel: "query", chatId: THREAD },
+      { jobId: "cron-1", channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
 
     expect(getDelegatedAuth(THREAD)).toBeUndefined();
@@ -430,7 +473,7 @@ describe("arranque del turno de un cron", () => {
     await expect(
       hooks.get("before_agent_start")?.(
         {},
-        { jobId: "cron-1", channel: "query", chatId: THREAD },
+        { jobId: "cron-1", channel: "query", chatId: THREAD, sessionKey: SESSION },
       ),
     ).resolves.not.toThrow();
     expect(api.logger.warn).toHaveBeenCalledWith(

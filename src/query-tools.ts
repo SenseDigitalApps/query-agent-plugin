@@ -1,4 +1,7 @@
 import { Type } from "typebox";
+import { jsonResult, textResult } from "openclaw/plugin-sdk/tool-results";
+import { getQuerySession } from "./query-session-store.js";
+import { scheduledCredential, scheduledToolContext } from "./scheduled-context.js";
 import {
   defineToolPlugin,
   type ToolPluginExecutionContext,
@@ -454,6 +457,8 @@ async function delegatedAuthForTool(
   toolName: string,
   log: QueryToolLog,
 ) {
+  const scheduled = scheduledToolContext.getStore();
+  if (scheduled) return scheduled;
   const lookupKey = String(threadId);
   const stale = peekDelegatedAuth(threadId);
   const alive = getDelegatedAuth(threadId);
@@ -972,5 +977,44 @@ export default defineToolPlugin({
         };
       },
     }),
-  ],
+  ].map((definition) => ({
+    ...definition,
+    // Tool catalogs can be built before before_agent_start. Accept omission
+    // there too; the trusted session is resolved again at execution time.
+    parameters: {
+      ...definition.parameters,
+      required: (((definition.parameters as unknown as { required?: string[] }).required ?? [])).filter((key) => key !== "thread_id"),
+    },
+    execute: undefined,
+    factory: ({ api, config, toolContext }) => {
+      const sessionKey = toolContext.sessionKey;
+      return {
+        name: definition.name, label: definition.label,
+        description: definition.description,
+        parameters: {
+          ...definition.parameters,
+          required: (((definition.parameters as unknown as { required?: string[] }).required ?? [])).filter((key) => key !== "thread_id"),
+        },
+        execute: async (toolCallId, params, signal, onUpdate) => {
+          const invoke = (resolved: unknown) => definition.execute!(resolved, config, { api, toolCallId, signal, onUpdate });
+          const session = getQuerySession(sessionKey);
+          if (!session?.jobId) {
+            const supplied = params as Record<string, unknown>;
+            const value = await invoke({ ...supplied, thread_id: supplied.thread_id ?? session?.threadId });
+            return typeof value === "string" ? textResult(value, value) : jsonResult(value);
+          }
+          try {
+            const resolved = await scheduledCredential(sessionKey);
+            if (!resolved) throw new Error("query_schedule_authorization_missing");
+            const value = await scheduledToolContext.run(resolved.credential, () =>
+              invoke({ ...(params as Record<string, unknown>), thread_id: resolved.threadId }));
+            return typeof value === "string" ? textResult(value, value) : jsonResult(value);
+          } catch (error) {
+            const detail = error instanceof Error ? error.message : "query_schedule_authorization_missing";
+            return { content: [{ type: "text" as const, text: detail }], details: { ok: false, error: "query_schedule_authorization_missing" } };
+          }
+        },
+      };
+    },
+  })),
 });

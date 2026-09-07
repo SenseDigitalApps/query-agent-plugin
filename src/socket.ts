@@ -83,7 +83,7 @@ function turnAuthKey(threadId: string, clientMsgId: string): string {
 }
 
 function scheduleAuthKey(threadId: string, externalId: string): string {
-  return `${threadId}${AUTH_KEY_SEPARATOR}cron:${externalId}`;
+  return `${threadId.replace(/^(direct|channel):/, "")}${AUTH_KEY_SEPARATOR}cron:${externalId}`;
 }
 const QUERY_REPLY_AUDIO = process.env.QUERY_REPLY_AUDIO ?? "1";
 const QUERY_REPLY_AUDIO_MODE = process.env.QUERY_REPLY_AUDIO_MODE ?? "requested";
@@ -1131,7 +1131,7 @@ export class QuerySocketMonitor {
           content: "",
           client_msg_id: "",
           thread_id: threadId,
-          data: { external_id: externalId },
+          data: { external_id: externalId, authorization_version: 2 },
         });
       } catch (error) {
         this.pendingAuth.delete(key);
@@ -1238,6 +1238,8 @@ export async function requestQueryScheduleAuth(
 ): Promise<{ auth: QueryDelegatedAuth; socketUrl: string } | undefined> {
   if (!externalId) return undefined;
   let monitor = accountId ? activeMonitors.get(accountId) : undefined;
+  // An explicitly selected tenant must never fall through to a different one.
+  if (accountId && !monitor) return undefined;
   if (!monitor) {
     if (activeMonitors.size !== 1) return undefined;
     monitor = [...activeMonitors.values()][0];

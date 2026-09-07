@@ -86,22 +86,11 @@ describe("Query cron sync", () => {
         },
       },
     });
-    expect(send.mock.calls.slice(-2)).toEqual([
-      [
-        "sales",
-        expect.objectContaining({
-          thread_id: "private-42",
-          data: expect.objectContaining({ action: "removed" }),
-        }),
-      ],
-      [
-        "sales",
-        expect.objectContaining({
-          thread_id: "private-43",
-          data: expect.objectContaining({ action: "added" }),
-        }),
-      ],
-    ]);
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send).toHaveBeenLastCalledWith("sales", expect.objectContaining({
+      thread_id: "private-43",
+      data: expect.objectContaining({ action: "updated", authorization_version: 2 }),
+    }));
 
     await hooks.get("cron_changed")?.({
       action: "removed",

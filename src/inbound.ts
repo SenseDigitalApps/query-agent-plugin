@@ -604,6 +604,11 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
     .filter(Boolean)
     .join(". ");
   const scheduledDeliveryHint =
+    `\n\n[Autorización de tareas Query: usa la herramienta nativa cron para crear o actualizar, siempre sessionTarget=isolated. ` +
+    `No uses openclaw cron add/edit por CLI: no captura el turno autorizado. ` +
+    `Query conserva la identidad del creador separada del destino y resuelve internamente la autenticación y thread_id al ejecutar. ` +
+    `No incluyas thread_id en el prompt ni enlaces la ejecución a una sesión humana. ` +
+    `Para reparar un cron sin autorización, actualiza su ID existente desde un turno autorizado de su creador, sin recrearlo.]` +
     `\n\n[Destino de tareas programadas: conserva el canal actual como destino ` +
     `cuando el usuario pida publicar aqui, en este canal, o cuando la ` +
     `automatizacion sea tematica para este topic. Si pide otro canal, no ` +

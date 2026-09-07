@@ -29,6 +29,9 @@ export type QuerySessionBinding = {
   accountId?: string;
   /** Presente solo si el turno lo disparo una tarea programada. */
   jobId?: string;
+  /** Separate credential slot for this isolated run. Never a human thread key. */
+  authKey?: string;
+  deliveryThreadId?: string;
   updatedAt: number;
 };
 
@@ -140,6 +143,7 @@ export function findQuerySessionByThread(
   loadFromDisk();
   let newest: QuerySessionBinding | undefined;
   for (const binding of bySessionKey.values()) {
+    if (binding.authKey) continue;
     if (binding.threadId !== key) continue;
     if (!newest || binding.updatedAt > newest.updatedAt) newest = binding;
   }

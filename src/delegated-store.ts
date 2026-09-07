@@ -178,5 +178,5 @@ export function forgetDelegatedAuth(threadId: string | number): void {
 export function threadsWithDelegatedAuth(): string[] {
   loadFromDisk();
   if (pruneExpired()) persistToDisk();
-  return [...byThread.keys()];
+  return [...byThread.keys()].filter((key) => !key.startsWith("schedule:"));
 }

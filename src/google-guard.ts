@@ -8,6 +8,7 @@ import { getDelegatedAuth } from "./delegated-store.js";
 import { authorizeExternalAccount } from "./external-accounts.js";
 import { readConfiguredGoogleAccountEmail } from "./google-accounts.js";
 import { externalContextForRun } from "./external-context.js";
+import { scheduledCredential } from "./scheduled-context.js";
 import {
   findQuerySessionByThread,
   getQuerySession,
@@ -111,9 +112,17 @@ export async function evaluateGoogleToolCall(
 ): Promise<PluginHookBeforeToolCallResult | void> {
   const linkingTool = event.toolName.startsWith("query_google_");
   if (!isGoogleTool(event.toolName) && !linkingTool) return;
+  const cronSession = getQuerySession(ctx.sessionKey);
+  let scheduled;
+  if (cronSession?.jobId) {
+    try { scheduled = await scheduledCredential(ctx.sessionKey); }
+    catch {
+      return blocked(`query_schedule_authorization_missing: la tarea ${cronSession.jobId} necesita resincronización autorizada por su creador. No se usará una credencial humana ni otro tenant.`);
+    }
+  }
   let scoped;
   try {
-    scoped = await externalContextForRun(ctx.runId ?? event.runId);
+    scoped = scheduled ? undefined : await externalContextForRun(ctx.runId ?? event.runId);
   } catch {
     return blocked("No se pudo renovar internamente la credencial del turno de Query. Reintenta la operación; no reconectes Google.");
   }
@@ -121,7 +130,7 @@ export async function evaluateGoogleToolCall(
   // internal bot credential. This hook only refreshes the trusted turn context.
   if (linkingTool) return;
 
-  const session = scoped ? { threadId: scoped.threadId, jobId: undefined } :
+  const session = scoped ? { threadId: scoped.threadId, jobId: undefined, authKey: undefined } :
     getQuerySession(ctx.sessionKey) ?? findQuerySessionByThread(ctx.channelId);
   // Sin sesion Query no hay nada que aislar: este guard existe para las cuentas
   // que Query administra, no para adueñarse de las herramientas de Google.
@@ -137,13 +146,13 @@ export async function evaluateGoogleToolCall(
     );
   }
 
-  const stored = scoped ?? getDelegatedAuth(session.threadId);
+  const stored = scheduled?.credential ?? scoped ?? getDelegatedAuth(session.authKey ?? session.threadId);
   if (!stored) {
     // Un cron sin ``run_as`` valido nunca recibe credencial, asi que este es el
     // punto en que se detiene: no hay a nombre de quien pedir la cuenta.
     const detail = session.jobId
       ? `la tarea programada ${session.jobId} no tiene un autor con acceso ` +
-        `vigente al canal de Query. Vuelve a crearla desde una conversacion con ` +
+        `vigente en Query. Resincroniza el mismo ID desde una conversacion con ` +
         `la persona en cuyo nombre debe correr.`
       : `no hay una credencial vigente de Query para el canal ${session.threadId}.`;
     return blocked(
@@ -172,7 +181,7 @@ export async function evaluateGoogleToolCall(
     accountId: account.value,
     authenticatedEmail: declaredEmail?.value,
     configuredEmail: configuredEmail || undefined,
-    threadId: session.threadId,
+    threadId: scheduled?.threadId ?? session.threadId,
   });
 
   const accountSubject =

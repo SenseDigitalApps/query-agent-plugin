@@ -66,26 +66,37 @@ sea la primera vez que lo ves.
 
 ## Parametros
 
-Todas las herramientas piden `thread_id`: es el id del canal de Query en el que
-estas conversando (`conversation.id`). Va siempre tal cual; no lo inventes ni lo
-tomes de otra conversacion.
+En conversaciones humanas, conserva `thread_id` cuando la firma lo pida: es el
+id autorizado de esa conversación. En ejecuciones programadas, el plugin lo
+resuelve internamente y no debes incluirlo en el prompt ni deducirlo del destino.
 
 ## Si te dicen que no hay credencial vigente
 
-El permiso que Query concede para consultar caduca a los 15 minutos. Si una
-herramienta responde `no_credential`, pide a la persona que te escriba un
-mensaje nuevo en ese canal y reintenta. No busques otra via ni pidas tokens.
+En un turno humano, pide un mensaje nuevo en ese canal y reintenta si la
+renovación interna falla. No busques tokens ni credenciales de otra conversación.
 
-## Cuando lo que corre es una tarea programada
+## Crear, editar y reparar tareas programadas
 
-Un cron no tiene a nadie escribiendo, asi que no puede seguir el consejo de
-arriba: pedir "escribeme un mensaje" a las 8 de la manana no sirve de nada. Su
-credencial se pide sola al arrancar el turno y corre con los permisos de **quien
-creo la tarea**, no con los de quien haya escrito de ultimo en el canal.
+Usa la herramienta nativa `cron` desde el turno Query autorizado del creador.
+No uses `openclaw cron add` ni `openclaw cron edit` por CLI: esa ruta no captura
+la autorización programada. Mantén `sessionTarget: "isolated"`; nunca uses
+`session:...` ni una sesión privada persistente para sustituir la identidad.
 
-Si aun asi una consulta responde `no_credential`, la tarea se registro sin autor
-comprobable. No lo intentes por otra via: dilo en el reporte y pide que vuelvan
-a crearla desde una conversacion con la persona en cuyo nombre debe correr.
+Identidad de ejecución, origen autorizado y entrega son datos independientes.
+El creador puede pedir desde un privado una entrega en un canal/topic público.
+Antes de elegir otro destino, usa `query_delivery_targets` (cárgala con
+`tool_search` si hace falta) y copia el ID y la cuenta reales autorizados.
+No inventes IDs. Si varios destinos coinciden con lo solicitado, acláralo.
+
+El plugin sincroniza el ID real de la tarea y el actor del turno con Core.
+Cada ejecución obtiene una credencial corta nueva con los permisos del creador,
+sin depender de su token original ni de que mantenga una conversación abierta.
+El modelo no debe escribir `thread_id=13` ni `thread_id=86` en las instrucciones.
+
+Ante `query_schedule_authorization_missing`, informa el fallo y solicita
+resincronizar el mismo ID mediante `cron.update` desde una acción autorizada
+del creador. Conserva ID, historial, horario y destino. No recrees el cron ni
+cambies de identidad, cuenta o tenant para hacer desaparecer el error.
 
 ## Cambiar datos: siempre propuesta, nunca ejecucion
 

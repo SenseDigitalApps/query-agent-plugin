@@ -141,6 +141,20 @@ construir el turno del agente, pero no decide quién puede leer o escribir.
 
 ### Tareas programadas
 
+Crear y editar cron Query autenticados requiere la herramienta nativa `cron`
+desde el turno autorizado del creador. No usar `openclaw cron add/edit` por CLI.
+El plugin mantiene `sessionTarget=isolated` y sincroniza la identidad del turno
+con el ID real devuelto por la llamada. Origen, `run_as` y destino son independientes:
+una entrega pública puede ejecutar con la identidad autorizada desde un privado.
+Cambiar destino genera un update, conservando la identidad durable en Core.
+
+Core debe desplegar primero la migración `0044_schedule_execution_identity`.
+El plugin usa el protocolo de autorización v2, guarda credenciales cortas por
+ejecución aislada y resuelve `thread_id` internamente en `query_*`; el modelo no
+necesita incluirlo en el prompt. No se usan credenciales humanas ni otra cuenta
+si la cuenta explícita está desconectada. Los cron antiguos se reparan actualizando
+su mismo ID desde una acción autorizada del creador, sin recrearlos.
+
 Los cambios del servicio cron de OpenClaw se sincronizan con Query mediante
 `schedule.sync`. Query materializa una entrega por usuario/hilo y puede enviar
 `schedule.cancel` cuando se revoca el acceso de su último destinatario.
