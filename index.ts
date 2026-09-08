@@ -1,3 +1,4 @@
+import { registerQueryProvision } from "./src/agent-provision.js";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { queryPlugin } from "./src/channel.js";
 import { setQueryRuntime } from "./src/runtime.js";
@@ -17,5 +18,6 @@ export default defineChannelPluginEntry({
       registerQueryGoogleGuard(api);
     }
     queryToolsEntry.register(api);
+    registerQueryProvision(api);
   },
 });

@@ -1,3 +1,4 @@
+import { setProvisionReady } from "./provision-readiness.js";
 import { spawn } from "node:child_process";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
@@ -288,6 +289,7 @@ export class QuerySocketMonitor {
     if (activeMonitors.get(this.options.account.accountId) === this) {
       activeMonitors.delete(this.options.account.accountId);
     }
+    setProvisionReady(this.options.account.accountId, this.options.account.url, false);
     this.stopping = true;
     this.socket?.close(1000, "El agente se está deteniendo");
     await this.runTask;
@@ -343,6 +345,7 @@ export class QuerySocketMonitor {
       const finish = (error?: unknown) => {
         if (settled) return;
         settled = true;
+        setProvisionReady(account.accountId, account.url, false);
         clearInterval(heartbeat);
         abortSignal.removeEventListener("abort", abort);
         if (this.socket === socket) this.socket = undefined;
@@ -410,6 +413,9 @@ export class QuerySocketMonitor {
       );
       this.patchStatus({ running: true, lastError: undefined });
       await this.syncAgentProfile(event.data.agent_profile);
+      if (!this.stopping && !this.options.abortSignal.aborted && this.socket?.readyState === WebSocket.OPEN) {
+        setProvisionReady(this.options.account.accountId, this.options.account.url, true);
+      }
       // Recien ahora hay alguien escuchando al otro lado, que es lo que le
       // faltaba a las tareas que ya existian cuando arranco el gateway.
       try {

@@ -262,6 +262,7 @@ export const queryPlugin: ChannelPlugin<ResolvedQueryAccount> =
         chatTypes: ["direct", "group"],
         media: true,
       },
+      reload: { configPrefixes: ["channels.query"] },
       gateway: {
         startAccount: async (ctx) => {
           if (!ctx.account.enabled) return;
