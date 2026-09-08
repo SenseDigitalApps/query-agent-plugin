@@ -1,5 +1,5 @@
 import { spawn } from "node:child_process";
-import { mkdtemp, readFile, rm } from "node:fs/promises";
+import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
@@ -184,34 +184,6 @@ function oneVoiceNote(attachments: QueryAttachment[]): QueryAttachment[] {
     keptAudio = true;
     return true;
   });
-}
-
-async function buildAssistantAudioAttachment(
-  event: QueryUserMessageEvent,
-  account: ResolvedQueryAccount,
-  text: string,
-): Promise<QueryAttachment | undefined> {
-  if (!eventRequestsAudio(event)) return undefined;
-  const speechText = textForSpeech(text);
-  if (!speechText) return undefined;
-  const directory = await mkdtemp(join(tmpdir(), "query-tts-"));
-  const outputPath = join(directory, "reply.mp3");
-  try {
-    await runTextToSpeech(speechText, outputPath, account);
-    const bytes = await readFile(outputPath);
-    return {
-      id: `assistant-audio-${Date.now()}`,
-      kind: "audio",
-      name: "respuesta-openclaw.mp3",
-      mime_type: "audio/mpeg",
-      is_voice_note: true,
-      voice: true,
-      size: bytes.length,
-      url: `data:audio/mpeg;base64,${bytes.toString("base64")}`,
-    };
-  } finally {
-    await rm(directory, { recursive: true, force: true });
-  }
 }
 
 function textForSpeech(text: string): string {
@@ -821,7 +793,7 @@ export class QuerySocketMonitor {
         }
         const assistantAudio = alreadyHasAudio
           ? undefined
-          : await buildAssistantAudioAttachment(event, this.options.account, result.text);
+          : await this.buildAssistantAudioAttachment(event, threadId, result.text);
         if (assistantAudio) mediaAttachments.push(assistantAudio);
       } catch (error) {
         this.options.log?.warn?.(
@@ -1067,6 +1039,40 @@ export class QuerySocketMonitor {
       const renewed = await this.refreshDelegatedAuth(threadId, event.client_msg_id);
       if (!renewed?.token) throw error;
       return remember(await send(renewed.token, reuseId));
+    }
+  }
+
+  /**
+   * Sube la respuesta de voz sintetizada como attachment real de Query.
+   *
+   * `node-edge-tts` solo deja un mp3 en el disco del agente: sin subirlo por el
+   * mismo camino que cualquier otro artifact, el unico enlace posible era una
+   * data URI inline. Query Web la soporta, pero Flutter exige una URL publica y
+   * la rechaza — el cliente movil mostraba la nota de voz como adjunto roto.
+   */
+  private async buildAssistantAudioAttachment(
+    event: QueryUserMessageEvent,
+    threadId: string,
+    text: string,
+  ): Promise<QueryAttachment | undefined> {
+    if (!eventRequestsAudio(event)) return undefined;
+    const speechText = textForSpeech(text);
+    if (!speechText) return undefined;
+    const delegated = event.data?.delegated_auth;
+    if (!delegated?.token) {
+      this.options.log?.warn?.(
+        `[${this.options.account.accountId}] ${event.client_msg_id}: ` +
+          "query_assistant_audio_upload_blocked reason=delegated_credential_missing",
+      );
+      return undefined;
+    }
+    const directory = await mkdtemp(join(tmpdir(), "query-tts-"));
+    const outputPath = join(directory, "respuesta-openclaw.mp3");
+    try {
+      await runTextToSpeech(speechText, outputPath, this.options.account);
+      return await this.uploadArtifact(event, threadId, outputPath, delegated);
+    } finally {
+      await rm(directory, { recursive: true, force: true });
     }
   }
 
