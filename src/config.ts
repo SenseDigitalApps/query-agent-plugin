@@ -73,7 +73,15 @@ export function listQueryAccountIds(cfg: QueryConfig): string[] {
       .filter(([, account]) => account && typeof account === "object")
       .map(([id]) => id.trim())
       .filter(Boolean);
-    if (ids.length) return [...new Set(ids)];
+    if (ids.length) {
+      // Adding the first named account must not remove the legacy root account.
+      // An explicit default, or a deliberate move of the same URL to a named
+      // account, takes precedence so we never open the same socket twice.
+      const rootUrl = section?.url?.trim();
+      const migrated = rootUrl && Object.values(accounts).some(account => account?.url?.trim() === rootUrl);
+      if (rootUrl && !ids.includes(DEFAULT_ACCOUNT_ID) && !migrated) ids.unshift(DEFAULT_ACCOUNT_ID);
+      return [...new Set(ids)];
+    }
   }
   return [DEFAULT_ACCOUNT_ID];
 }
