@@ -1,3 +1,4 @@
+import { isProvisionReady } from "./provision-readiness.js";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { createServer } from "node:http";
 import { tmpdir } from "node:os";
@@ -104,6 +105,7 @@ describe("QuerySocketMonitor", () => {
     const connection = new Promise<WebSocket>((resolve) => server.once("connection", resolve));
     await monitor.start();
     const socket = await connection;
+    expect(isProvisionReady(account.accountId, account.url)).toBe(false);
     socket.send(
       JSON.stringify({
         type: "session.ready",
@@ -162,6 +164,7 @@ describe("QuerySocketMonitor", () => {
       client_msg_id: "msg-7",
     });
     expect(dispatchMessage).toHaveBeenCalledTimes(1);
+    expect(isProvisionReady(account.accountId, account.url)).toBe(true);
     const diagnosticLog = logInfo.mock.calls.flat().join("\n");
     expect(diagnosticLog).toContain("query_delegated_auth_inbound");
     expect(diagnosticLog).toContain('thread_id="thread-7"');
@@ -172,6 +175,7 @@ describe("QuerySocketMonitor", () => {
 
     controller.abort();
     await monitor.stop();
+    expect(isProvisionReady(account.accountId, account.url)).toBe(false);
   });
 
   it("uploads a local HTML from mediaUrls and sends only the Query attachment", async () => {

@@ -415,3 +415,11 @@ npm pack
 
 Las pruebas levantan un servidor WebSocket real y comprueban el ACK inmediato,
 la respuesta correlacionada, la persistencia y la deduplicación de reintentos.
+
+## Altas nuevas desde Query
+
+El mensaje nuevo de Query invoca `query_agent_provision` con un manifiesto v1. Habilitar esta herramienta opcional solamente para el agente administrador; ademas exige un turno identificado como propietario por OpenClaw. No interpretar un bundle anterior como comandos operativos: volver a copiarlo desde Query actualizado. Si la herramienta no aparece, detener el alta.
+
+Se puede validar con `dry_run: true`. La ejecucion normal agrega agente, cuenta y binding en una sola mutacion y comprueba `session.ready` de la cuenta nueva y las anteriores. Usa la recarga oficial del canal Query: puede interrumpir temporalmente todas sus cuentas. No requiere una version modificada de OpenClaw. La URL raiz legacy permanece como cuenta default al agregar cuentas nombradas.
+
+Ante `existing_accounts_not_ready`, recuperar primero las cuentas ya caidas. Ante `manual_recovery_required` o `recovery_pending`, no repetir altas ni borrar archivos: revisar configuracion, conexiones y el marcador `.query-provision.json`. Un lock abandonado requiere revision del operador. La herramienta no modifica agentes existentes ni sirve para rotar tokens o borrar agentes.

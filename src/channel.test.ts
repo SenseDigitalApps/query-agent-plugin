@@ -4,7 +4,7 @@ import { createServer } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { sendOutboundEvent, uploadTargetForOutbound } from "./channel.js";
+import { queryPlugin, sendOutboundEvent, uploadTargetForOutbound } from "./channel.js";
 import type { QueryConfig, QueryOutboundEvent } from "./types.js";
 
 const cleanupTasks: Array<() => Promise<void>> = [];
@@ -168,4 +168,8 @@ describe("sendOutboundEvent", () => {
       }),
     ]);
   }, 10_000);
+});
+
+it("declares supported channel reload without changing OpenClaw", () => {
+  expect(queryPlugin.reload?.configPrefixes).toEqual(["channels.query"]);
 });

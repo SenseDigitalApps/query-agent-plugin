@@ -142,6 +142,7 @@ export type ProfileFileResult = {
 export async function writeAgentProfileFiles(params: {
   workspaceDir: string;
   profile: QueryAgentProfile;
+  beforeWrite?: (file: string, content: string) => void;
 }): Promise<ProfileFileResult[]> {
   const results: ProfileFileResult[] = [];
 
@@ -172,6 +173,7 @@ export async function writeAgentProfileFiles(params: {
     }
 
     await mkdir(params.workspaceDir, { recursive: true });
+    params.beforeWrite?.(file, next);
     await writeFile(path, next, "utf8");
     results.push({ file, path, changed: true });
   }

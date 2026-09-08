@@ -4,7 +4,8 @@ import { dirname, join, resolve } from "node:path";
 import { Type } from "typebox";
 import { normalizeAgentId, normalizeAccountId } from "openclaw/plugin-sdk/routing";
 import { resolveAgentWorkspaceDir } from "openclaw/plugin-sdk/agent-runtime";
-import type { OpenClawConfig, OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
+import type { OpenClawConfig } from "openclaw/plugin-sdk/channel-core";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-plugin-common";
 import { writeAgentProfileFiles } from "./agent-profile.js";
 import { listQueryAccountIds, resolveQueryAccount } from "./config.js";
 import { waitProvisionReady } from "./provision-readiness.js";
@@ -64,6 +65,8 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
   let workspace = "";
   let ownsWorkspace = false;
   let committed = false;
+  let mutationAttempted = false;
+  const ownedFiles = new Map<string, string>();
   let marker = "";
   let agentId = "";
   let accountId = "";
@@ -79,7 +82,9 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
     // recursively remove files written by a user or by an active agent.
     const names = await readdir(workspace);
     if (names.some(name => ![MARKER, "SOUL.md", "IDENTITY.md"].includes(name))) fail("workspace_cleanup_conflict");
-    if (await readFile(join(workspace, MARKER), "utf8") !== marker) fail("workspace_cleanup_conflict");
+    for (const name of names) {
+      if (!ownedFiles.has(name) || await readFile(join(workspace, name), "utf8") !== ownedFiles.get(name)) fail("workspace_cleanup_conflict");
+    }
     for (const name of names) await unlink(join(workspace, name));
     await rmdir(workspace);
     ownsWorkspace = false;
@@ -126,7 +131,7 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
     if (state === "present") {
       if (existingMarker !== marker) fail("manifest_collision");
       const connected = dryRun || await ready([{ id: accountId, url: manifest.connection.url }], timeout);
-      return { status: connected ? "already_present" : "failed", agentId, accountId, workspace, connection: connected ? "ready" : "timeout", dry_run: dryRun };
+      return { status: connected ? "already_present" : "failed", agentId, accountId, workspace, connection: dryRun ? "not_checked" : connected ? "ready" : "timeout", dry_run: dryRun };
     }
     try { await readdir(workspace); fail("workspace_collision"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") throw error; }
@@ -136,15 +141,17 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
     if (!await ready(originalAccounts, timeout)) fail("existing_accounts_not_ready");
     await mkdir(workspace);
     ownsWorkspace = true;
+    ownedFiles.set(MARKER, marker);
     await writeFile(join(workspace, MARKER), marker, { flag: "wx", mode: 0o600 });
-    await writeAgentProfileFiles({ workspaceDir: workspace, profile: { personality: manifest.agent.personality, mission: manifest.agent.mission } });
+    await writeAgentProfileFiles({ workspaceDir: workspace, beforeWrite: (file, content) => ownedFiles.set(file, content), profile: { personality: manifest.agent.personality, mission: manifest.agent.mission } });
     await deps.config.mutateConfigFile({ afterWrite: { mode: "auto" }, mutate: draft => {
       if (inspect(draft as QueryConfig) !== "absent") fail("concurrent_configuration_change");
       const channel = (draft as QueryConfig).channels!.query!;
       if (!equal(channel, cfg.channels?.query) || !equal(draft.agents, cfg.agents) || !equal(draft.bindings, cfg.bindings)) fail("concurrent_configuration_change");
-      draft.agents!.list!.push(newAgent as never);
-      draft.bindings!.push(newBinding as never);
-      channel.accounts = { ...channel.accounts, [accountId]: newAccount };
+      draft.agents!.list!.push(structuredClone(newAgent) as never);
+      draft.bindings!.push(structuredClone(newBinding) as never);
+      channel.accounts = { ...channel.accounts, [accountId]: structuredClone(newAccount) };
+      mutationAttempted = true;
     } });
     committed = true;
     if (!await ready([...originalAccounts, { id: accountId, url: manifest.connection.url }], timeout)) fail("account_readiness_timeout");
@@ -152,12 +159,13 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
   } catch (error) {
     let rollback = "not_needed";
     try {
-      if (committed) {
+      if (mutationAttempted) {
         await deps.config.mutateConfigFile({ afterWrite: { mode: "auto" }, mutate: draft => {
           const cfg = draft as QueryConfig;
           const account = cfg.channels?.query?.accounts?.[accountId];
           const agent = cfg.agents?.list?.find(item => item.id === agentId);
           const binding = cfg.bindings?.find(item => equal(item, newBinding));
+          if (!account && !agent && !binding) return;
           if (!equal(account, newAccount) || !equal(agent, newAgent) || !binding) fail("rollback_conflict");
           delete cfg.channels!.query!.accounts![accountId];
           cfg.agents!.list = cfg.agents!.list!.filter(item => item.id !== agentId);
@@ -169,7 +177,15 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
       if (!committed) await cleanup();
     } catch { rollback = "manual_recovery_required"; }
     // Never return transport/config errors: they may contain the URL/token.
-    const code = error instanceof Error && /^[a-z_]+$/.test(error.message) ? error.message : "provision_failed";
+    const publicErrors = new Set([
+      "manifest_version_unsupported", "manifest_invalid", "manifest_identity_mismatch",
+      "connection_url_invalid", "connection_wss_required", "query_provision_host_not_initialized",
+      "workspace_parent_symlink", "query_provision_locked", "global_query_token_conflict",
+      "agent_account_or_binding_collision", "workspace_collision", "connection_already_assigned",
+      "manifest_collision", "existing_accounts_not_ready", "concurrent_configuration_change",
+      "account_readiness_timeout",
+    ]);
+    const code = error instanceof Error && publicErrors.has(error.message) ? error.message : "provision_failed";
     return { status: "failed", error: code, agentId, accountId, workspace, rollback };
   } finally {
     if (lock) await rmdir(lock).catch(() => undefined);
@@ -177,7 +193,9 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
 }
 
 export function registerQueryProvision(api: OpenClawPluginApi) {
-  api.registerTool({ name: "query_agent_provision", label: "Query: aprovisionar agente",
+  api.registerTool(ctx => {
+    if (ctx.senderIsOwner !== true || ctx.sandboxed || ctx.oneShotCliRun) return null;
+    return { name: "query_agent_provision", label: "Query: aprovisionar agente",
     description: "Provisiona un manifiesto Query con una sola mutacion; valida la reconexion de todas las cuentas. Solo para el agente administrador autorizado.",
     parameters: Type.Object({ manifest: ProvisionManifestSchema, dry_run: Type.Optional(Type.Boolean()) }, { additionalProperties: false }),
     execute: async (_id, params) => {
@@ -185,5 +203,5 @@ export function registerQueryProvision(api: OpenClawPluginApi) {
       const result = await provisionQueryAgent(input.manifest, input.dry_run === true, { config: api.runtime.config });
       return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
     },
-  }, { optional: true });
+  }; }, { optional: true, names: ["query_agent_provision"] });
 }
