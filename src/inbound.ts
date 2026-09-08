@@ -67,10 +67,8 @@ export const QUERY_DELIVERY_POLICY =
   "No uses NO_REPLY ni termines unicamente con llamadas de herramientas. " +
   "El usuario final esta en otro computador y no puede acceder al sistema de archivos del agente ni del servidor: una ruta local no cuenta como entrega. " +
   "Si generas o modificas cualquier archivo, publicalo en el topic o canal Query actual con query_attachment_send usando su ruta local interna como file_path. " +
-  "query_attachment_send es una herramienta diferida: si no aparece entre las herramientas ya cargadas, debes localizarla y cargarla con tool_search antes de continuar. " +
-  "No afirmes que query_attachment_send esta ausente o no disponible sin haber ejecutado antes tool_search. " +
-  "Despues de cargarla, llama query_attachment_send para publicar el archivo en el topic o canal actual; nunca muestres file_path ni ninguna ruta local al usuario. " +
-  "Solo reporta indisponibilidad si tool_search no encuentra query_attachment_send o devuelve un error tecnico real; comunica exactamente ese resultado o error y no inventes que hace falta \"exponer el conector en la sesion\". " +
+  "Llama query_attachment_send directamente para publicar el archivo; nunca muestres file_path ni ninguna ruta local al usuario. " +
+  "Si la herramienta no aparece en el catalogo de este turno, reporta exactamente esa indisponibilidad sin inventar otra ruta de entrega. " +
   "Puedes usar LocalPath y rutas locales para leer adjuntos recibidos o crear archivos internamente, pero nunca las muestres como entrega final. " +
   "No envies localhost, 127.0.0.1, 0.0.0.0, IP privadas, Tailscale, rutas Windows/Linux ni enlaces privados. No uses registros de negocio para entregar archivos.]";
 
@@ -604,17 +602,18 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
     .filter(Boolean)
     .join(". ");
   const scheduledDeliveryHint =
-    `\n\n[Autorización de tareas Query: usa la herramienta nativa cron para crear o actualizar, siempre sessionTarget=isolated. ` +
+    `\n\n[Autorización de tareas Query: usa query_cron_manage para listar, consultar, crear, actualizar o ejecutar tareas programadas. ` +
+    `La herramienta fuerza sessionTarget=isolated, valida el destino y conserva la identidad del creador. ` +
     `No uses openclaw cron add/edit por CLI: no captura el turno autorizado. ` +
     `Query conserva la identidad del creador separada del destino y resuelve internamente la autenticación y thread_id al ejecutar. ` +
     `No incluyas thread_id en el prompt ni enlaces la ejecución a una sesión humana. ` +
-    `Para reparar un cron sin autorización, actualiza su ID existente desde un turno autorizado de su creador, sin recrearlo.]` +
+    `Para reparar varios cron sin autorización, enuméralos con action=list, inspecciónalos con action=get y usa action=update_many desde un turno autorizado de su creador, sin recrearlos. ` +
+    `Para validarlos inmediatamente usa action=run; esta acción resincroniza al creador antes de forzar la ejecución.]` +
     `\n\n[Destino de tareas programadas: conserva el canal actual como destino ` +
     `cuando el usuario pida publicar aqui, en este canal, o cuando la ` +
     `automatizacion sea tematica para este topic. Si pide otro canal, no ` +
-    `adivines ni reutilices el destino de otra sesion: query_delivery_targets ` +
-    `es una herramienta diferida; si no esta cargada, localizala y cargala ` +
-    `con tool_search. Usala antes de crear o mover el cron y copia exactamente ` +
+    `adivines ni reutilices el destino de otra sesion: usa directamente ` +
+    `query_delivery_targets antes de crear o mover el cron y copia exactamente ` +
     `el thread_id y query_account_id autorizados que devuelve. Un admin puede ` +
     `elegir otros canales del mismo agente; un usuario normal solo los ` +
     `destinos que la herramienta le autorice. ` +

@@ -17,6 +17,7 @@ import {
   rememberDelegatedAuth,
 } from "./delegated-store.js";
 import { evaluateGoogleToolCall } from "./google-guard.js";
+import { rememberExternalContext } from "./external-context.js";
 import {
   getQuerySession,
   forgetQuerySession,
@@ -31,6 +32,7 @@ const SESSION = "query:agente:private-42";
 let stateDirectory: string;
 let previousStateFile: string | undefined;
 let previousSessionFile: string | undefined;
+let previousExternalContextDir: string | undefined;
 
 const requestQueryScheduleAuth = vi.fn();
 
@@ -55,6 +57,8 @@ beforeAll(() => {
     stateDirectory,
     "sessions.json",
   );
+  previousExternalContextDir = process.env.QUERY_EXTERNAL_CONTEXT_DIR;
+  process.env.QUERY_EXTERNAL_CONTEXT_DIR = join(stateDirectory, "external");
 });
 
 afterAll(() => {
@@ -68,10 +72,16 @@ afterAll(() => {
   } else {
     process.env.QUERY_SESSION_BINDING_STATE_FILE = previousSessionFile;
   }
+  if (previousExternalContextDir === undefined) {
+    delete process.env.QUERY_EXTERNAL_CONTEXT_DIR;
+  } else {
+    process.env.QUERY_EXTERNAL_CONTEXT_DIR = previousExternalContextDir;
+  }
   rmSync(stateDirectory, { recursive: true, force: true });
 });
 
 afterEach(() => {
+  vi.unstubAllGlobals();
   forgetDelegatedAuth(THREAD);
   forgetDelegatedAuth(ORIGIN_THREAD);
   forgetQuerySession(SESSION);
@@ -82,13 +92,17 @@ type Hook = (...args: any[]) => unknown;
 
 function fakeApi() {
   const hooks = new Map<string, Hook>();
+  const tools: Array<(context: Record<string, unknown>) => any> = [];
   const api = {
     logger: { info: vi.fn(), warn: vi.fn() },
     on: vi.fn((name: string, handler: Hook) => {
       hooks.set(name, handler);
     }),
+    registerTool: vi.fn((factory: (context: Record<string, unknown>) => any) => {
+      tools.push(factory);
+    }),
   };
-  return { api, hooks };
+  return { api, hooks, tools };
 }
 
 function cronAdded(jobId = "cron-1") {
@@ -102,6 +116,341 @@ function cronAdded(jobId = "cron-1") {
 }
 
 describe("registro de la tarea", () => {
+  it("expone un gestor propio en Query y repara el ID existente con el actor delegado", async () => {
+    const { api, hooks, tools } = fakeApi();
+    const send = vi.fn();
+    const update = vi.fn().mockResolvedValue({ id: "cron-existing" });
+    const job = {
+      id: "cron-existing",
+      agentId: "query",
+      name: "Seguimiento",
+      delivery: {
+        mode: "announce",
+        channel: "query",
+        accountId: "sales",
+        to: "channel:86",
+      },
+    };
+    const list = vi.fn().mockResolvedValue([job]);
+    registerQueryCronSync(api as never, send);
+    await hooks.get("gateway_start")?.({}, {
+      getCron: () => ({ list, update, add: vi.fn(), remove: vi.fn() }),
+    });
+    rememberQuerySession(SESSION, {
+      threadId: ORIGIN_THREAD,
+      accountId: "sales",
+    });
+    rememberExternalContext({
+      sessionKey: SESSION,
+      senderId: "7",
+      threadId: ORIGIN_THREAD,
+      queryAccountId: "sales",
+      socketUrl: SOCKET,
+      agentToken: "agent-token",
+      clientMsgId: "message-1",
+      auth: {
+        token: "delegated-creator",
+        expires_in: 900,
+        identity: { id: 7, username: "creator" },
+        external_account_identity: { id: 77, username: "JCVARGAS" },
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ targets: [{ thread_id: "86" }] }),
+    }));
+
+    const tool = tools[0]({
+      messageChannel: "query",
+      sessionKey: SESSION,
+      requesterSenderId: "7",
+      agentAccountId: "sales",
+      agentId: "query",
+    });
+    expect(tool.name).toBe("query_cron_manage");
+    const result = await tool.execute("call-1", {
+      action: "update",
+      job_id: "cron-existing",
+      patch: {},
+    });
+
+    expect(update).toHaveBeenCalledWith("cron-existing", {
+      sessionTarget: "isolated",
+    });
+    expect(send).toHaveBeenLastCalledWith("sales", expect.objectContaining({
+      type: "schedule.sync",
+      data: expect.objectContaining({
+        external_id: "cron-existing",
+        delegated_token: "delegated-creator",
+        creator_user_id: 7,
+        run_as_user_id: 77,
+        origin_thread_id: ORIGIN_THREAD,
+      }),
+    }));
+    expect(result.details).toMatchObject({
+      ok: true,
+      job_id: "cron-existing",
+      session_target: "isolated",
+    });
+    vi.unstubAllGlobals();
+  });
+
+  it("crea un cron aislado para un destino publico autorizado sin usar la tool owner-only", async () => {
+    const { api, hooks, tools } = fakeApi();
+    const send = vi.fn();
+    const created = {
+      id: "cron-new",
+      agentId: "query",
+      name: "Radar",
+      sessionTarget: "isolated",
+      delivery: {
+        mode: "announce",
+        channel: "query",
+        accountId: "sales",
+        to: "channel:86",
+      },
+    };
+    const list = vi.fn()
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([])
+      .mockResolvedValueOnce([created]);
+    const add = vi.fn().mockResolvedValue(created);
+    registerQueryCronSync(api as never, send);
+    await hooks.get("gateway_start")?.({}, {
+      getCron: () => ({ list, update: vi.fn(), add, remove: vi.fn() }),
+    });
+    rememberQuerySession(SESSION, {
+      threadId: ORIGIN_THREAD,
+      accountId: "sales",
+    });
+    rememberExternalContext({
+      sessionKey: SESSION,
+      senderId: "8",
+      threadId: ORIGIN_THREAD,
+      queryAccountId: "sales",
+      socketUrl: SOCKET,
+      agentToken: "agent-token",
+      clientMsgId: "message-2",
+      auth: {
+        token: "delegated-add",
+        expires_in: 900,
+        identity: { id: 8 },
+        external_account_identity: { id: 88 },
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ targets: [{ thread_id: "86" }] }),
+    }));
+
+    const tool = tools[0]({
+      messageChannel: "query",
+      sessionKey: SESSION,
+      requesterSenderId: "8",
+      agentAccountId: "sales",
+      agentId: "query",
+    });
+    const result = await tool.execute("call-2", {
+      action: "add",
+      job: {
+        name: "Radar",
+        schedule: { kind: "cron", expr: "0 8 * * 1", tz: "America/Bogota" },
+        payload: { kind: "agentTurn", message: "Publica el radar." },
+        delivery: created.delivery,
+      },
+    });
+
+    expect(add).toHaveBeenCalledWith(expect.objectContaining({
+      agentId: "query",
+      sessionTarget: "isolated",
+      delivery: created.delivery,
+    }));
+    expect(send).toHaveBeenLastCalledWith("sales", expect.objectContaining({
+      data: expect.objectContaining({
+        action: "added",
+        external_id: "cron-new",
+        delegated_token: "delegated-add",
+        run_as_user_id: 88,
+      }),
+    }));
+    expect(result.details).toMatchObject({ ok: true, job_id: "cron-new" });
+    vi.unstubAllGlobals();
+  });
+
+  it("lista y consulta solo los cron Query del agente y tenant actuales", async () => {
+    const { api, hooks, tools } = fakeApi();
+    const jobs = [
+      {
+        id: "visible",
+        agentId: "query",
+        name: "Visible",
+        sessionTarget: "isolated",
+        delivery: { channel: "query", accountId: "sales", to: "channel:86" },
+        payload: { kind: "agentTurn", message: "Publica." },
+      },
+      {
+        id: "other-agent",
+        agentId: "harvey",
+        delivery: { channel: "query", accountId: "sales", to: "channel:86" },
+      },
+      {
+        id: "other-tenant",
+        agentId: "query",
+        delivery: { channel: "query", accountId: "other", to: "channel:86" },
+      },
+    ];
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("gateway_start")?.({}, {
+      getCron: () => ({ list: vi.fn().mockResolvedValue(jobs), update: vi.fn(), add: vi.fn(), remove: vi.fn() }),
+    });
+    rememberQuerySession(SESSION, { threadId: ORIGIN_THREAD, accountId: "sales" });
+    rememberExternalContext({
+      sessionKey: SESSION,
+      senderId: "7",
+      threadId: ORIGIN_THREAD,
+      queryAccountId: "sales",
+      socketUrl: SOCKET,
+      agentToken: "agent-token",
+      clientMsgId: "message-list",
+      auth: { token: "delegated-list", expires_in: 900, identity: { id: 7 } },
+    });
+    const tool = tools[0]({
+      messageChannel: "query",
+      sessionKey: SESSION,
+      requesterSenderId: "7",
+      agentAccountId: "sales",
+      agentId: "query",
+    });
+
+    const listed = await tool.execute("list-call", { action: "list" });
+    expect(listed.details).toMatchObject({ ok: true, count: 1 });
+    expect(listed.details.jobs[0]).toMatchObject({ job_id: "visible", name: "Visible" });
+    const got = await tool.execute("get-call", { action: "get", job_id: "visible" });
+    expect(got.details.job).toMatchObject({ job_id: "visible", session_target: "isolated" });
+    const hidden = await tool.execute("get-hidden", { action: "get", job_id: "other-agent" });
+    expect(hidden.details).toEqual({ ok: false, error: "query_cron_not_query_owned" });
+  });
+
+  it("actualiza varios cron tras validar todo el lote y sincroniza el creador", async () => {
+    const { api, hooks, tools } = fakeApi();
+    const send = vi.fn();
+    const update = vi.fn().mockResolvedValue({});
+    const jobs = ["one", "two"].map((id) => ({
+      id,
+      agentId: "query",
+      name: id,
+      sessionTarget: "session:old",
+      delivery: { channel: "query", accountId: "sales", to: "channel:86" },
+      payload: { kind: "agentTurn", message: `old-${id}` },
+    }));
+    const list = vi.fn().mockResolvedValue(jobs);
+    registerQueryCronSync(api as never, send);
+    await hooks.get("gateway_start")?.({}, {
+      getCron: () => ({ list, update, add: vi.fn(), remove: vi.fn() }),
+    });
+    rememberQuerySession(SESSION, { threadId: ORIGIN_THREAD, accountId: "sales" });
+    rememberExternalContext({
+      sessionKey: SESSION,
+      senderId: "7",
+      threadId: ORIGIN_THREAD,
+      queryAccountId: "sales",
+      socketUrl: SOCKET,
+      agentToken: "agent-token",
+      clientMsgId: "message-batch",
+      auth: {
+        token: "delegated-batch",
+        expires_in: 900,
+        identity: { id: 7 },
+        external_account_identity: { id: 77 },
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ targets: [{ thread_id: "86" }] }),
+    }));
+    const tool = tools[0]({
+      messageChannel: "query",
+      sessionKey: SESSION,
+      requesterSenderId: "7",
+      agentAccountId: "sales",
+      agentId: "query",
+    });
+
+    const result = await tool.execute("batch-call", {
+      action: "update_many",
+      jobs: [
+        { job_id: "one", patch: { payload: { kind: "agentTurn", message: "new-one" } } },
+        { job_id: "two", patch: { payload: { kind: "agentTurn", message: "new-two" } } },
+      ],
+    });
+    expect(update).toHaveBeenCalledTimes(2);
+    expect(update).toHaveBeenNthCalledWith(1, "one", expect.objectContaining({ sessionTarget: "isolated" }));
+    expect(update).toHaveBeenNthCalledWith(2, "two", expect.objectContaining({ sessionTarget: "isolated" }));
+    expect(send).toHaveBeenCalledTimes(2);
+    expect(send.mock.calls.map((call) => call[1].data)).toEqual([
+      expect.objectContaining({ external_id: "one", run_as_user_id: 77 }),
+      expect.objectContaining({ external_id: "two", run_as_user_id: 77 }),
+    ]);
+    expect(result.details).toMatchObject({ ok: true, action: "updated_many", count: 2 });
+  });
+
+  it("resincroniza la autorización antes de ejecutar un cron aislado", async () => {
+    const { api, hooks, tools } = fakeApi();
+    const send = vi.fn();
+    const run = vi.fn().mockResolvedValue({ ran: true });
+    const job = {
+      id: "run-me",
+      agentId: "query",
+      name: "Run",
+      sessionTarget: "isolated",
+      delivery: { channel: "query", accountId: "sales", to: "channel:86" },
+    };
+    registerQueryCronSync(api as never, send);
+    await hooks.get("gateway_start")?.({}, {
+      getCron: () => ({ list: vi.fn().mockResolvedValue([job]), update: vi.fn(), add: vi.fn(), remove: vi.fn(), run }),
+    });
+    rememberQuerySession(SESSION, { threadId: ORIGIN_THREAD, accountId: "sales" });
+    rememberExternalContext({
+      sessionKey: SESSION,
+      senderId: "7",
+      threadId: ORIGIN_THREAD,
+      queryAccountId: "sales",
+      socketUrl: SOCKET,
+      agentToken: "agent-token",
+      clientMsgId: "message-run",
+      auth: {
+        token: "delegated-run",
+        expires_in: 900,
+        identity: { id: 7 },
+        external_account_identity: { id: 77 },
+      },
+    });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({
+      ok: true,
+      json: vi.fn().mockResolvedValue({ targets: [{ thread_id: "86" }] }),
+    }));
+    const tool = tools[0]({
+      messageChannel: "query",
+      sessionKey: SESSION,
+      requesterSenderId: "7",
+      agentAccountId: "sales",
+      agentId: "query",
+    });
+
+    const result = await tool.execute("run-call", { action: "run", job_id: "run-me" });
+    expect(send).toHaveBeenCalledWith("sales", expect.objectContaining({
+      data: expect.objectContaining({ external_id: "run-me", run_as_user_id: 77 }),
+    }));
+    expect(run).toHaveBeenCalledWith("run-me", "force");
+    expect(result.details).toMatchObject({ ok: true, action: "run", job_id: "run-me" });
+  });
+
+  it("no expone el gestor de cron fuera de un turno Query", () => {
+    const { api, tools } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    expect(tools[0]({ messageChannel: "telegram" })).toBeNull();
+  });
+
   it("correlaciona dos creaciones nativas concurrentes por call ID y por ID real", async () => {
     const { api, hooks } = fakeApi();
     const send = vi.fn();

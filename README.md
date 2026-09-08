@@ -141,10 +141,13 @@ construir el turno del agente, pero no decide quién puede leer o escribir.
 
 ### Tareas programadas
 
-Crear y editar cron Query autenticados requiere la herramienta nativa `cron`
-desde el turno autorizado del creador. No usar `openclaw cron add/edit` por CLI.
-El plugin mantiene `sessionTarget=isolated` y sincroniza la identidad del turno
-con el ID real devuelto por la llamada. Origen, `run_as` y destino son independientes:
+Listar, consultar, crear, editar por unidad o por lote y ejecutar cron Query
+autenticados requiere `query_cron_manage` desde el turno autorizado del
+creador. No usar `openclaw cron add/edit` por CLI ni la herramienta owner-only
+`cron`. El plugin mantiene `sessionTarget=isolated`, valida el destino con Query,
+sincroniza la identidad del turno y vuelve a sincronizarla antes de una corrida
+manual con el ID real devuelto por la llamada. Origen, `run_as` y destino son
+independientes:
 una entrega pública puede ejecutar con la identidad autorizada desde un privado.
 Cambiar destino genera un update, conservando la identidad durable en Core.
 
@@ -161,8 +164,8 @@ Los cambios del servicio cron de OpenClaw se sincronizan con Query mediante
 
 El hilo donde se pide una tarea y el hilo donde se entrega son datos distintos.
 Por defecto se conserva el canal actual. Si la persona pide otro destino, el
-agente carga de forma diferida `query_delivery_targets` mediante `tool_search`
-y usa exactamente el `thread_id` y `query_account_id` autorizados que devuelve:
+agente llama directamente `query_delivery_targets` y usa exactamente el
+`thread_id` y `query_account_id` autorizados que devuelve:
 un administrador puede elegir otros canales del mismo agente y un usuario
 normal solo canales a los que ya tiene acceso. Una cancelación queda registrada
 en Query y se reenvía si el plugin estaba desconectado.

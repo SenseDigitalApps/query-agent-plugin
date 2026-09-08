@@ -212,6 +212,7 @@
   "contracts": {
     "tools": [
       "query_agent_provision",
+      "query_cron_manage",
       "query_delivery_targets",
       "query_attachment_send",
       "query_modules_list",

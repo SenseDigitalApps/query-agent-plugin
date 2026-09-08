@@ -77,3 +77,43 @@ export async function externalContextForRun(runId?: string): Promise<ExternalCon
   if (latest?.clientMsgId === value.clientMsgId) write(sessionKey(value.sessionKey, value.senderId, value.queryAccountId), updated);
   return updated;
 }
+
+/**
+ * Resolves the delegated actor for a plugin-owned tool directly from the
+ * trusted tool-factory context. Unlike the legacy thread store, this key also
+ * includes the sender and Query account, so two people speaking in the same
+ * topic can never authorize each other's cron mutation.
+ */
+export async function externalContextForSessionSender(
+  session?: string,
+  sender?: string,
+  account?: string,
+): Promise<ExternalContext | undefined> {
+  if (!session || !sender || !account) return undefined;
+  const value = read(sessionKey(session, sender, account));
+  if (!value) return undefined;
+  if (value.expiresAt - 5000 > Date.now()) return value;
+  const { refreshQueryDelegatedAuth } = await import("./socket.js");
+  const refreshed = await refreshQueryDelegatedAuth(
+    value.threadId,
+    value.socketUrl,
+    value.clientMsgId,
+  );
+  if (!refreshed?.token) throw new Error("query_delegation_refresh_unavailable");
+  if (
+    refreshed.identity?.id !== value.auth.identity?.id ||
+    refreshed.external_account_identity?.id !==
+      value.auth.external_account_identity?.id
+  ) {
+    throw new Error("query_delegation_identity_changed");
+  }
+  const updated = {
+    ...value,
+    auth: refreshed,
+    expiresAt: refreshed.expires_at
+      ? Date.parse(refreshed.expires_at)
+      : Date.now() + (refreshed.expires_in ?? 900) * 1000,
+  };
+  write(sessionKey(session, sender, account), updated);
+  return updated;
+}

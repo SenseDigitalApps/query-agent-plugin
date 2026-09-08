@@ -4,6 +4,7 @@ import type {
   PluginHookGatewayCronJob,
   PluginHookGatewayCronService,
 } from "openclaw/plugin-sdk/plugin-runtime";
+import { Type } from "typebox";
 import {
   queryAccountIdForSocketUrl,
   sendQueryOutboundEvent,
@@ -18,15 +19,89 @@ import {
   rememberQuerySession,
 } from "./query-session-store.js";
 import { inspectGoogleWorkspaceConfiguration } from "./google-accounts.js";
-import { externalContextForRun } from "./external-context.js";
+import {
+  externalContextForRun,
+  externalContextForSessionSender,
+  type ExternalContext,
+} from "./external-context.js";
+import { queryApiUrl } from "./query-api.js";
 import type { QueryOutboundEvent } from "./types.js";
 
 type CronDelivery = {
+  mode?: string;
   channel?: string;
   to?: string;
   threadId?: string | number;
   accountId?: string;
 };
+
+type QueryCronJob = PluginHookGatewayCronJob & {
+  delivery?: CronDelivery;
+  payload?: {
+    kind?: string;
+    message?: string;
+    text?: string;
+    timeoutSeconds?: number;
+    toolsAllow?: string[];
+  };
+};
+
+const CronScheduleSchema = Type.Union([
+  Type.Object({
+    kind: Type.Literal("cron"),
+    expr: Type.String({ minLength: 1 }),
+    tz: Type.Optional(Type.String({ minLength: 1 })),
+  }, { additionalProperties: false }),
+  Type.Object({
+    kind: Type.Literal("at"),
+    at: Type.String({ minLength: 1 }),
+  }, { additionalProperties: false }),
+  Type.Object({
+    kind: Type.Literal("every"),
+    everyMs: Type.Number({ minimum: 1 }),
+    anchorMs: Type.Optional(Type.Number()),
+  }, { additionalProperties: false }),
+]);
+
+const QueryCronDeliverySchema = Type.Object({
+  mode: Type.Optional(Type.Literal("announce")),
+  channel: Type.Literal("query"),
+  to: Type.String({ minLength: 1 }),
+  accountId: Type.String({ minLength: 1 }),
+}, { additionalProperties: false });
+
+const QueryCronPayloadSchema = Type.Object({
+  kind: Type.Literal("agentTurn"),
+  message: Type.String({ minLength: 1 }),
+  timeoutSeconds: Type.Optional(Type.Number({ minimum: 1 })),
+  toolsAllow: Type.Optional(Type.Array(Type.String({ minLength: 1 }))),
+}, { additionalProperties: false });
+
+const QueryCronCreateSchema = Type.Object({
+  name: Type.String({ minLength: 1 }),
+  description: Type.Optional(Type.String()),
+  enabled: Type.Optional(Type.Boolean()),
+  schedule: CronScheduleSchema,
+  payload: QueryCronPayloadSchema,
+  delivery: QueryCronDeliverySchema,
+  wakeMode: Type.Optional(Type.Union([
+    Type.Literal("now"),
+    Type.Literal("next-heartbeat"),
+  ])),
+}, { additionalProperties: false });
+
+const QueryCronPatchSchema = Type.Object({
+  name: Type.Optional(Type.String({ minLength: 1 })),
+  description: Type.Optional(Type.String()),
+  enabled: Type.Optional(Type.Boolean()),
+  schedule: Type.Optional(CronScheduleSchema),
+  payload: Type.Optional(QueryCronPayloadSchema),
+  delivery: Type.Optional(QueryCronDeliverySchema),
+  wakeMode: Type.Optional(Type.Union([
+    Type.Literal("now"),
+    Type.Literal("next-heartbeat"),
+  ])),
+}, { additionalProperties: false });
 
 type SyncedCron = {
   accountId: string;
@@ -66,7 +141,11 @@ const pendingBackfill = new Map<
 // reconocerse como nuestro: es lo que decide si sus herramientas pasan por el
 // control de cuentas externas o se las salta.
 const queryCronIds = new Set<string>();
-let cronService: PluginHookGatewayCronService | undefined;
+type QueryCronService = PluginHookGatewayCronService & {
+  run?: (id: string, mode: "force" | "due") => Promise<unknown>;
+};
+
+let cronService: QueryCronService | undefined;
 const pendingCronMutations: PendingCronMutation[] = [];
 const PENDING_MUTATION_TTL_MS = 30_000;
 
@@ -185,6 +264,99 @@ function takePendingMutation(
 function explicitQueryAccountId(delivery: CronDelivery): string | undefined {
   const accountId = delivery.accountId?.trim();
   return accountId || undefined;
+}
+
+function bareThreadId(value: string): string {
+  return value.trim().replace(/^(?:direct|channel):/, "");
+}
+
+async function assertAuthorizedCronDestination(
+  actor: ExternalContext,
+  delivery: CronDelivery,
+): Promise<void> {
+  const accountId = explicitQueryAccountId(delivery);
+  if (!accountId || accountId !== actor.queryAccountId) {
+    throw new Error("query_cron_cross_tenant_destination");
+  }
+  const requested = trimmed(delivery.threadId ?? delivery.to);
+  if (!requested) throw new Error("query_cron_destination_required");
+  const response = await fetch(
+    queryApiUrl(
+      actor.socketUrl,
+      `threads/${encodeURIComponent(actor.threadId)}/delivery-targets/`,
+    ),
+    {
+      method: "POST",
+      headers: {
+        "X-Query-Delegated-Token": actor.auth.token,
+        "Content-Type": "application/json",
+      },
+      body: "{}",
+    },
+  );
+  const payload = await response.json().catch(() => undefined) as
+    | { targets?: Array<{ thread_id?: string | number }> ; error?: string }
+    | undefined;
+  if (!response.ok) {
+    throw new Error(payload?.error || `query_delivery_targets_http_${response.status}`);
+  }
+  const allowed = new Set(
+    (payload?.targets ?? [])
+      .map((item) => trimmed(item.thread_id))
+      .filter((item): item is string => Boolean(item))
+      .map(bareThreadId),
+  );
+  if (!allowed.has(bareThreadId(requested))) {
+    throw new Error("query_cron_destination_not_authorized");
+  }
+}
+
+function cronJobId(value: unknown): string | undefined {
+  if (!isRecord(value)) return undefined;
+  const direct = trimmed(value.id ?? value.jobId);
+  if (direct) return direct;
+  return isRecord(value.job) ? trimmed(value.job.id ?? value.job.jobId) : undefined;
+}
+
+function isManageableQueryCron(
+  job: QueryCronJob,
+  actor: ExternalContext,
+  agentId: string | undefined,
+): boolean {
+  return (
+    job.delivery?.channel === "query" &&
+    explicitQueryAccountId(job.delivery) === actor.queryAccountId &&
+    (!agentId || job.agentId === agentId)
+  );
+}
+
+function publicCronSummary(
+  job: QueryCronJob,
+  detailed = true,
+): Record<string, unknown> {
+  const summary: Record<string, unknown> = {
+    job_id: job.id,
+    name: job.name,
+    description: job.description,
+    enabled: job.enabled,
+    agent_id: job.agentId,
+    session_target: job.sessionTarget,
+    schedule: job.schedule,
+    delivery: job.delivery && {
+      channel: job.delivery.channel,
+      account_id: job.delivery.accountId,
+      to: job.delivery.threadId ?? job.delivery.to,
+    },
+  };
+  if (detailed) {
+    summary.payload = job.payload && {
+      kind: job.payload.kind,
+      message: job.payload.message,
+      timeout_seconds: job.payload.timeoutSeconds,
+    };
+    summary.state = job.state;
+  }
+  return summary;
 }
 
 /**
@@ -636,6 +808,304 @@ export function registerQueryCronSync(
       );
     }
   };
+
+  if (typeof api.registerTool === "function") api.registerTool((ctx) => {
+    if (ctx.messageChannel !== "query" || ctx.sandboxed || ctx.oneShotCliRun) {
+      return null;
+    }
+    return {
+      name: "query_cron_manage",
+      label: "Query: programar tarea",
+      description:
+        "Lista, consulta, crea, actualiza o ejecuta un cron Query desde el turno autorizado del creador. " +
+        "Mantiene la ejecución aislada, valida el destino y sincroniza run_as " +
+        "sin depender de que el canal de entrega sea el canal privado.",
+      parameters: Type.Union([
+        Type.Object({
+          action: Type.Literal("list"),
+          include_disabled: Type.Optional(Type.Boolean()),
+        }, { additionalProperties: false }),
+        Type.Object({
+          action: Type.Literal("get"),
+          job_id: Type.String({ minLength: 1 }),
+        }, { additionalProperties: false }),
+        Type.Object({
+          action: Type.Literal("add"),
+          job: QueryCronCreateSchema,
+        }, { additionalProperties: false }),
+        Type.Object({
+          action: Type.Literal("update"),
+          job_id: Type.String({ minLength: 1 }),
+          patch: QueryCronPatchSchema,
+        }, { additionalProperties: false }),
+        Type.Object({
+          action: Type.Literal("update_many"),
+          jobs: Type.Array(Type.Object({
+            job_id: Type.String({ minLength: 1 }),
+            patch: QueryCronPatchSchema,
+          }, { additionalProperties: false }), { minItems: 1, maxItems: 25 }),
+        }, { additionalProperties: false }),
+        Type.Object({
+          action: Type.Literal("run"),
+          job_id: Type.String({ minLength: 1 }),
+        }, { additionalProperties: false }),
+      ]),
+      execute: async (_toolCallId, rawParams) => {
+        if (!cronService) {
+          const result = {
+            ok: false,
+            error: "query_cron_service_unavailable",
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(result) }],
+            details: result,
+          };
+        }
+        const params = rawParams as
+          | { action: "list"; include_disabled?: boolean }
+          | { action: "get"; job_id: string }
+          | { action: "add"; job: Record<string, unknown> & { delivery: CronDelivery } }
+          | { action: "update"; job_id: string; patch: Record<string, unknown> & { delivery?: CronDelivery } }
+          | { action: "update_many"; jobs: Array<{ job_id: string; patch: Record<string, unknown> & { delivery?: CronDelivery } }> }
+          | { action: "run"; job_id: string };
+        const session = getQuerySession(ctx.sessionKey);
+        const accountId = ctx.agentAccountId ?? session?.accountId;
+        let actor: ExternalContext | undefined;
+        try {
+          actor = await externalContextForSessionSender(
+            ctx.sessionKey,
+            ctx.requesterSenderId,
+            accountId,
+          );
+        } catch {
+          actor = undefined;
+        }
+        if (!actor || session?.jobId) {
+          const result = {
+            ok: false,
+            error: "query_cron_creator_authorization_missing",
+            detail: "Reintenta desde un mensaje reciente del creador en Query.",
+          };
+          return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
+        }
+
+        try {
+          const jobs = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
+          const manageable = jobs.filter((job) =>
+            isManageableQueryCron(job, actor, ctx.agentId)
+          );
+
+          if (params.action === "list") {
+            const visible = params.include_disabled === false
+              ? manageable.filter((job) => job.enabled !== false)
+              : manageable;
+            const publicResult = {
+              ok: true,
+              count: visible.length,
+              jobs: visible.map((job) => publicCronSummary(job, false)),
+            };
+            return { content: [{ type: "text", text: JSON.stringify(publicResult) }], details: publicResult };
+          }
+
+          if (params.action === "get") {
+            const jobId = params.job_id.trim();
+            const current = manageable.find((job) => job.id === jobId);
+            if (!current) {
+              if (jobs.some((job) => job.id === jobId)) throw new Error("query_cron_not_query_owned");
+              throw new Error("query_cron_not_found");
+            }
+            const publicResult = { ok: true, job: publicCronSummary(current) };
+            return { content: [{ type: "text", text: JSON.stringify(publicResult) }], details: publicResult };
+          }
+
+          if (params.action === "run") {
+            const jobId = params.job_id.trim();
+            const current = manageable.find((job) => job.id === jobId);
+            if (!current) {
+              if (jobs.some((job) => job.id === jobId)) throw new Error("query_cron_not_query_owned");
+              throw new Error("query_cron_not_found");
+            }
+            if (current.sessionTarget !== "isolated") {
+              throw new Error("query_cron_run_requires_isolated");
+            }
+            if (typeof cronService.run !== "function") {
+              throw new Error("query_cron_run_unavailable");
+            }
+            const effectiveDelivery = current.delivery as CronDelivery;
+            await assertAuthorizedCronDestination(actor, effectiveDelivery);
+            const mutation: PendingCronMutation = {
+              action: "updated",
+              jobId,
+              originThreadId: actor.threadId,
+              originAccountId: actor.queryAccountId,
+              requestedTarget: targetFromDelivery(effectiveDelivery),
+              delegatedToken: actor.auth.token,
+              originClientMsgId: actor.clientMsgId,
+              creatorUserId: actor.auth.identity?.id,
+              runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
+              capturedAt: Date.now(),
+            };
+            await syncChanged({ action: "updated", jobId, job: current }, mutation);
+            const runResult = await cronService.run(jobId, "force");
+            const publicResult = { ok: true, action: "run", job_id: jobId, run: runResult };
+            return { content: [{ type: "text", text: JSON.stringify(publicResult) }], details: publicResult };
+          }
+
+          if (params.action === "update_many") {
+            const ids = params.jobs.map((item) => item.job_id.trim());
+            if (new Set(ids).size !== ids.length) throw new Error("query_cron_duplicate_job_id");
+            const prepared = [] as Array<{
+              jobId: string;
+              patch: Record<string, unknown> & { delivery?: CronDelivery };
+              delivery: CronDelivery;
+            }>;
+            for (const item of params.jobs) {
+              const jobId = item.job_id.trim();
+              const current = manageable.find((job) => job.id === jobId);
+              if (!current) {
+                if (jobs.some((job) => job.id === jobId)) throw new Error("query_cron_not_query_owned");
+                throw new Error("query_cron_not_found");
+              }
+              const delivery = item.patch.delivery ?? current.delivery;
+              if (!delivery) throw new Error("query_cron_destination_required");
+              await assertAuthorizedCronDestination(actor, delivery);
+              prepared.push({ jobId, patch: item.patch, delivery });
+            }
+            const updated: Array<Record<string, unknown>> = [];
+            for (const item of prepared) {
+              await cronService.update(item.jobId, {
+                ...item.patch,
+                sessionTarget: "isolated",
+              } as never);
+              const after = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
+              const resultingJob = after.find((job) => job.id === item.jobId);
+              if (!resultingJob) throw new Error("query_cron_not_persisted");
+              const mutation: PendingCronMutation = {
+                action: "updated",
+                jobId: item.jobId,
+                originThreadId: actor.threadId,
+                originAccountId: actor.queryAccountId,
+                requestedTarget: targetFromDelivery(item.delivery),
+                delegatedToken: actor.auth.token,
+                originClientMsgId: actor.clientMsgId,
+                creatorUserId: actor.auth.identity?.id,
+                runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
+                capturedAt: Date.now(),
+              };
+              await syncChanged({ action: "updated", jobId: item.jobId, job: resultingJob }, mutation);
+              updated.push({ job_id: item.jobId, session_target: "isolated" });
+            }
+            const publicResult = { ok: true, action: "updated_many", count: updated.length, jobs: updated };
+            return { content: [{ type: "text", text: JSON.stringify(publicResult) }], details: publicResult };
+          }
+
+          let action: PendingCronMutation["action"];
+          let jobId: string | undefined;
+          let effectiveDelivery: CronDelivery;
+          let result: unknown;
+          let resultingJob: QueryCronJob | undefined;
+
+          if (params.action === "add") {
+            effectiveDelivery = params.job.delivery;
+            await assertAuthorizedCronDestination(actor, effectiveDelivery);
+            action = "added";
+            const input = {
+              ...params.job,
+              agentId: ctx.agentId,
+              enabled: params.job.enabled !== false,
+              description: params.job.description ?? "",
+              sessionTarget: "isolated",
+              wakeMode: params.job.wakeMode ?? "now",
+            };
+            result = await cronService.add(input as never);
+            jobId = cronJobId(result);
+            if (!jobId) {
+              const after = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
+              const candidates = after.filter((job) =>
+                !jobs.some((before) => before.id === job.id) &&
+                job.name === params.job.name,
+              );
+              if (candidates.length === 1) jobId = candidates[0].id;
+            }
+          } else {
+            jobId = params.job_id.trim();
+            const current = jobs.find((job) => job.id === jobId);
+            if (!current) throw new Error("query_cron_not_found");
+            const currentDelivery = current.delivery;
+            if (currentDelivery?.channel !== "query") {
+              throw new Error("query_cron_not_query_owned");
+            }
+            effectiveDelivery = params.patch.delivery ?? currentDelivery;
+            await assertAuthorizedCronDestination(actor, effectiveDelivery);
+            action = "updated";
+            result = await cronService.update(jobId, {
+              ...params.patch,
+              sessionTarget: "isolated",
+            } as never);
+          }
+
+          if (!jobId) throw new Error("query_cron_id_missing");
+          const after = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
+          resultingJob = after.find((job) => job.id === jobId);
+          if (!resultingJob) throw new Error("query_cron_not_persisted");
+          const mutation: PendingCronMutation = {
+            action,
+            jobId,
+            originThreadId: actor.threadId,
+            originAccountId: actor.queryAccountId,
+            requestedTarget: targetFromDelivery(effectiveDelivery),
+            delegatedToken: actor.auth.token,
+            originClientMsgId: actor.clientMsgId,
+            creatorUserId: actor.auth.identity?.id,
+            runAsUserId:
+              (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
+            capturedAt: Date.now(),
+          };
+          await syncChanged({ action, jobId, job: resultingJob }, mutation);
+          const publicResult = {
+            ok: true,
+            action,
+            job_id: jobId,
+            session_target: "isolated",
+            creator_user_id: mutation.creatorUserId,
+            run_as_user_id: mutation.runAsUserId,
+            origin_thread_id: actor.threadId,
+            delivery: {
+              channel: "query",
+              account_id: effectiveDelivery.accountId,
+              to: effectiveDelivery.threadId ?? effectiveDelivery.to,
+            },
+          };
+          return {
+            content: [{ type: "text", text: JSON.stringify(publicResult) }],
+            details: publicResult,
+          };
+        } catch (error) {
+          const allowed = new Set([
+            "query_cron_cross_tenant_destination",
+            "query_cron_destination_required",
+            "query_cron_destination_not_authorized",
+            "query_cron_not_found",
+            "query_cron_not_query_owned",
+            "query_cron_id_missing",
+            "query_cron_not_persisted",
+            "query_cron_duplicate_job_id",
+            "query_cron_run_requires_isolated",
+            "query_cron_run_unavailable",
+          ]);
+          const code = error instanceof Error && allowed.has(error.message)
+            ? error.message
+            : "query_cron_manage_failed";
+          const publicResult = { ok: false, error: code };
+          return {
+            content: [{ type: "text", text: JSON.stringify(publicResult) }],
+            details: publicResult,
+          };
+        }
+      },
+    };
+  }, { optional: true, names: ["query_cron_manage"] });
+
   api.on("cron_changed", (event) => syncChanged(event));
   api.on("after_tool_call", async (event, context) => {
     if (event.toolName !== "cron") return;

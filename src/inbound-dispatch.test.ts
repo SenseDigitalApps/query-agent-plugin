@@ -268,19 +268,13 @@ describe("Query inbound dispatch recovery", () => {
       "query_attachment_send",
     );
     expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
-      "localizarla y cargarla con tool_search",
-    );
-    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
-      "No afirmes que query_attachment_send esta ausente o no disponible sin haber ejecutado antes tool_search",
+      "Llama query_attachment_send directamente",
     );
     expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
       "nunca muestres file_path ni ninguna ruta local al usuario",
     );
     expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
-      "Solo reporta indisponibilidad si tool_search no encuentra query_attachment_send o devuelve un error tecnico real",
-    );
-    expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
-      'no inventes que hace falta "exponer el conector en la sesion"',
+      "Si la herramienta no aparece en el catalogo de este turno",
     );
     expect(dispatchReply.mock.calls[0][0].ctxPayload.BodyForAgent).toContain(
       "Puedes usar LocalPath y rutas locales para leer adjuntos recibidos o crear archivos internamente",
@@ -352,13 +346,13 @@ describe("Query inbound dispatch recovery", () => {
     expect(body).toContain("/queue steer");
     expect(body).toContain("No uses NO_REPLY");
     expect(body).toContain("publicalo en el topic o canal Query actual con query_attachment_send");
-    expect(body).toContain("localizarla y cargarla con tool_search");
+    expect(body).toContain("Llama query_attachment_send directamente");
     expect(body).toContain("nunca las muestres como entrega final");
     expect(body).toContain("Canal privado del remitente: private-22");
     expect(body).toContain("[Destino de tareas programadas:");
     expect(body).toContain("conserva el canal actual como destino");
-    expect(body).toContain("query_delivery_targets es una herramienta diferida");
-    expect(body).toContain("localizala y cargala con tool_search");
+    expect(body).toContain("usa directamente query_delivery_targets");
+    expect(body).toContain("usa query_cron_manage");
     expect(body).toContain("no adivines ni reutilices el destino de otra sesion");
     expect(body).toContain(
       "canal privado private-22 solo si el usuario pide expresamente",
@@ -430,14 +424,9 @@ describe("Query inbound dispatch recovery", () => {
     expect(body).toContain(
       "publicalo en el topic o canal Query actual con query_attachment_send usando su ruta local interna como file_path",
     );
-    expect(body).toContain(
-      "query_attachment_send es una herramienta diferida: si no aparece entre las herramientas ya cargadas, debes localizarla y cargarla con tool_search",
-    );
-    expect(body).toContain(
-      "No afirmes que query_attachment_send esta ausente o no disponible sin haber ejecutado antes tool_search",
-    );
+    expect(body).toContain("Llama query_attachment_send directamente");
     expect(body).toContain("nunca muestres file_path ni ninguna ruta local al usuario");
-    expect(body).toContain("query_delivery_targets es una herramienta diferida");
+    expect(body).toContain("usa directamente query_delivery_targets");
     expect(body).toContain("copia exactamente el thread_id y query_account_id autorizados");
   });
 });
