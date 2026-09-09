@@ -16,7 +16,7 @@ import {
   getDelegatedAuth,
   rememberDelegatedAuth,
 } from "./delegated-store.js";
-import { evaluateGoogleToolCall } from "./google-guard.js";
+import { evaluateGoogleToolCall, registerQueryGoogleGuard } from "./google-guard.js";
 import { rememberExternalContext } from "./external-context.js";
 import {
   getQuerySession,
@@ -84,6 +84,8 @@ afterEach(() => {
   vi.unstubAllGlobals();
   forgetDelegatedAuth(THREAD);
   forgetDelegatedAuth(ORIGIN_THREAD);
+  const scheduleAuthKey = getQuerySession(SESSION)?.authKey;
+  if (scheduleAuthKey) forgetDelegatedAuth(scheduleAuthKey);
   forgetQuerySession(SESSION);
   requestQueryScheduleAuth.mockReset();
 });
@@ -603,6 +605,54 @@ describe("registro de la tarea", () => {
 });
 
 describe("arranque del turno de un cron", () => {
+  it("preserva accountId y authKey cuando corre despues el hook generico de Google", async () => {
+    const hooks = new Map<string, Hook[]>();
+    const api = {
+      logger: { info: vi.fn(), warn: vi.fn() },
+      on: vi.fn((name: string, handler: Hook) => {
+        hooks.set(name, [...(hooks.get(name) ?? []), handler]);
+      }),
+      registerTool: vi.fn(),
+    };
+    registerQueryCronSync(api as never, vi.fn());
+    registerQueryGoogleGuard(api as never);
+
+    for (const hook of hooks.get("cron_changed") ?? []) {
+      await hook(cronAdded());
+    }
+    requestQueryScheduleAuth.mockResolvedValue({
+      auth: {
+        source: "schedule",
+        token: "schedule-token",
+        expires_in: 900,
+        thread_id: ORIGIN_THREAD,
+      },
+      socketUrl: SOCKET,
+    });
+
+    const context = {
+      jobId: "cron-1",
+      channel: "query",
+      chatId: THREAD,
+      sessionKey: SESSION,
+    };
+    // Mismo orden de index.ts/produccion: cron-sync obtiene la credencial y
+    // luego el guard generico vuelve a registrar la sesion.
+    for (const hook of hooks.get("before_agent_start") ?? []) {
+      await hook({}, context);
+    }
+
+    const session = getQuerySession(SESSION);
+    expect(session).toMatchObject({
+      threadId: THREAD,
+      deliveryThreadId: THREAD,
+      jobId: "cron-1",
+      accountId: "sales",
+    });
+    expect(session?.authKey).toMatch(/^schedule:/);
+    expect(getDelegatedAuth(session!.authKey!)?.auth.token).toBe("schedule-token");
+  });
+
   it("corrige el contexto accidental y pide auth para el destino canonico", async () => {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, vi.fn());
