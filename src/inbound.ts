@@ -610,9 +610,11 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
     `No incluyas thread_id en el prompt ni enlaces la ejecución a una sesión humana. ` +
     `Para reparar varios cron sin autorización, enuméralos con action=list, inspecciónalos con action=get y usa action=update_many desde un turno autorizado de su creador, sin recrearlos. ` +
     `Para validarlos inmediatamente usa action=run; esta acción resincroniza al creador antes de forzar la ejecución.]` +
-    `\n\n[Destino de tareas programadas: conserva el canal actual como destino ` +
-    `cuando el usuario pida publicar aqui, en este canal, o cuando la ` +
-    `automatizacion sea tematica para este topic. Si pide otro canal, no ` +
+    `\n\n[Destino de tareas programadas: el canal actual autorizado es ` +
+    `thread_id=${event.thread_id ?? event.data?.thread_id ?? "desconocido"}. ` +
+    `Si el usuario pide publicar aqui, en este canal, o la automatizacion es ` +
+    `tematica para este topic, conserva el canal actual como destino directamente y NO llames ` +
+    `query_delivery_targets. Solo si pide un canal diferente, no ` +
     `adivines ni reutilices el destino de otra sesion: usa directamente ` +
     `query_delivery_targets antes de crear o mover el cron y copia exactamente ` +
     `el thread_id y query_account_id autorizados que devuelve. Un admin puede ` +
@@ -623,7 +625,8 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
         `expresamente una entrega personal o privada. No interpretes la mera ` +
         `existencia de un canal privado como señal de que la tarea es personal. `
       : "") +
-    `Si el destino es realmente ambiguo, preguntalo antes de crear la tarea.]`;
+    `La palabra "otro" referida a otro cron, watchdog o tarea NO significa ` +
+    `otro canal. Si el destino es realmente ambiguo, preguntalo antes de crear la tarea.]`;
   const audioHint = messageRequestsAudio(event)
     ? "\n\n[Respuesta de audio en Query: Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]"
     : "";

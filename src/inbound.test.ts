@@ -30,7 +30,12 @@ describe("Query inbound body", () => {
     expect(body).toContain("Tipo de canal: topic compartido");
     expect(body).toContain("Canal privado del remitente: 22");
     expect(body).toContain("[Destino de tareas programadas:");
+    expect(body).toContain("canal actual autorizado es thread_id=topic-video");
     expect(body).toContain("conserva el canal actual como destino");
+    expect(body).toContain("NO llames query_delivery_targets");
+    expect(body).toContain(
+      'La palabra "otro" referida a otro cron, watchdog o tarea NO significa otro canal',
+    );
     expect(body).toContain("canal privado 22 solo si el usuario pide expresamente");
     expect(body).toContain(
       "No interpretes la mera existencia de un canal privado como señal",
