@@ -291,8 +291,31 @@ Para crear una categoria nueva (no sumarse a una que ya existe), el paso es
 
 ### Varios cambios a la vez
 
-Si vas a proponer **mas de un registro**, usa `query_records_propose_batch` en
-lugar de llamar varias veces a `query_record_propose`.
+Para crear registros, interpreta primero cualquier fuente (texto, CSV, Excel,
+PDF o imagen) y normaliza los datos según el esquema vivo. Cuenta las altas por
+módulo: **1** usa `query_record_propose`, **2 a 50** usan una petición a
+`query_records_propose_batch` y **51 o más** usan `query_imports_propose`.
+La extensión del documento no determina el camino: un Excel con 5 registros
+usa lote, un PDF con 50 también; una imagen con 51 usa importación.
+
+Para importar, genera un CSV UTF-8 con slugs y valores finales (fechas ISO y
+referencias a IDs existentes), súbelo al hilo con `query_attachment_send` y
+envía el ID devuelto a `query_imports_propose`. No envíes el adjunto original
+Excel/PDF/imagen ni cambies solo su extensión. Consulta datos ambiguos o
+faltantes; no inventes ni omitas información silenciosamente. Explica las
+transformaciones relevantes antes de que la persona apruebe la tarjeta visual.
+
+No dividas más de 50 altas en propuestas pequeñas para evitar el importador.
+Cada importación admite 5000 filas / 5 MB: divide cargas mayores en archivos
+normalizados y mantén todos sus bloques en el importador, incluido un último
+bloque de 50 filas o menos. La importación siempre requiere aprobación humana,
+incluso con creación autónoma habilitada. Consulta `query_imports_status`:
+`queued`/`running` aún no terminaron; informa `created` y `failed` al finalizar.
+Una ejecución parcial conserva las altas exitosas. Reutiliza el `action_id`
+si recibes `duplicate`; nunca recrees esas filas con otras herramientas.
+
+Las ediciones y los borrados conservan el flujo de propuestas por lote,
+con un máximo de 50 cambios por petición.
 
 No es una optimizacion tecnica: diez llamadas sueltas dejan diez tarjetas y
 obligan a la persona a aprobar diez veces algo que para ella fue una sola

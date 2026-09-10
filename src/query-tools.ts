@@ -494,6 +494,25 @@ async function delegatedAuthForTool(
   return getDelegatedAuth(threadId);
 }
 
+export function proposeQueryImportForThread(
+  params: { threadId: string; module: string; attachmentId: number; mapping?: Record<string, string | null>; intent?: string },
+  log: QueryToolLog,
+): Promise<unknown> {
+  return postQuery(params.threadId,
+    `modules/${encodeURIComponent(params.module)}/imports/propose/`,
+    { attachment_id: params.attachmentId, mapping: params.mapping ?? {}, intent: params.intent },
+    "query_imports_propose", log);
+}
+
+export function queryImportStatusForThread(
+  params: { threadId: string; module: string; actionId: string },
+  log: QueryToolLog,
+): Promise<unknown> {
+  return callQuery(params.threadId,
+    `modules/${encodeURIComponent(params.module)}/imports/${encodeURIComponent(params.actionId)}/`,
+    {}, "query_imports_status", log);
+}
+
 export default defineToolPlugin({
   id: "query-tools",
   name: "Query",
@@ -715,7 +734,7 @@ export default defineToolPlugin({
       name: "query_record_propose",
       label: "Query: proponer un cambio",
       description:
-        "Unica via para cambiar datos en Query. Por defecto deja una propuesta en el chat que dura 24 horas. Si un administrador autorizo a ese usuario a crear registros sin aprobacion, Query aplica las creaciones automaticamente y devuelve requires_confirmation=false con status=executed. Las actualizaciones siguen requiriendo aprobacion. Usala tanto para crear como para actualizar registros reales. Si la persona corrige una propuesta que sigue pendiente, vuelve a llamar esta tool con el action_id de esa propuesta: Query actualiza la misma tarjeta, sin pedir que la descarte ni crear otra. Los fields corregidos se mezclan con los ya propuestos; usa replace_proposal=true y envia la version completa solo cuando debas quitar cambios anteriores. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: publicalos en el canal actual llamando directamente query_attachment_send y nunca muestres la ruta local. Antes, consulta query_module_describe y usa los slugs exactos. Los campos calculator, calculador_initial, calculator_advanced y calculator_table tambien aceptan el valor inicial calculado por el agente; el frontend podra recalcularlo despues. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Lee la respuesta: solo si status=executed informa que se creo el registro; si requires_confirmation=true pide revisar la propuesta en el chat. No asumas exito ante errores.",
+        "Propone un registro real. Para altas, interpreta y normaliza cualquier fuente primero: 1 registro usa esta herramienta, 2 a 50 usan query_records_propose_batch y 51 o mas usan query_imports_propose. Por defecto deja una propuesta en el chat que dura 24 horas. Si un administrador autorizo a ese usuario a crear registros sin aprobacion, Query aplica las creaciones automaticamente y devuelve requires_confirmation=false con status=executed. Las actualizaciones siguen requiriendo aprobacion. Usala tanto para crear como para actualizar registros reales. Si la persona corrige una propuesta que sigue pendiente, vuelve a llamar esta tool con el action_id de esa propuesta: Query actualiza la misma tarjeta, sin pedir que la descarte ni crear otra. Los fields corregidos se mezclan con los ya propuestos; usa replace_proposal=true y envia la version completa solo cuando debas quitar cambios anteriores. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: publicalos en el canal actual llamando directamente query_attachment_send y nunca muestres la ruta local. Antes, consulta query_module_describe y usa los slugs exactos. Los campos calculator, calculador_initial, calculator_advanced y calculator_table tambien aceptan el valor inicial calculado por el agente; el frontend podra recalcularlo despues. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Lee la respuesta: solo si status=executed informa que se creo el registro; si requires_confirmation=true pide revisar la propuesta en el chat. No asumas exito ante errores.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         action_id: Type.Optional(
@@ -863,7 +882,7 @@ export default defineToolPlugin({
       name: "query_records_propose_batch",
       label: "Query: proponer varios cambios",
       description:
-        "Como query_record_propose pero para varios registros reales del mismo modulo a la vez. Usala SIEMPRE que vayas a proponer mas de un cambio seguido: deja UNA sola tarjeta que la persona aprueba de una vez, en vez de obligarla a confirmar una por una. Si corriges un lote pendiente, incluye su action_id y envia la lista items completa corregida; Query actualiza la misma tarjeta. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: publicalos en el canal actual llamando directamente query_attachment_send y nunca muestres la ruta local. Cada item puede traer record_id (actualizar), omitirlo (crear) o llevar delete: true con su record_id (eliminar ese registro). Un lote con borrados exige que la persona tenga permiso de eliminar en el modulo, se pinta en rojo y pide una confirmacion aparte. Si un item esta mal, Query rechaza el lote entero y no propone nada, asi que revisa los slugs con query_module_describe antes. Se aplica todo o nada al confirmar. Las propuestas duran 24 horas. Query puede ejecutar automaticamente un lote compuesto solo por creaciones si un administrador autorizo a ese usuario. Solo si status=executed informa que se aplico; si requires_confirmation=true pide revisar la propuesta. Los lotes con modificaciones o borrados siempre requieren aprobacion.",
+        "Propone hasta 50 cambios en registros reales del mismo modulo en una tarjeta. Para crear: primero interpreta y normaliza la fuente (texto, CSV, Excel, PDF o imagen); 1 registro usa query_record_propose, 2 a 50 usan esta herramienta, 51 o mas usan query_imports_propose con un CSV normalizado. No dividas cargas grandes en lotes pequenos para evitar el importador. Si corriges un lote pendiente, incluye su action_id y envia items completo. No uses registros para entregar artifacts generados: publicalos con query_attachment_send. Cada item puede traer record_id (actualizar), omitirlo (crear) o delete: true con record_id (eliminar). Revisa los slugs con query_module_describe. Un error rechaza todo el lote; se aplica todo o nada al confirmar. Las propuestas duran 24 horas. Query puede ejecutar automaticamente lotes de solo altas con autorizacion administrativa; solo status=executed significa aplicado. Si requires_confirmation=true pide revisar. Ediciones y borrados siempre requieren aprobacion y sus permisos correspondientes.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         action_id: Type.Optional(
@@ -906,6 +925,7 @@ export default defineToolPlugin({
             description:
               "Registros del lote, maximo 50. Cada uno necesita fields, title o ambos, salvo los de delete: true, que solo llevan record_id.",
             minItems: 1,
+            maxItems: 50,
           },
         ),
         intent: Type.Optional(
@@ -927,6 +947,28 @@ export default defineToolPlugin({
           context.api.logger,
         );
       },
+    }),
+    tool({
+      name: "query_imports_propose",
+      label: "Query: preparar importacion masiva",
+      description: "Crear 51 o mas registros por modulo, sin importar la fuente original (texto, CSV, Excel, PDF o imagen). Primero interpreta la fuente completa y normaliza los datos segun query_module_describe; consulta ambiguedades, no inventes valores. Genera un CSV UTF-8 con slugs, fechas ISO y referencias existentes, subelo al mismo hilo con query_attachment_send y usa el attachment_id devuelto, nunca el ID del Excel/PDF/imagen original. Para 1 alta usa query_record_propose; para 2 a 50 usa query_records_propose_batch. Cada importacion admite 5000 filas/5 MB; divide cargas mayores en archivos de importacion (tambien el ultimo bloque pequeno). Siempre requiere aprobacion visual humana. Reutiliza action_id si duplicate=true; no recrees las filas con otras herramientas al reintentar.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        module: Type.String(),
+        attachment_id: Type.Integer({ minimum: 1, description: "ID del CSV normalizado subido al hilo." }),
+        mapping: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]))),
+        intent: Type.Optional(Type.String({ description: "Objetivo y transformaciones relevantes para quien revisa." })),
+      }),
+      execute: async ({ thread_id, module, attachment_id, mapping, intent }, _config, context) =>
+        proposeQueryImportForThread({ threadId: thread_id, module, attachmentId: attachment_id, mapping, intent }, context.api.logger),
+    }),
+    tool({
+      name: "query_imports_status",
+      label: "Query: consultar importacion",
+      description: "Consulta validaciones, vista previa y avance de una importacion. queued/running no significa terminada. Informa created y failed al finalizar; failed puede conservar registros creados. No vuelvas a crear las filas por otras herramientas.",
+      parameters: Type.Object({ thread_id: THREAD_PARAM, module: Type.String(), action_id: Type.String() }),
+      execute: async ({ thread_id, module, action_id }, _config, context) =>
+        queryImportStatusForThread({ threadId: thread_id, module, actionId: action_id }, context.api.logger),
     }),
     tool({
       name: "query_record_get",

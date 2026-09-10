@@ -23,10 +23,36 @@ import {
   queryRecordsForThread,
   recordProposalRequestBody,
   uploadQueryAttachmentForThread,
+  proposeQueryImportForThread,
+  queryImportStatusForThread,
 } from "./query-tools.js";
 
 let stateDirectory: string;
 let previousStateFile: string | undefined;
+
+describe("reviewed imports", () => {
+  afterEach(() => { vi.unstubAllGlobals(); forgetDelegatedAuth("thread-import"); });
+  it("sends the normalized CSV attachment and mapping without confirming it", async () => {
+    rememberDelegatedAuth("thread-import", { token: "import-token", expires_in: 900 }, "wss://query.test/ws/openclaw-agent/8/", "message-import");
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 201, json: async () => ({ action_id: "proposal", requires_confirmation: true }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    const result = await proposeQueryImportForThread({ threadId: "thread-import", module: "clientes", attachmentId: 123, mapping: { Nombre: "nombre", Nota: null } }, log);
+    expect(result).toMatchObject({ requires_confirmation: true });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://query.test/api/v4/openclaw-agent/modules/clientes/imports/propose/");
+    expect(JSON.parse(String(options.body))).toEqual({ attachment_id: 123, mapping: { Nombre: "nombre", Nota: null } });
+  });
+  it("preserves queued status rather than reporting completion", async () => {
+    rememberDelegatedAuth("thread-import", { token: "import-token", expires_in: 900 }, "wss://query.test/ws/openclaw-agent/8/", "message-import");
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ status: "queued", import_result: { created: 0 } }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await queryImportStatusForThread({ threadId: "thread-import", module: "clientes", actionId: "proposal" }, { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() });
+    expect(result).toEqual({ status: "queued", import_result: { created: 0 } });
+    expect(String((fetchMock.mock.calls[0] as unknown as [URL])[0])).toBe("https://query.test/api/v4/openclaw-agent/modules/clientes/imports/proposal/");
+  });
+});
 
 beforeAll(async () => {
   stateDirectory = await mkdtemp(join(tmpdir(), "query-tools-state-"));
