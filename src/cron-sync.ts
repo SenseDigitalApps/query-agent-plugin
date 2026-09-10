@@ -945,6 +945,8 @@ export function registerQueryCronSync(
         }
 
         const persistedJobIds: string[] = [];
+        let createdJobId: string | undefined;
+        let activationAttempted = false;
         try {
           const jobs = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
           const manageable = jobs.filter((job) =>
@@ -1096,7 +1098,8 @@ export function registerQueryCronSync(
             const input = {
               ...params.job,
               agentId: ctx.agentId,
-              enabled: params.job.enabled !== false,
+              // Persist first, but never let the scheduler race authorization.
+              enabled: false,
               description: params.job.description ?? "",
               sessionTarget: "isolated",
               wakeMode: params.job.wakeMode ?? "now",
@@ -1132,10 +1135,14 @@ export function registerQueryCronSync(
           }
 
           if (!jobId) throw new Error("query_cron_id_missing");
+          if (params.action === "add") {
+            createdJobId = jobId;
+            persistedJobIds.push(jobId);
+          }
           const after = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
           resultingJob = after.find((job) => job.id === jobId);
           if (!resultingJob) throw new Error("query_cron_not_persisted");
-          persistedJobIds.push(jobId);
+          if (!persistedJobIds.includes(jobId)) persistedJobIds.push(jobId);
           const mutation: PendingCronMutation = {
             action,
             jobId,
@@ -1151,6 +1158,10 @@ export function registerQueryCronSync(
           };
           await syncChanged({ action, jobId, job: resultingJob }, mutation, true);
           const authorization = await confirmAuthorization(jobId, effectiveDelivery, mutation.runAsUserId);
+          if (params.action === "add" && params.job.enabled !== false) {
+            activationAttempted = true;
+            await cronService.update(jobId, { enabled: true });
+          }
           const publicResult = {
             ok: true,
             authorization,
@@ -1171,6 +1182,14 @@ export function registerQueryCronSync(
             details: publicResult,
           };
         } catch (error) {
+          let disabled = Boolean(createdJobId);
+          if (createdJobId && activationAttempted) {
+            try {
+              await cronService.update(createdJobId, { enabled: false });
+            } catch {
+              disabled = false;
+            }
+          }
           const allowed = new Set([
             "query_cron_cross_tenant_destination",
             "query_cron_destination_required",
@@ -1198,6 +1217,7 @@ export function registerQueryCronSync(
             ...(error instanceof Error && "authorizationReason" in error
               ? { authorization_reason: error.authorizationReason } : {}),
             ...(persistedJobIds.length ? { persisted_job_ids: persistedJobIds, ready: false } : {}),
+            ...(createdJobId ? { disabled, ...(disabled ? {} : { disable_error: "query_cron_disable_unconfirmed" }) } : {}),
           };
           return {
             content: [{ type: "text", text: JSON.stringify(publicResult) }],

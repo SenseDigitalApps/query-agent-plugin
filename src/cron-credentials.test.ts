@@ -160,8 +160,13 @@ describe("registro de la tarea", () => {
     await vi.waitFor(() => expect(confirmQueryScheduleSync).toHaveBeenCalled());
     expect(finished).toBe(false);
     expect(run).not.toHaveBeenCalled();
+    if (action === "add") {
+      expect(add).toHaveBeenCalledWith(expect.objectContaining({ enabled: false }));
+      expect(update).not.toHaveBeenCalled();
+    }
     settle({ external_id: job.id, authorized: false, error: "support_delegation_revoked" });
-    expect((await pending).details).toMatchObject({ ok: false, error: "query_schedule_authorization_rejected" });
+    expect((await pending).details).toMatchObject({ ok: false, error: "query_schedule_authorization_rejected",
+      ...(action === "add" ? { disabled: true, ready: false, persisted_job_ids: [job.id] } : {}) });
     expect(requestQueryScheduleAuth).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
     for (const [reply, error] of [
@@ -181,6 +186,7 @@ describe("registro de la tarea", () => {
     run.mockResolvedValue({ ran: true, summary: "query_schedule_authorization_missing" });
     const result = await tool.execute("authorized", params);
     expect(result.details.ok).toBe(action !== "run");
+    if (action === "add") expect(update).toHaveBeenLastCalledWith(job.id, { enabled: true });
     if (action === "run") expect(result.details.error).toBe("query_schedule_authorization_missing");
     expect(getDelegatedAuth("24")).toBeUndefined();
     job.delivery.accountId = "foreign";
@@ -192,6 +198,53 @@ describe("registro de la tarea", () => {
     expect(update).not.toHaveBeenCalled();
     expect(run).not.toHaveBeenCalled();
   });
+  it.each(["success", "disabled", "credential_missing", "activation_failure", "rollback_failure"])(
+    "un cron nuevo solo se activa tras confirmar credencial (%s)", async (outcome) => {
+      const { api, hooks, tools } = fakeApi();
+      const jobs: any[] = [];
+      const add = vi.fn(async (input) => { const job = { ...input, id: "staged-cron" }; jobs.push(job); return job; });
+      const update = vi.fn(async (id, patch) => {
+        if (!patch.enabled && outcome === "rollback_failure") throw new Error("storage unavailable");
+        Object.assign(jobs.find((job) => job.id === id), patch);
+        if (patch.enabled && ["activation_failure", "rollback_failure"].includes(outcome)) throw new Error("activation failed");
+        return jobs[0];
+      });
+      registerQueryCronSync(api as never, vi.fn());
+      await hooks.get("gateway_start")?.({}, { getCron: () => ({ list: async () => jobs, add, update }) });
+      rememberQuerySession(SESSION, { threadId: "24", accountId: "sales" });
+      rememberExternalContext({ sessionKey: SESSION, senderId: "1", threadId: "24",
+        queryAccountId: "sales", socketUrl: SOCKET, agentToken: "agent", clientMsgId: "staged-message",
+        auth: { token: "signed-support", expires_in: 900, identity: { id: 1 }, external_account_identity: { id: 2 } } });
+      vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ targets: [{ thread_id: "24" }] }) }));
+      confirmQueryScheduleSync.mockImplementation(async (_account, event) => {
+        expect(jobs[0].enabled).toBe(false);
+        expect(event.data.delegated_token).toBe("signed-support");
+        return { authorized: true, external_id: jobs[0].id, run_as_user_id: 2 };
+      });
+      let settle: (value: unknown) => void = () => {};
+      requestQueryScheduleAuth.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+      const tool = tools[0]({ messageChannel: "query", sessionKey: SESSION, requesterSenderId: "1",
+        agentAccountId: "sales", agentId: "query" });
+      const pending = tool.execute("staged-call", { action: "add", job: {
+        name: "Inbox", enabled: outcome !== "disabled", schedule: { kind: "cron", expr: "0 4 * * *" },
+        payload: { kind: "agentTurn", message: "Preserved prompt" },
+        delivery: { channel: "query", accountId: "sales", to: "channel:24" },
+      } });
+      await vi.waitFor(() => expect(requestQueryScheduleAuth).toHaveBeenCalled());
+      expect(jobs[0].enabled).toBe(false);
+      expect(update).not.toHaveBeenCalled();
+      settle(outcome === "credential_missing" ? undefined : { auth: {
+        token: "schedule", source: "schedule", external_id: jobs[0].id, identity: { id: 2 },
+      } });
+      const result = await pending;
+      expect(result.details.ok).toBe(["success", "disabled"].includes(outcome));
+      expect(jobs[0].enabled).toBe(["success", "rollback_failure"].includes(outcome));
+      expect(jobs[0].payload.message).toBe("Preserved prompt");
+      expect(jobs).toHaveLength(1);
+      if (outcome === "rollback_failure") expect(result.details).toMatchObject({ disabled: false, disable_error: "query_cron_disable_unconfirmed" });
+      if (outcome === "activation_failure") expect(result.details).toMatchObject({ disabled: true, ready: false });
+    },
+  );
   it("expone un gestor propio en Query y repara el ID existente con el actor delegado", async () => {
     const { api, hooks, tools } = fakeApi();
     const send = vi.fn();
