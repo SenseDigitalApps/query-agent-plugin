@@ -133,6 +133,69 @@ function cronAdded(jobId = "cron-1") {
   };
 }
 
+describe("eliminacion desde el chat", () => {
+  async function setup(options: { enabled?: boolean; accountId?: string; authorized?: boolean; retained?: boolean; failure?: boolean; syncFailure?: boolean; scheduled?: boolean } = {}) {
+    const { api, hooks, tools } = fakeApi();
+    const job = { id: "remove-target", name: "Saludo", agentId: "query", enabled: options.enabled ?? true,
+      delivery: { channel: "query", accountId: options.accountId ?? "sales", to: "channel:86" } };
+    let jobs = [job];
+    const remove = vi.fn(async () => {
+      if (options.failure) return { removed: false };
+      if (!options.retained) jobs = [];
+      return { removed: true };
+    });
+    const update = vi.fn();
+    const send = vi.fn(() => { if (options.syncFailure) throw new Error("offline"); });
+    registerQueryCronSync(api as never, send);
+    await hooks.get("gateway_start")?.({}, { getCron: () => ({ list: vi.fn(async () => jobs), remove, update }) });
+    rememberQuerySession(SESSION, { threadId: ORIGIN_THREAD, accountId: "sales", ...(options.scheduled ? { jobId: "running-cron" } : {}) });
+    rememberExternalContext({ sessionKey: SESSION, senderId: "7", threadId: ORIGIN_THREAD,
+      queryAccountId: "sales", socketUrl: SOCKET, agentToken: "agent-token", clientMsgId: "remove-message",
+      auth: { token: "delegated-creator", expires_in: 900, identity: { id: 7 } } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true,
+      json: async () => ({ targets: options.authorized === false ? [] : [{ thread_id: "86" }] }) }));
+    const tool = tools[0]({ messageChannel: "query", sessionKey: SESSION, requesterSenderId: "7", agentAccountId: "sales", agentId: "query" });
+    return { tool, remove, update, send };
+  }
+
+  it.each([true, false])("elimina una tarea enabled=%s y sincroniza la baja sin desactivarla", async (enabled) => {
+    const { tool, remove, update, send } = await setup({ enabled });
+    expect(tool.parameters.anyOf.some((variant: any) => variant.properties.action.const === "remove")).toBe(true);
+    const result = await tool.execute("remove-call", { action: "remove", job_id: "remove-target" });
+    expect(result.details).toMatchObject({ ok: true, action: "removed", removed: true, job_id: "remove-target" });
+    expect(remove).toHaveBeenCalledWith("remove-target");
+    expect(update).not.toHaveBeenCalled();
+    expect(send).toHaveBeenCalledWith("sales", expect.objectContaining({ type: "schedule.sync", data: expect.objectContaining({ action: "removed", external_id: "remove-target", delegated_token: "delegated-creator" }) }));
+  });
+
+  it.each([
+    [{ authorized: false }, "query_cron_destination_not_authorized"],
+    [{ accountId: "other" }, "query_cron_not_query_owned"],
+    [{ scheduled: true }, "query_cron_creator_authorization_missing"],
+  ] as const)("rechaza eliminar sin acceso: %s", async (options, error) => {
+    const { tool, remove } = await setup(options);
+    const result = await tool.execute("remove-call", { action: "remove", job_id: "remove-target" });
+    expect(result.details).toMatchObject({ ok: false, error });
+    expect(remove).not.toHaveBeenCalled();
+  });
+
+  it.each([
+    [{ retained: true }, "query_cron_remove_unconfirmed"],
+    [{ failure: true }, "query_cron_remove_failed"],
+  ] as const)("no anuncia exito si el programador no elimina: %s", async (options, error) => {
+    const { tool, send } = await setup(options);
+    const result = await tool.execute("remove-call", { action: "remove", job_id: "remove-target" });
+    expect(result.details).toMatchObject({ ok: false, error });
+    expect(send).not.toHaveBeenCalled();
+  });
+
+  it("distingue borrado confirmado de sincronizacion pendiente", async () => {
+    const { tool } = await setup({ syncFailure: true });
+    const result = await tool.execute("remove-call", { action: "remove", job_id: "remove-target" });
+    expect(result.details).toMatchObject({ ok: false, removed: true, synchronization_pending: true, removed_job_id: "remove-target" });
+  });
+});
+
 describe("registro de la tarea", () => {
   it.each(["add", "update", "run"])("%s espera el acuse y falla sin autorización, sin iniciar el agente", async (action) => {
     const { api, hooks, tools } = fakeApi();

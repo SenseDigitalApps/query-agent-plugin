@@ -602,7 +602,8 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
     .filter(Boolean)
     .join(". ");
   const scheduledDeliveryHint =
-    `\n\n[Autorización de tareas Query: usa query_cron_manage para listar, consultar, crear, actualizar o ejecutar tareas programadas. ` +
+    `\n\n[Autorización de tareas Query: usa query_cron_manage para listar, consultar, crear, actualizar, eliminar o ejecutar tareas programadas. ` +
+    `Para eliminar usa action=remove con el job_id real; para pausar usa action=update con patch.enabled=false. No sustituyas eliminar por desactivar. ` +
     `La herramienta fuerza sessionTarget=isolated, valida el destino y conserva la identidad del creador. ` +
     `No uses openclaw cron add/edit por CLI: no captura el turno autorizado. ` +
     `Query conserva la identidad del creador separada del destino y resuelve internamente la autenticación y thread_id al ejecutar. ` +

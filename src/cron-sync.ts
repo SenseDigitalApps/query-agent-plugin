@@ -767,7 +767,9 @@ export function registerQueryCronSync(
   });
   const syncChanged = async (event: PluginHookCronChangedEvent, provenMutation?: PendingCronMutation, requireConfirmation = false) => {
     if (!["added", "updated", "removed"].includes(event.action)) return;
-    const previous = syncedCrons.get(event.jobId);
+    const previous = syncedCrons.get(event.jobId) ?? (event.action === "removed"
+      ? targetFromDelivery((event.job as QueryCronJob | undefined)?.delivery) ?? provenMutation?.requestedTarget
+      : undefined);
     const job = await currentCronJob(api, event);
     const delivery = job?.delivery;
     const resolvedTarget = targetFromDelivery(delivery);
@@ -872,7 +874,9 @@ export function registerQueryCronSync(
       name: "query_cron_manage",
       label: "Query: programar tarea",
       description:
-        "Lista, consulta, crea, actualiza o ejecuta un cron Query desde el turno autorizado del creador. " +
+        "Lista, consulta, crea, actualiza, elimina o ejecuta un cron Query desde el turno autorizado del creador. " +
+        "Para eliminar usa action=remove con job_id: borra del programador y sincroniza la baja en Query. " +
+        "Para pausar usa action=update con patch.enabled=false; desactivar no equivale a eliminar. " +
         "Mantiene la ejecución aislada, valida el destino y sincroniza run_as " +
         "sin depender de que el canal de entrega sea el canal privado.",
       parameters: Type.Union([
@@ -904,6 +908,10 @@ export function registerQueryCronSync(
           action: Type.Literal("run"),
           job_id: Type.String({ minLength: 1 }),
         }, { additionalProperties: false }),
+        Type.Object({
+          action: Type.Literal("remove"),
+          job_id: Type.String({ minLength: 1 }),
+        }, { additionalProperties: false }),
       ]),
       execute: async (_toolCallId, rawParams) => {
         if (!cronService) {
@@ -922,7 +930,8 @@ export function registerQueryCronSync(
           | { action: "add"; job: Record<string, unknown> & { delivery: CronDelivery } }
           | { action: "update"; job_id: string; patch: Record<string, unknown> & { delivery?: CronDelivery } }
           | { action: "update_many"; jobs: Array<{ job_id: string; patch: Record<string, unknown> & { delivery?: CronDelivery } }> }
-          | { action: "run"; job_id: string };
+          | { action: "run"; job_id: string }
+          | { action: "remove"; job_id: string };
         const session = getQuerySession(ctx.sessionKey);
         const accountId = ctx.agentAccountId ?? session?.accountId;
         let actor: ExternalContext | undefined;
@@ -947,6 +956,7 @@ export function registerQueryCronSync(
         const persistedJobIds: string[] = [];
         let createdJobId: string | undefined;
         let activationAttempted = false;
+        let removedJobId: string | undefined;
         try {
           const jobs = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
           const manageable = jobs.filter((job) =>
@@ -973,6 +983,33 @@ export function registerQueryCronSync(
               throw new Error("query_cron_not_found");
             }
             const publicResult = { ok: true, job: publicCronSummary(current) };
+            return { content: [{ type: "text", text: JSON.stringify(publicResult) }], details: publicResult };
+          }
+
+          if (params.action === "remove") {
+            const jobId = params.job_id.trim();
+            const current = manageable.find((job) => job.id === jobId);
+            if (!current) {
+              if (jobs.some((job) => job.id === jobId)) throw new Error("query_cron_not_query_owned");
+              throw new Error("query_cron_not_found");
+            }
+            const delivery = current.delivery as CronDelivery;
+            await assertAuthorizedCronDestination(actor, delivery);
+            if (typeof cronService.remove !== "function") throw new Error("query_cron_remove_unavailable");
+            const removal = await cronService.remove(jobId);
+            if (removal.removed === false) throw new Error("query_cron_remove_failed");
+            const after = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
+            if (after.some((job) => job.id === jobId)) throw new Error("query_cron_remove_unconfirmed");
+            removedJobId = jobId;
+            await syncChanged({ action: "removed", jobId, job: current }, {
+              action: "removed", jobId,
+              originThreadId: actor.threadId, originAccountId: actor.queryAccountId,
+              requestedTarget: targetFromDelivery(delivery), delegatedToken: actor.auth.token,
+              originClientMsgId: actor.clientMsgId, creatorUserId: actor.auth.identity?.id,
+              runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
+              capturedAt: Date.now(),
+            }, true);
+            const publicResult = { ok: true, action: "removed", job_id: jobId, removed: true };
             return { content: [{ type: "text", text: JSON.stringify(publicResult) }], details: publicResult };
           }
 
@@ -1204,6 +1241,9 @@ export function registerQueryCronSync(
             "query_cron_run_failed",
             "query_cron_run_not_started",
             "query_cron_run_result_unconfirmed",
+            "query_cron_remove_unavailable",
+            "query_cron_remove_failed",
+            "query_cron_remove_unconfirmed",
             "query_schedule_authorization_missing",
             "query_schedule_authorization_rejected",
             "query_schedule_authorization_unconfirmed",
@@ -1214,6 +1254,7 @@ export function registerQueryCronSync(
             : "query_cron_manage_failed";
           const publicResult = {
             ok: false, error: code,
+            ...(removedJobId ? { removed_job_id: removedJobId, removed: true, synchronization_pending: true } : {}),
             ...(error instanceof Error && "authorizationReason" in error
               ? { authorization_reason: error.authorizationReason } : {}),
             ...(persistedJobIds.length ? { persisted_job_ids: persistedJobIds, ready: false } : {}),

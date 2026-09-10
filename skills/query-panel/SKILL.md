@@ -75,9 +75,9 @@ resuelve internamente y no debes incluirlo en el prompt ni deducirlo del destino
 En un turno humano, pide un mensaje nuevo en ese canal y reintenta si la
 renovación interna falla. No busques tokens ni credenciales de otra conversación.
 
-## Crear, editar y reparar tareas programadas
+## Crear, editar, eliminar y reparar tareas programadas
 
-Usa la herramienta nativa `cron` desde el turno Query autorizado del creador.
+Usa `query_cron_manage` desde el turno Query autorizado del creador.
 No uses `openclaw cron add` ni `openclaw cron edit` por CLI: esa ruta no captura
 la autorización programada. Mantén `sessionTarget: "isolated"`; nunca uses
 `session:...` ni una sesión privada persistente para sustituir la identidad.
@@ -94,9 +94,18 @@ sin depender de su token original ni de que mantenga una conversación abierta.
 El modelo no debe escribir `thread_id=13` ni `thread_id=86` en las instrucciones.
 
 Ante `query_schedule_authorization_missing`, informa el fallo y solicita
-resincronizar el mismo ID mediante `cron.update` desde una acción autorizada
+resincronizar el mismo ID mediante `query_cron_manage` con `action=update` desde una acción autorizada
 del creador. Conserva ID, historial, horario y destino. No recrees el cron ni
 cambies de identidad, cuenta o tenant para hacer desaparecer el error.
+
+Si el usuario pide eliminar o borrar una tarea, identifica su ID exacto con
+`action=list` o `action=get` y usa `action=remove` con `job_id`. Incluye las
+deshabilitadas al buscar: también pueden eliminarse. Si hay varias candidatas,
+aclara cuál quiere borrar. No sustituyas esta petición por desactivar la tarea.
+Para pausar sin borrar, usa `action=update` con `patch: {"enabled": false}`.
+Solo informa que se eliminó cuando la respuesta confirme `ok=true` y
+`removed=true`. Query conserva el historial de auditoría de la baja; la tarea
+desaparece del programador de OpenClaw.
 
 ## Cambiar datos mediante las herramientas de Query
 
