@@ -7,6 +7,8 @@ import type {
 import { Type } from "typebox";
 import {
   queryAccountIdForSocketUrl,
+  requestQueryScheduleAuth,
+  confirmQueryScheduleSync,
   sendQueryOutboundEvent,
 } from "./socket.js";
 import {
@@ -141,6 +143,12 @@ const pendingBackfill = new Map<
 // reconocerse como nuestro: es lo que decide si sus herramientas pasan por el
 // control de cuentas externas o se las salta.
 const queryCronIds = new Set<string>();
+// Runtime receipts omit summaries. Keep the structured completion evidence,
+// scoped by account and cron, without storing message contents or credentials.
+const cronCompletions = new Map<string, {
+  runAtMs: number; status?: string; authorizationFailed: boolean;
+}>();
+const cronCompletionKey = (accountId: string, jobId: string) => JSON.stringify([accountId, jobId]);
 type QueryCronService = PluginHookGatewayCronService & {
   run?: (id: string, mode: "force" | "due") => Promise<unknown>;
 };
@@ -582,12 +590,11 @@ async function primeScheduleCredential(
     channelId?: string;
     sessionKey?: string;
   },
-): Promise<void> {
+): Promise<"not_query" | "authorized" | "blocked"> {
   // ``jobId`` solo viene en ejecuciones disparadas por cron; un turno normal ya
   // trae su credencial con el mensaje y no debe tocar nada de esto.
   const externalId = context.jobId?.trim();
-  if (!externalId) return;
-  if (context.channel && context.channel !== "query") return;
+  if (!externalId) return "not_query";
   const synced = syncedCrons.get(externalId);
   // Que la tarea es de Query hay que poder afirmarlo, no suponerlo: o el
   // contexto lo dice, o la sincronizacion la registro como nuestra. Lo que se
@@ -595,10 +602,10 @@ async function primeScheduleCredential(
   // que adoptar de mas seria bloquear crones de otras integraciones.
   const isQueryCron =
     context.channel === "query" || Boolean(synced) || queryCronIds.has(externalId);
-  if (!isQueryCron) return;
+  if (!isQueryCron) return "not_query";
   const contextualThreadId = (context.chatId ?? context.channelId ?? "").trim();
   const threadId = synced?.threadId ?? contextualThreadId;
-  if (!threadId) return;
+  if (!threadId) return "blocked";
   if (synced?.threadId && contextualThreadId && synced.threadId !== contextualThreadId) {
     api.logger.warn(
       `query cron ${externalId}: OpenClaw inicio el turno en ${contextualThreadId}, ` +
@@ -621,7 +628,7 @@ async function primeScheduleCredential(
   const authKey = getQuerySession(context.sessionKey)?.authKey;
   if (!authKey || !synced?.accountId) {
     api.logger.warn(`query cron ${externalId}: query_schedule_authorization_missing (cuenta o sesión aislada ausente).`);
-    return;
+    return "blocked";
   }
   forgetDelegatedAuth(authKey);
   try {
@@ -636,11 +643,11 @@ async function primeScheduleCredential(
         `query cron ${externalId}: Query no entrego credencial de ejecución; ` +
           `la autorizacion programada no esta vigente. Resincroniza el mismo ID desde su creador.`,
       );
-      return;
+      return "blocked";
     }
     if (granted.auth.source !== "schedule") {
       api.logger.warn(`query cron ${externalId}: Query devolvió una credencial no programada.`);
-      return;
+      return "blocked";
     }
     rememberDelegatedAuth(authKey, granted.auth, granted.socketUrl);
     rememberQuerySession(context.sessionKey, {
@@ -656,10 +663,12 @@ async function primeScheduleCredential(
     if (!isQueryCron) {
       rememberQuerySession(context.sessionKey, { threadId, jobId: externalId });
     }
+    return "authorized";
   } catch (error) {
     api.logger.warn(
       `query cron ${externalId}: fallo pidiendo credencial: ${String(error)}`,
     );
+    return "blocked";
   }
 }
 
@@ -667,6 +676,20 @@ export function registerQueryCronSync(
   api: OpenClawPluginApi,
   sendEvent: typeof sendQueryOutboundEvent = sendQueryOutboundEvent,
 ): void {
+  const confirmAuthorization = async (jobId: string, delivery: CronDelivery, expectedRunAs?: number) => {
+    const target = targetFromDelivery(delivery);
+    if (!target) throw new Error("query_schedule_authorization_unconfirmed");
+    const granted = await requestQueryScheduleAuth(target.threadId, jobId, target.accountId);
+    if (!granted?.auth.token || granted.auth.source !== "schedule" ||
+        granted.auth.external_id !== jobId || !granted.auth.identity?.id) {
+      throw new Error("query_schedule_authorization_missing");
+    }
+    if (expectedRunAs !== undefined && granted.auth.identity.id !== expectedRunAs) {
+      throw new Error("query_schedule_authorization_identity_mismatch");
+    }
+    // This short-lived credential is deliberately not put in any human session store.
+    return { authorized: true, run_as_user_id: granted.auth.identity.id };
+  };
   api.on("gateway_start", async (_event, context) => {
     cronService = context.getCron?.();
     await adoptExistingQueryCrons(api);
@@ -675,11 +698,32 @@ export function registerQueryCronSync(
     cronService = undefined;
     syncedCrons.clear();
     queryCronIds.clear();
+    cronCompletions.clear();
     pendingBackfill.clear();
     pendingCronMutations.length = 0;
   });
   api.on("before_agent_start", async (_event, context) => {
     await primeScheduleCredential(api, context ?? {});
+  });
+  api.on("before_agent_run", async (_event, context) => {
+    // A preparation hook cannot stop inference. This gate returns a native
+    // hook_block error, which OpenClaw propagates to the cron result and store.
+    const outcome = await primeScheduleCredential(api, context ?? {});
+    if (outcome === "not_query") return { outcome: "pass" };
+    const session = getQuerySession(context?.sessionKey);
+    const credential = session?.authKey ? getDelegatedAuth(session.authKey) : undefined;
+    if (outcome === "authorized" && credential?.auth.source === "schedule" &&
+        credential.auth.external_id === context?.jobId && credential.auth.identity?.id) {
+      return { outcome: "pass" };
+    }
+    if (session?.authKey) forgetDelegatedAuth(session.authKey);
+    return {
+      outcome: "block",
+      reason: "query_schedule_authorization_missing",
+      category: "query_schedule_authorization_missing",
+      message: "query_schedule_authorization_missing: la tarea no tiene una credencial de ejecución vigente. " +
+        "No se inició el modelo ni se ejecutó el trabajo. Revisa la autorización persistida del mismo cron en Query.",
+    };
   });
   api.on("before_tool_call", async (event, context) => {
     const session = getQuerySession(context?.sessionKey);
@@ -721,7 +765,7 @@ export function registerQueryCronSync(
       }
     }
   });
-  const syncChanged = async (event: PluginHookCronChangedEvent, provenMutation?: PendingCronMutation) => {
+  const syncChanged = async (event: PluginHookCronChangedEvent, provenMutation?: PendingCronMutation, requireConfirmation = false) => {
     if (!["added", "updated", "removed"].includes(event.action)) return;
     const previous = syncedCrons.get(event.jobId);
     const job = await currentCronJob(api, event);
@@ -756,7 +800,7 @@ export function registerQueryCronSync(
       );
     }
 
-    const publish = (destination: SyncedCron, action: "added" | "updated" | "removed") => {
+    const publish = async (destination: SyncedCron, action: "added" | "updated" | "removed") => {
       const outbound: QueryOutboundEvent = {
         type: "schedule.sync",
         role: "system",
@@ -769,6 +813,7 @@ export function registerQueryCronSync(
           job: job ?? event.job ?? null,
           sync_source: "live_hook",
           authorization_version: 2,
+          request_ack: requireConfirmation,
           query_account_id: destination.accountId,
           delivery: job?.delivery ?? null,
           ...(mutation?.creatorUserId ? { creator_user_id: mutation.creatorUserId } : {}),
@@ -784,15 +829,24 @@ export function registerQueryCronSync(
             : {}),
         },
       };
-      sendEvent(destination.accountId, outbound);
+      if (requireConfirmation && action !== "removed") {
+        const ack = await confirmQueryScheduleSync(destination.accountId, outbound);
+        if (!ack) throw new Error("query_schedule_authorization_unconfirmed");
+        if (!ack.authorized) throw Object.assign(new Error("query_schedule_authorization_rejected"), {
+          authorizationReason: ack.error && /^[a-z_]{1,80}$/.test(ack.error) ? ack.error : undefined,
+        });
+        if (ack.run_as_user_id !== mutation?.runAsUserId) {
+          throw new Error("query_schedule_authorization_identity_mismatch");
+        }
+      } else sendEvent(destination.accountId, outbound);
     };
 
     try {
       if (previous && (event.action === "removed" || !target || previous.accountId !== target.accountId)) {
-        publish(previous, "removed");
+        await publish(previous, "removed");
       }
       if (target && event.action !== "removed") {
-        publish(target, event.action === "updated" || previous ? "updated" : "added");
+        await publish(target, event.action === "updated" || previous ? "updated" : "added");
       }
       pendingBackfill.delete(event.jobId);
       if (!target || event.action === "removed") {
@@ -806,6 +860,7 @@ export function registerQueryCronSync(
       api.logger.warn(
         `query cron sync failed for ${event.jobId}: ${String(error)}`,
       );
+      if (requireConfirmation) throw error;
     }
   };
 
@@ -889,6 +944,7 @@ export function registerQueryCronSync(
           return { content: [{ type: "text", text: JSON.stringify(result) }], details: result };
         }
 
+        const persistedJobIds: string[] = [];
         try {
           const jobs = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
           const manageable = jobs.filter((job) =>
@@ -945,9 +1001,35 @@ export function registerQueryCronSync(
               runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
               capturedAt: Date.now(),
             };
-            await syncChanged({ action: "updated", jobId, job: current }, mutation);
+            await syncChanged({ action: "updated", jobId, job: current }, mutation, true);
+            await confirmAuthorization(jobId, effectiveDelivery, mutation.runAsUserId);
+            const requestedAt = Date.now();
+            cronCompletions.delete(cronCompletionKey(actor.queryAccountId, jobId));
             const runResult = await cronService.run(jobId, "force");
-            const publicResult = { ok: true, action: "run", job_id: jobId, run: runResult };
+            if (JSON.stringify(runResult)?.includes("query_schedule_authorization_missing")) {
+              throw new Error("query_schedule_authorization_missing");
+            }
+            if (isRecord(runResult) && runResult.ok === false) throw new Error("query_cron_run_failed");
+            if (!isRecord(runResult) || runResult.ran !== true) throw new Error("query_cron_run_not_started");
+            // Native run() returns {ok:true, ran:true} even for failed work.
+            // Read the outcome persisted by the scheduler, not that receipt.
+            const afterRun = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
+            const state = afterRun.find((job) => job.id === jobId)?.state;
+            if (!state || typeof state.lastRunAtMs !== "number" || state.lastRunAtMs < requestedAt ||
+                state.runningAtMs !== undefined) throw new Error("query_cron_run_result_unconfirmed");
+            const completion = cronCompletions.get(cronCompletionKey(actor.queryAccountId, jobId));
+            if (completion?.runAtMs === state.lastRunAtMs && completion.authorizationFailed) {
+              throw new Error("query_schedule_authorization_missing");
+            }
+            if (state.lastError?.includes("query_schedule_authorization_missing")) {
+              throw new Error("query_schedule_authorization_missing");
+            }
+            if (state.lastRunStatus === "error") throw new Error("query_cron_run_failed");
+            if (state.lastRunStatus !== "ok") throw new Error("query_cron_run_result_unconfirmed");
+            if (completion?.runAtMs !== state.lastRunAtMs || completion.status !== "ok") {
+              throw new Error("query_cron_run_result_unconfirmed");
+            }
+            const publicResult = { ok: true, action: "run", job_id: jobId, run: runResult, state };
             return { content: [{ type: "text", text: JSON.stringify(publicResult) }], details: publicResult };
           }
 
@@ -980,6 +1062,7 @@ export function registerQueryCronSync(
               const after = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
               const resultingJob = after.find((job) => job.id === item.jobId);
               if (!resultingJob) throw new Error("query_cron_not_persisted");
+              persistedJobIds.push(item.jobId);
               const mutation: PendingCronMutation = {
                 action: "updated",
                 jobId: item.jobId,
@@ -992,7 +1075,8 @@ export function registerQueryCronSync(
                 runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
                 capturedAt: Date.now(),
               };
-              await syncChanged({ action: "updated", jobId: item.jobId, job: resultingJob }, mutation);
+              await syncChanged({ action: "updated", jobId: item.jobId, job: resultingJob }, mutation, true);
+              await confirmAuthorization(item.jobId, item.delivery, mutation.runAsUserId);
               updated.push({ job_id: item.jobId, session_target: "isolated" });
             }
             const publicResult = { ok: true, action: "updated_many", count: updated.length, jobs: updated };
@@ -1029,8 +1113,11 @@ export function registerQueryCronSync(
             }
           } else {
             jobId = params.job_id.trim();
-            const current = jobs.find((job) => job.id === jobId);
-            if (!current) throw new Error("query_cron_not_found");
+            const current = manageable.find((job) => job.id === jobId);
+            if (!current) {
+              if (jobs.some((job) => job.id === jobId)) throw new Error("query_cron_not_query_owned");
+              throw new Error("query_cron_not_found");
+            }
             const currentDelivery = current.delivery;
             if (currentDelivery?.channel !== "query") {
               throw new Error("query_cron_not_query_owned");
@@ -1048,6 +1135,7 @@ export function registerQueryCronSync(
           const after = (await cronService.list({ includeDisabled: true })) as QueryCronJob[];
           resultingJob = after.find((job) => job.id === jobId);
           if (!resultingJob) throw new Error("query_cron_not_persisted");
+          persistedJobIds.push(jobId);
           const mutation: PendingCronMutation = {
             action,
             jobId,
@@ -1061,9 +1149,11 @@ export function registerQueryCronSync(
               (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
             capturedAt: Date.now(),
           };
-          await syncChanged({ action, jobId, job: resultingJob }, mutation);
+          await syncChanged({ action, jobId, job: resultingJob }, mutation, true);
+          const authorization = await confirmAuthorization(jobId, effectiveDelivery, mutation.runAsUserId);
           const publicResult = {
             ok: true,
+            authorization,
             action,
             job_id: jobId,
             session_target: "isolated",
@@ -1092,11 +1182,23 @@ export function registerQueryCronSync(
             "query_cron_duplicate_job_id",
             "query_cron_run_requires_isolated",
             "query_cron_run_unavailable",
+            "query_cron_run_failed",
+            "query_cron_run_not_started",
+            "query_cron_run_result_unconfirmed",
+            "query_schedule_authorization_missing",
+            "query_schedule_authorization_rejected",
+            "query_schedule_authorization_unconfirmed",
+            "query_schedule_authorization_identity_mismatch",
           ]);
           const code = error instanceof Error && allowed.has(error.message)
             ? error.message
             : "query_cron_manage_failed";
-          const publicResult = { ok: false, error: code };
+          const publicResult = {
+            ok: false, error: code,
+            ...(error instanceof Error && "authorizationReason" in error
+              ? { authorization_reason: error.authorizationReason } : {}),
+            ...(persistedJobIds.length ? { persisted_job_ids: persistedJobIds, ready: false } : {}),
+          };
           return {
             content: [{ type: "text", text: JSON.stringify(publicResult) }],
             details: publicResult,
@@ -1106,7 +1208,25 @@ export function registerQueryCronSync(
     };
   }, { optional: true, names: ["query_cron_manage"] });
 
-  api.on("cron_changed", (event) => syncChanged(event));
+  api.on("cron_changed", (event) => {
+    if (event.action === "finished") {
+      const target = targetFromDelivery((event.job as QueryCronJob | undefined)?.delivery) ?? syncedCrons.get(event.jobId);
+      if (target && typeof event.runAtMs === "number") {
+        const key = cronCompletionKey(target.accountId, event.jobId);
+        const previous = cronCompletions.get(key);
+        if (!previous || previous.runAtMs <= event.runAtMs) {
+          cronCompletions.set(key, {
+            runAtMs: event.runAtMs, status: event.status,
+            authorizationFailed: [event.error, event.summary].some((text) =>
+              text?.includes("query_schedule_authorization_missing")),
+          });
+          if (cronCompletions.size > 4096) cronCompletions.delete(cronCompletions.keys().next().value!);
+        }
+      }
+      return;
+    }
+    return syncChanged(event);
+  });
   api.on("after_tool_call", async (event, context) => {
     if (event.toolName !== "cron") return;
     const callId = context?.toolCallId ?? event.toolCallId;

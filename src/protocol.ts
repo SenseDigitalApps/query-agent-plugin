@@ -47,6 +47,11 @@ export function parseQueryEvent(raw: string): QueryInboundEvent | null {
   ) {
     return value as QueryScheduleCancelEvent;
   }
+  if (value.type === "schedule.synced" && typeof value.client_msg_id === "string" &&
+      isRecord(value.data) && typeof value.data.external_id === "string" &&
+      typeof value.data.authorized === "boolean") {
+    return value as QueryInboundEvent;
+  }
   if (
     value.type === "schedule.probe" &&
     value.role === "system" &&

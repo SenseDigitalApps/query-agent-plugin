@@ -1,6 +1,8 @@
-import { mkdtempSync, rmSync } from "node:fs";
+import { mkdtempSync, readFileSync, readdirSync, rmSync } from "node:fs";
+import { createRequire } from "node:module";
+import { pathToFileURL } from "node:url";
 import { tmpdir } from "node:os";
-import { join } from "node:path";
+import { dirname, join } from "node:path";
 import {
   afterAll,
   afterEach,
@@ -35,6 +37,7 @@ let previousSessionFile: string | undefined;
 let previousExternalContextDir: string | undefined;
 
 const requestQueryScheduleAuth = vi.fn();
+const confirmQueryScheduleSync = vi.fn();
 
 // El hook importa socket.js de forma perezosa; se intercepta el modulo entero
 // para no levantar un WebSocket real en las pruebas.
@@ -43,6 +46,7 @@ vi.mock("./socket.js", () => ({
   queryAccountIdForSocketUrl: vi.fn(() => "sales"),
   requestQueryScheduleAuth: (...args: unknown[]) =>
     requestQueryScheduleAuth(...args),
+  confirmQueryScheduleSync: (...args: unknown[]) => confirmQueryScheduleSync(...args),
 }));
 
 beforeAll(() => {
@@ -88,9 +92,21 @@ afterEach(() => {
   if (scheduleAuthKey) forgetDelegatedAuth(scheduleAuthKey);
   forgetQuerySession(SESSION);
   requestQueryScheduleAuth.mockReset();
+  confirmQueryScheduleSync.mockReset();
 });
 
 type Hook = (...args: any[]) => unknown;
+
+function confirmAs(send: ReturnType<typeof vi.fn>, userId: number) {
+  confirmQueryScheduleSync.mockImplementation(async (account, event) => {
+    send(account, event);
+    return { authorized: true, external_id: event.data.external_id, run_as_user_id: userId };
+  });
+  requestQueryScheduleAuth.mockImplementation(async (_thread, externalId) => ({
+    socketUrl: SOCKET,
+    auth: { token: "scheduled-only", source: "schedule", external_id: externalId, identity: { id: userId } },
+  }));
+}
 
 function fakeApi() {
   const hooks = new Map<string, Hook>();
@@ -118,9 +134,68 @@ function cronAdded(jobId = "cron-1") {
 }
 
 describe("registro de la tarea", () => {
+  it.each(["add", "update", "run"])("%s espera el acuse y falla sin autorización, sin iniciar el agente", async (action) => {
+    const { api, hooks, tools } = fakeApi();
+    const job = { id: "support-cron", agentId: "query", name: "Support", sessionTarget: "isolated",
+      delivery: { channel: "query", accountId: "sales", to: "channel:86" } };
+    const add = vi.fn().mockResolvedValue(job);
+    const update = vi.fn().mockResolvedValue(job);
+    const run = vi.fn();
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("gateway_start")?.({}, { getCron: () => ({
+      list: vi.fn().mockResolvedValue([job]), add, update, run,
+    }) });
+    rememberQuerySession(SESSION, { threadId: "24", accountId: "sales" });
+    rememberExternalContext({ sessionKey: SESSION, senderId: "1", threadId: "24",
+      queryAccountId: "sales", socketUrl: SOCKET, agentToken: "agent", clientMsgId: "support-message",
+      auth: { token: "signed-support", expires_in: 900, identity: { id: 1 }, external_account_identity: { id: 2 } } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ targets: [{ thread_id: "86" }] }) }));
+    const tool = tools[0]({ messageChannel: "query", sessionKey: SESSION, requesterSenderId: "1",
+      agentAccountId: "sales", agentId: "query" });
+    const params = action === "add" ? { action, job } : { action, job_id: job.id, patch: {} };
+    let settle: (value: unknown) => void = () => {};
+    confirmQueryScheduleSync.mockReturnValue(new Promise((resolve) => { settle = resolve; }));
+    let finished = false;
+    const pending = tool.execute("support-call", params).then((result: any) => { finished = true; return result; });
+    await vi.waitFor(() => expect(confirmQueryScheduleSync).toHaveBeenCalled());
+    expect(finished).toBe(false);
+    expect(run).not.toHaveBeenCalled();
+    settle({ external_id: job.id, authorized: false, error: "support_delegation_revoked" });
+    expect((await pending).details).toMatchObject({ ok: false, error: "query_schedule_authorization_rejected" });
+    expect(requestQueryScheduleAuth).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+    for (const [reply, error] of [
+      [undefined, "query_schedule_authorization_unconfirmed"],
+      [{ external_id: job.id, authorized: true, run_as_user_id: 1 }, "query_schedule_authorization_identity_mismatch"],
+    ] as const) {
+      confirmQueryScheduleSync.mockResolvedValue(reply);
+      expect((await tool.execute("retry", params)).details).toMatchObject({ ok: false, error });
+    }
+    confirmQueryScheduleSync.mockResolvedValue({ external_id: job.id, authorized: true, run_as_user_id: 2 });
+    requestQueryScheduleAuth.mockResolvedValue(undefined);
+    expect((await tool.execute("preflight", params)).details).toMatchObject({ ok: false, error: "query_schedule_authorization_missing" });
+    expect(run).not.toHaveBeenCalled();
+    requestQueryScheduleAuth.mockResolvedValue({ socketUrl: SOCKET, auth: {
+      token: "schedule", source: "schedule", external_id: job.id, identity: { id: 2 },
+    } });
+    run.mockResolvedValue({ ran: true, summary: "query_schedule_authorization_missing" });
+    const result = await tool.execute("authorized", params);
+    expect(result.details.ok).toBe(action !== "run");
+    if (action === "run") expect(result.details.error).toBe("query_schedule_authorization_missing");
+    expect(getDelegatedAuth("24")).toBeUndefined();
+    job.delivery.accountId = "foreign";
+    add.mockClear(); update.mockClear(); run.mockClear();
+    const foreign = await tool.execute("foreign", params);
+    expect(foreign.details).toMatchObject({ ok: false, error: action === "add"
+      ? "query_cron_cross_tenant_destination" : "query_cron_not_query_owned" });
+    expect(add).not.toHaveBeenCalled();
+    expect(update).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
+  });
   it("expone un gestor propio en Query y repara el ID existente con el actor delegado", async () => {
     const { api, hooks, tools } = fakeApi();
     const send = vi.fn();
+    confirmAs(send, 77);
     const update = vi.fn().mockResolvedValue({ id: "cron-existing" });
     const job = {
       id: "cron-existing",
@@ -200,6 +275,7 @@ describe("registro de la tarea", () => {
   it("crea un cron aislado para un destino publico autorizado sin usar la tool owner-only", async () => {
     const { api, hooks, tools } = fakeApi();
     const send = vi.fn();
+    confirmAs(send, 88);
     const created = {
       id: "cron-new",
       agentId: "query",
@@ -336,6 +412,7 @@ describe("registro de la tarea", () => {
   it("actualiza varios cron tras validar todo el lote y sincroniza el creador", async () => {
     const { api, hooks, tools } = fakeApi();
     const send = vi.fn();
+    confirmAs(send, 77);
     const update = vi.fn().mockResolvedValue({});
     const jobs = ["one", "two"].map((id) => ({
       id,
@@ -396,17 +473,36 @@ describe("registro de la tarea", () => {
     expect(result.details).toMatchObject({ ok: true, action: "updated_many", count: 2 });
   });
 
-  it("resincroniza la autorización antes de ejecutar un cron aislado", async () => {
+  it.each([
+    ["ok", undefined, undefined],
+    ["error", "query_schedule_authorization_missing", "query_schedule_authorization_missing"],
+    ["error", "business failure", "query_cron_run_failed"],
+    ["stale", undefined, "query_cron_run_result_unconfirmed"],
+    ["not_started", undefined, "query_cron_run_not_started"],
+    ["false_ok", undefined, "query_schedule_authorization_missing"],
+    ["no_completion", undefined, "query_cron_run_result_unconfirmed"],
+  ])("run consulta el resultado persistido (%s), no solo el recibo ok", async (status, lastError, expectedError) => {
     const { api, hooks, tools } = fakeApi();
     const send = vi.fn();
-    const run = vi.fn().mockResolvedValue({ ran: true });
+    confirmAs(send, 77);
     const job = {
       id: "run-me",
       agentId: "query",
       name: "Run",
       sessionTarget: "isolated",
       delivery: { channel: "query", accountId: "sales", to: "channel:86" },
+      state: {} as Record<string, unknown>,
     };
+    const run = vi.fn().mockImplementation(async () => {
+      const nativeStatus = ["stale", "false_ok", "no_completion"].includes(status!) ? "ok" : status;
+      job.state = { lastRunStatus: nativeStatus,
+        lastRunAtMs: status === "stale" ? 1 : Date.now(), lastError };
+      if (status !== "no_completion") await hooks.get("cron_changed")?.({
+        action: "finished", jobId: job.id, job, status: nativeStatus, runAtMs: job.state.lastRunAtMs,
+        summary: status === "false_ok" ? "No se ejecutó: query_schedule_authorization_missing" : "Completed",
+      });
+      return { ok: true, ran: status !== "not_started" };
+    });
     registerQueryCronSync(api as never, send);
     await hooks.get("gateway_start")?.({}, {
       getCron: () => ({ list: vi.fn().mockResolvedValue([job]), update: vi.fn(), add: vi.fn(), remove: vi.fn(), run }),
@@ -444,7 +540,8 @@ describe("registro de la tarea", () => {
       data: expect.objectContaining({ external_id: "run-me", run_as_user_id: 77 }),
     }));
     expect(run).toHaveBeenCalledWith("run-me", "force");
-    expect(result.details).toMatchObject({ ok: true, action: "run", job_id: "run-me" });
+    expect(result.details).toMatchObject(expectedError ? { ok: false, error: expectedError }
+      : { ok: true, action: "run", job_id: "run-me" });
   });
 
   it("no expone el gestor de cron fuera de un turno Query", () => {
@@ -605,6 +702,99 @@ describe("registro de la tarea", () => {
 });
 
 describe("arranque del turno de un cron", () => {
+  it("el scheduler nativo persiste error aunque run() devuelva ok:true", async () => {
+    const directory = mkdtempSync(join(tmpdir(), "query-native-cron-"));
+    const previousStateDir = process.env.OPENCLAW_STATE_DIR;
+    process.env.OPENCLAW_STATE_DIR = directory;
+    let cron: any;
+    let closeDatabase: (() => void) | undefined;
+    try {
+      // Exercise the installed, pinned runtime without changing node_modules.
+      const dist = dirname(dirname(createRequire(import.meta.url).resolve("openclaw/plugin-sdk/plugin-runtime")));
+      const loadExport = async (prefix: string, symbol: string) => {
+        for (const name of readdirSync(dist).filter((name) => name.startsWith(prefix) && name.endsWith(".js"))) {
+          const alias = readFileSync(join(dist, name), "utf8").match(new RegExp(`\\b${symbol} as (\\w+)`))?.[1];
+          if (alias) return (await import(/* @vite-ignore */ pathToFileURL(join(dist, name)).href))[alias];
+        }
+        throw new Error(`Installed OpenClaw runtime is missing ${symbol}`);
+      };
+      const buildService = await loadExport("server-cron-", "buildGatewayCronService");
+      const resolveOutcome = await loadExport("run-session-state-", "resolveCronPayloadOutcome");
+      const loadStore = await loadExport("store-", "loadCronJobsStoreWithConfigJobsReadOnly");
+      closeDatabase = await loadExport("openclaw-state-db-", "closeOpenClawStateDatabase");
+      const store = join(directory, "jobs.json");
+      ({ cron } = buildService({ cfg: { cron: { enabled: false, store },
+        session: { store: join(directory, "sessions.json") },
+        agents: { list: [{ id: "query", default: true, workspace: directory }] } },
+        deps: {}, broadcast: vi.fn() }));
+      const job = await cron.add({ name: "Authorization gate test", agentId: "query", enabled: true,
+        schedule: { kind: "every", everyMs: 86_400_000 }, sessionTarget: "isolated", wakeMode: "now",
+        payload: { kind: "agentTurn", message: "No real business work in this test" },
+        delivery: { mode: "none", channel: "query", accountId: "sales", to: THREAD } });
+      const { api, hooks } = fakeApi();
+      registerQueryCronSync(api as never, vi.fn());
+      await hooks.get("cron_changed")?.({ action: "added", jobId: job.id, job });
+      requestQueryScheduleAuth.mockResolvedValue(undefined);
+      const model = vi.fn();
+      cron.state.deps.runIsolatedAgentJob = async () => {
+        const decision = await hooks.get("before_agent_run")!({}, {
+          jobId: job.id, channel: "query", chatId: THREAD, sessionKey: SESSION,
+        });
+        if (decision.outcome === "pass") model();
+        expect(decision.outcome).toBe("block");
+        // Envelope emitted by OpenClaw's embedded/CLI harness on hook_block.
+        const outcome = resolveOutcome({ payloads: [{ text: decision.message, isError: true }],
+          runLevelError: { kind: "hook_block", message: decision.message } });
+        return { status: outcome.hasFatalErrorPayload ? "error" : "ok",
+          error: outcome.embeddedRunError, summary: outcome.summary };
+      };
+      const receipt = await cron.run(job.id, "force");
+      expect(receipt).toMatchObject({ ok: true, ran: true });
+      expect(model).not.toHaveBeenCalled();
+      const persisted = (await loadStore(store)).store.jobs.find((item: any) => item.id === job.id);
+      expect(persisted.state.lastRunStatus).toBe("error");
+      expect(persisted.state.lastError).toContain("query_schedule_authorization_missing");
+    } finally {
+      cron?.stop();
+      closeDatabase?.();
+      if (previousStateDir === undefined) delete process.env.OPENCLAW_STATE_DIR;
+      else process.env.OPENCLAW_STATE_DIR = previousStateDir;
+      rmSync(directory, { recursive: true, force: true });
+    }
+  }, 30_000);
+  it.each(["denied", "transport", "foreign_credential", "authorized"])(
+    "el gate automático bloquea antes del modelo: %s", async (scenario) => {
+      const { api, hooks } = fakeApi();
+      registerQueryCronSync(api as never, vi.fn());
+      await hooks.get("cron_changed")?.(cronAdded("gate-cron"));
+      rememberDelegatedAuth(THREAD, { token: "human-admin", identity: { id: 1 }, expires_in: 900 }, SOCKET);
+      if (scenario === "transport") requestQueryScheduleAuth.mockRejectedValue(new Error("disconnected"));
+      else requestQueryScheduleAuth.mockResolvedValue(scenario === "denied" ? undefined : {
+        socketUrl: SOCKET, auth: { source: "schedule", token: "scheduled-beneficiary", expires_in: 900,
+          external_id: scenario === "foreign_credential" ? "different-cron" : "gate-cron", identity: { id: 2 } },
+      });
+      const gate = hooks.get("before_agent_run")!;
+      const context = { jobId: "gate-cron", channel: "query", chatId: THREAD, sessionKey: SESSION };
+      const decision = await gate({ prompt: "Do work" }, context);
+      const model = vi.fn();
+      if (decision.outcome === "pass") model();
+      expect(decision.outcome).toBe(scenario === "authorized" ? "pass" : "block");
+      expect(model).toHaveBeenCalledTimes(scenario === "authorized" ? 1 : 0);
+      if (scenario !== "authorized") expect(decision).toMatchObject({ category: "query_schedule_authorization_missing" });
+      expect(getDelegatedAuth(THREAD)?.auth.token).toBe("human-admin");
+      expect(requestQueryScheduleAuth).toHaveBeenCalledWith(THREAD, "gate-cron", "sales");
+    },
+  );
+
+  it("el gate pasa turnos humanos y crones ajenos, pero bloquea Query sin cuenta o destino", async () => {
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    const gate = hooks.get("before_agent_run")!;
+    expect(await gate({}, { channel: "query", sessionKey: SESSION })).toEqual({ outcome: "pass" });
+    expect(await gate({}, { jobId: "unrelated", channel: "discord" })).toEqual({ outcome: "pass" });
+    expect((await gate({}, { jobId: "unroutable", channel: "query" })).outcome).toBe("block");
+    expect(requestQueryScheduleAuth).not.toHaveBeenCalled();
+  });
   it("preserva accountId y authKey cuando corre despues el hook generico de Google", async () => {
     const hooks = new Map<string, Hook[]>();
     const api = {

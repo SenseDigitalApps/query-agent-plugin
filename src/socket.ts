@@ -1,5 +1,6 @@
 import { setProvisionReady } from "./provision-readiness.js";
 import { spawn } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import { mkdtemp, rm } from "node:fs/promises";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
@@ -54,6 +55,7 @@ import type {
   QueryConfig,
   QueryAttachment,
   QueryDelegatedAuth,
+  QueryScheduleSyncAck,
   QueryOutboundEvent,
   QueryUserMessageEvent,
   ResolvedQueryAccount,
@@ -266,6 +268,9 @@ export class QuerySocketMonitor {
     string,
     { resolve: (auth?: QueryDelegatedAuth) => void; timer: NodeJS.Timeout }
   >();
+  private readonly pendingScheduleSync = new Map<string, {
+    externalId: string; resolve: (ack?: QueryScheduleSyncAck) => void; timer: NodeJS.Timeout;
+  }>();
 
   constructor(private readonly options: QuerySocketOptions) {
     const { account } = options;
@@ -434,6 +439,15 @@ export class QuerySocketMonitor {
     }
     if (event.type === "agent.profile") {
       await this.syncAgentProfile(event.data);
+      return;
+    }
+    if (event.type === "schedule.synced") {
+      const waiting = this.pendingScheduleSync.get(event.client_msg_id);
+      if (waiting && waiting.externalId === event.data.external_id) {
+        clearTimeout(waiting.timer);
+        this.pendingScheduleSync.delete(event.client_msg_id);
+        waiting.resolve(event.data);
+      }
       return;
     }
     if (event.type === "auth.granted") {
@@ -1114,6 +1128,27 @@ export class QuerySocketMonitor {
    * la delegacion ni ``client_msg_id`` que renovar. Query resuelve la autoria
    * que quedo registrada con la tarea y devuelve una credencial corta.
    */
+  confirmScheduleSync(event: QueryOutboundEvent): Promise<QueryScheduleSyncAck | undefined> {
+    const requestId = randomUUID();
+    return new Promise((resolve) => {
+      const timer = setTimeout(() => {
+        this.pendingScheduleSync.delete(requestId);
+        resolve(undefined);
+      }, QUERY_AUTH_REFRESH_TIMEOUT_MS);
+      timer.unref?.();
+      this.pendingScheduleSync.set(requestId, {
+        externalId: String(event.data.external_id), resolve, timer,
+      });
+      try {
+        this.send({ ...event, client_msg_id: requestId, data: { ...event.data, request_ack: true } });
+      } catch {
+        clearTimeout(timer);
+        this.pendingScheduleSync.delete(requestId);
+        resolve(undefined);
+      }
+    });
+  }
+
   requestScheduleAuth(
     threadId: string,
     externalId: string,
@@ -1267,6 +1302,10 @@ export function sendQueryOutboundEvent(accountId: string, event: QueryOutboundEv
     throw new Error(`Query account ${accountId} is not running.`);
   }
   monitor.sendOutboundEvent(event);
+}
+
+export async function confirmQueryScheduleSync(accountId: string, event: QueryOutboundEvent) {
+  return activeMonitors.get(accountId)?.confirmScheduleSync(event);
 }
 
 export async function refreshQueryDelegatedAuth(

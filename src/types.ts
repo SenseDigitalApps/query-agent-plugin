@@ -263,7 +263,12 @@ export type QueryScheduleProbeEvent = {
   };
 };
 
+export type QueryScheduleSyncAck = {
+  external_id: string; authorized: boolean; run_as_user_id?: number; error?: string;
+};
+
 export type QueryInboundEvent =
+  | { type: "schedule.synced"; client_msg_id: string; data: QueryScheduleSyncAck }
   | QuerySessionReadyEvent
   | QueryAgentProfileEvent
   | QueryUserMessageEvent
