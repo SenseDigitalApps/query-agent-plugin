@@ -224,7 +224,8 @@
       "query_record_get",
       "query_api_plan_propose",
       "query_records_propose_batch",
-      "query_artifact_new_version"
+      "query_artifact_new_version",
+      "brightdata_x_profile_posts"
     ]
   }
 }

@@ -5,6 +5,7 @@ import { setQueryRuntime } from "./src/runtime.js";
 import { registerQueryCronSync } from "./src/cron-sync.js";
 import { registerQueryGoogleGuard } from "./src/google-guard.js";
 import queryToolsEntry from "./src/query-tools.js";
+import { registerBrightDataXTool } from "./src/brightdata-x-tool.js";
 
 export default defineChannelPluginEntry({
   id: "query",
@@ -18,6 +19,7 @@ export default defineChannelPluginEntry({
       registerQueryGoogleGuard(api);
     }
     queryToolsEntry.register(api);
+    registerBrightDataXTool(api);
     registerQueryProvision(api);
   },
 });
