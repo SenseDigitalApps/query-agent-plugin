@@ -38,7 +38,7 @@ describe("Query inbound dispatch recovery", () => {
         stream: "lifecycle",
         sessionKey: "agent:query:test-thread",
         agentId: "agent",
-        data: { phase: "start" },
+        data: { phase: "start", startedAt: Date.now() },
       });
       emitAgentEvent({
         runId: "run-streamed",

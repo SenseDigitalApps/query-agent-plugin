@@ -828,7 +828,9 @@ describe("arranque del turno de un cron", () => {
       // Exercise the installed, pinned runtime without changing node_modules.
       const dist = dirname(dirname(createRequire(import.meta.url).resolve("openclaw/plugin-sdk/plugin-runtime")));
       const loadExport = async (prefix: string, symbol: string) => {
-        for (const name of readdirSync(dist).filter((name) => name.startsWith(prefix) && name.endsWith(".js"))) {
+        for (const name of readdirSync(dist).filter((name) =>
+          name.startsWith(prefix) && /\.m?js$/.test(name)
+        )) {
           const alias = readFileSync(join(dist, name), "utf8").match(new RegExp(`\\b${symbol} as (\\w+)`))?.[1];
           if (alias) return (await import(/* @vite-ignore */ pathToFileURL(join(dist, name)).href))[alias];
         }
@@ -842,8 +844,8 @@ describe("arranque del turno de un cron", () => {
       ({ cron } = buildService({ cfg: { cron: { enabled: false, store },
         session: { store: join(directory, "sessions.json") },
         agents: { list: [{ id: "query", default: true, workspace: directory }] } },
-        deps: {}, broadcast: vi.fn() }));
-      const job = await cron.add({ name: "Authorization gate test", agentId: "query", enabled: true,
+        deps: { isAgentAvailable: () => true }, broadcast: vi.fn() }));
+      const job = await cron.add({ name: "Authorization gate test", enabled: true,
         schedule: { kind: "every", everyMs: 86_400_000 }, sessionTarget: "isolated", wakeMode: "now",
         payload: { kind: "agentTurn", message: "No real business work in this test" },
         delivery: { mode: "none", channel: "query", accountId: "sales", to: THREAD } });
@@ -944,7 +946,7 @@ describe("arranque del turno de un cron", () => {
     };
     // Mismo orden de index.ts/produccion: cron-sync obtiene la credencial y
     // luego el guard generico vuelve a registrar la sesion.
-    for (const hook of hooks.get("before_agent_start") ?? []) {
+    for (const hook of hooks.get("agent_turn_prepare") ?? []) {
       await hook({}, context);
     }
 
@@ -968,7 +970,7 @@ describe("arranque del turno de un cron", () => {
       socketUrl: SOCKET,
     });
 
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       {},
       { jobId: "cron-1", channel: "query", chatId: ORIGIN_THREAD, sessionKey: SESSION },
     );
@@ -989,7 +991,7 @@ describe("arranque del turno de un cron", () => {
 
     // Una tarea que este proceso no sincronizo: es lo que pasa tras reiniciar
     // OpenClaw, y entonces no se conoce la cuenta de la que salio.
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       { prompt: "resumen diario" },
       { jobId: "cron-sin-sincronizar", channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
@@ -1007,7 +1009,7 @@ describe("arranque del turno de un cron", () => {
       socketUrl: SOCKET,
     });
 
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       {},
       { jobId: "cron-1", channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
@@ -1019,7 +1021,7 @@ describe("arranque del turno de un cron", () => {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, vi.fn());
 
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       {},
       { channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
@@ -1031,7 +1033,7 @@ describe("arranque del turno de un cron", () => {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, vi.fn());
 
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       {},
       { jobId: "cron-1", channel: "discord", chatId: "otro" },
     );
@@ -1048,7 +1050,7 @@ describe("arranque del turno de un cron", () => {
       socketUrl: SOCKET,
     });
 
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       {},
       { jobId: "cron-1", channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
@@ -1063,7 +1065,7 @@ describe("arranque del turno de un cron", () => {
     registerQueryCronSync(api as never, vi.fn());
     requestQueryScheduleAuth.mockResolvedValue(undefined);
 
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       {},
       { jobId: "cron-1", channel: "query", chatId: THREAD, sessionKey: SESSION },
     );
@@ -1090,7 +1092,7 @@ describe("arranque del turno de un cron", () => {
     await hooks.get("gateway_start")?.({}, { getCron: () => ({ list }) });
     requestQueryScheduleAuth.mockResolvedValue(undefined);
 
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       {},
       { jobId: "cron-viejo", chatId: THREAD, sessionKey: SESSION },
     );
@@ -1118,7 +1120,7 @@ describe("arranque del turno de un cron", () => {
     await hooks.get("gateway_start")?.({}, { getCron: () => ({ list }) });
     requestQueryScheduleAuth.mockResolvedValue(undefined);
 
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       {},
       { jobId: "cron-de-discord", chatId: THREAD, sessionKey: SESSION },
     );
@@ -1152,7 +1154,7 @@ describe("arranque del turno de un cron", () => {
     registerQueryCronSync(api as never, vi.fn());
     requestQueryScheduleAuth.mockResolvedValue(undefined);
 
-    await hooks.get("before_agent_start")?.(
+    await hooks.get("agent_turn_prepare")?.(
       {},
       {
         jobId: "cron-sin-autor",
@@ -1176,7 +1178,7 @@ describe("arranque del turno de un cron", () => {
     requestQueryScheduleAuth.mockRejectedValue(new Error("socket caido"));
 
     await expect(
-      hooks.get("before_agent_start")?.(
+      hooks.get("agent_turn_prepare")?.(
         {},
         { jobId: "cron-1", channel: "query", chatId: THREAD, sessionKey: SESSION },
       ),

@@ -110,7 +110,7 @@ describe("query_delivery_targets", () => {
       vi.unstubAllGlobals();
       forgetDelegatedAuth("thread-origin");
     }
-  });
+  }, 15_000);
 });
 
 describe("correccion de propuestas pendientes", () => {

@@ -1020,7 +1020,7 @@ export default defineToolPlugin({
     }),
   ].map((definition) => ({
     ...definition,
-    // Tool catalogs can be built before before_agent_start. Accept omission
+    // Tool catalogs can be built before agent_turn_prepare. Accept omission
     // there too; the trusted session is resolved again at execution time.
     parameters: {
       ...definition.parameters,

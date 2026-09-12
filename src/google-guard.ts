@@ -1,9 +1,9 @@
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-core";
 import type {
-  OpenClawPluginApi,
-  PluginHookBeforeToolCallEvent,
-  PluginHookBeforeToolCallResult,
-  PluginHookToolContext,
-} from "openclaw/plugin-sdk/plugin-runtime";
+  QueryBeforeToolCallEvent,
+  QueryBeforeToolCallResult,
+  QueryToolContext,
+} from "./openclaw-compat.js";
 import { getDelegatedAuth } from "./delegated-store.js";
 import { authorizeExternalAccount } from "./external-accounts.js";
 import { readConfiguredGoogleAccountEmail } from "./google-accounts.js";
@@ -85,7 +85,7 @@ function readParam(
   return undefined;
 }
 
-function blocked(reason: string): PluginHookBeforeToolCallResult {
+function blocked(reason: string): QueryBeforeToolCallResult {
   return { block: true, blockReason: reason };
 }
 
@@ -106,10 +106,10 @@ function expectedEmailParam(): string {
 }
 
 export async function evaluateGoogleToolCall(
-  event: PluginHookBeforeToolCallEvent,
-  ctx: PluginHookToolContext,
+  event: QueryBeforeToolCallEvent,
+  ctx: QueryToolContext,
   log?: { info?: (message: string) => void; warn?: (message: string) => void },
-): Promise<PluginHookBeforeToolCallResult | void> {
+): Promise<QueryBeforeToolCallResult | void> {
   const linkingTool = event.toolName.startsWith("query_google_");
   if (!isGoogleTool(event.toolName) && !linkingTool) return;
   const cronSession = getQuerySession(ctx.sessionKey);
@@ -237,7 +237,7 @@ export async function evaluateGoogleToolCall(
 }
 
 export function registerQueryGoogleGuard(api: OpenClawPluginApi): void {
-  api.on("before_agent_start", (_event, context) => {
+  api.on("agent_turn_prepare", (_event, context) => {
     // Solo los turnos que Query declara suyos. Un canal que no se identifica no
     // se adopta: bloquear las herramientas de Google de otra integracion seria
     // tan dañino como dejar pasar las nuestras. Los crones los apunta

@@ -1,9 +1,4 @@
-import type {
-  OpenClawPluginApi,
-  PluginHookCronChangedEvent,
-  PluginHookGatewayCronJob,
-  PluginHookGatewayCronService,
-} from "openclaw/plugin-sdk/plugin-runtime";
+import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-core";
 import { Type } from "typebox";
 import {
   queryAccountIdForSocketUrl,
@@ -28,6 +23,11 @@ import {
 } from "./external-context.js";
 import { queryApiUrl } from "./query-api.js";
 import type { QueryOutboundEvent } from "./types.js";
+import type {
+  QueryCronChangedEvent,
+  QueryGatewayCronJob,
+  QueryGatewayCronService,
+} from "./openclaw-compat.js";
 
 type CronDelivery = {
   mode?: string;
@@ -37,7 +37,7 @@ type CronDelivery = {
   accountId?: string;
 };
 
-type QueryCronJob = PluginHookGatewayCronJob & {
+type QueryCronJob = QueryGatewayCronJob & {
   delivery?: CronDelivery;
   payload?: {
     kind?: string;
@@ -136,7 +136,7 @@ const syncedCrons = new Map<string, SyncedCron>();
  */
 const pendingBackfill = new Map<
   string,
-  { target: SyncedCron; job: PluginHookGatewayCronJob }
+  { target: SyncedCron; job: QueryGatewayCronJob }
 >();
 // Tareas que sabemos de Query aunque no podamos rutearlas. Un cron viejo puede
 // no traer ``accountId`` -no existia cuando se creo- y aun asi tiene que
@@ -149,7 +149,7 @@ const cronCompletions = new Map<string, {
   runAtMs: number; status?: string; authorizationFailed: boolean;
 }>();
 const cronCompletionKey = (accountId: string, jobId: string) => JSON.stringify([accountId, jobId]);
-type QueryCronService = PluginHookGatewayCronService & {
+type QueryCronService = QueryGatewayCronService & {
   run?: (id: string, mode: "force" | "due") => Promise<unknown>;
 };
 
@@ -241,7 +241,7 @@ function captureCronMutation(
 }
 
 function takePendingMutation(
-  event: PluginHookCronChangedEvent,
+  event: QueryCronChangedEvent,
   target?: SyncedCron,
 ): PendingCronMutation | undefined {
   prunePendingMutations();
@@ -382,7 +382,7 @@ function publicCronSummary(
  */
 async function adoptExistingQueryCrons(api: OpenClawPluginApi): Promise<void> {
   if (!cronService?.list) return;
-  let jobs: Awaited<ReturnType<PluginHookGatewayCronService["list"]>>;
+  let jobs: Awaited<ReturnType<QueryGatewayCronService["list"]>>;
   try {
     jobs = await cronService.list({ includeDisabled: true });
   } catch (error) {
@@ -407,7 +407,7 @@ async function adoptExistingQueryCrons(api: OpenClawPluginApi): Promise<void> {
     syncedCrons.set(jobId, resolved);
     pendingBackfill.set(jobId, {
       target: resolved,
-      job: job as PluginHookGatewayCronJob,
+      job: job as QueryGatewayCronJob,
     });
   }
   if (adopted) {
@@ -500,7 +500,7 @@ export async function probeQuerySchedule(params: {
   queryAccountId: string;
   googleAccountId?: string;
 }): Promise<{ ok: boolean; checks: Record<string, boolean>; detail: string }> {
-  let jobs: Awaited<ReturnType<PluginHookGatewayCronService["list"]>> = [];
+  let jobs: Awaited<ReturnType<QueryGatewayCronService["list"]>> = [];
   try {
     jobs = (await cronService?.list?.({ includeDisabled: true })) ?? [];
   } catch {
@@ -512,7 +512,7 @@ export async function probeQuerySchedule(params: {
   }
   const job = (jobs ?? []).find(
     (candidate) => String((candidate as { id?: string }).id ?? "") === params.externalId,
-  ) as (PluginHookGatewayCronJob & { delivery?: CronDelivery }) | undefined;
+  ) as (QueryGatewayCronJob & { delivery?: CronDelivery }) | undefined;
   const delivery = job?.delivery;
   const target = delivery?.threadId ?? delivery?.to;
   const checks: Record<string, boolean> = {
@@ -545,17 +545,17 @@ export async function probeQuerySchedule(params: {
 
 async function currentCronJob(
   api: OpenClawPluginApi,
-  event: PluginHookCronChangedEvent,
-): Promise<(PluginHookGatewayCronJob & { delivery?: CronDelivery }) | undefined> {
+  event: QueryCronChangedEvent,
+): Promise<(QueryGatewayCronJob & { delivery?: CronDelivery }) | undefined> {
   const announced = event.job as
-    | (PluginHookGatewayCronJob & { delivery?: CronDelivery })
+    | (QueryGatewayCronJob & { delivery?: CronDelivery })
     | undefined;
   if (announced?.delivery || event.action === "removed") return announced;
   try {
     const jobs = (await cronService?.list?.({ includeDisabled: true })) ?? [];
     return jobs.find(
       (candidate) => String((candidate as { id?: string }).id ?? "") === event.jobId,
-    ) as (PluginHookGatewayCronJob & { delivery?: CronDelivery }) | undefined;
+    ) as (QueryGatewayCronJob & { delivery?: CronDelivery }) | undefined;
   } catch (error) {
     api.logger.warn(
       `query cron ${event.jobId}: no se pudo resolver el delivery real: ${String(error)}`,
@@ -691,7 +691,7 @@ export function registerQueryCronSync(
     return { authorized: true, run_as_user_id: granted.auth.identity.id };
   };
   api.on("gateway_start", async (_event, context) => {
-    cronService = context.getCron?.();
+    cronService = context.getCron?.() as QueryCronService | undefined;
     await adoptExistingQueryCrons(api);
   });
   api.on("gateway_stop", () => {
@@ -702,7 +702,7 @@ export function registerQueryCronSync(
     pendingBackfill.clear();
     pendingCronMutations.length = 0;
   });
-  api.on("before_agent_start", async (_event, context) => {
+  api.on("agent_turn_prepare", async (_event, context) => {
     await primeScheduleCredential(api, context ?? {});
   });
   api.on("before_agent_run", async (_event, context) => {
@@ -765,7 +765,7 @@ export function registerQueryCronSync(
       }
     }
   });
-  const syncChanged = async (event: PluginHookCronChangedEvent, provenMutation?: PendingCronMutation, requireConfirmation = false) => {
+  const syncChanged = async (event: QueryCronChangedEvent, provenMutation?: PendingCronMutation, requireConfirmation = false) => {
     if (!["added", "updated", "removed"].includes(event.action)) return;
     const previous = syncedCrons.get(event.jobId) ?? (event.action === "removed"
       ? targetFromDelivery((event.job as QueryCronJob | undefined)?.delivery) ?? provenMutation?.requestedTarget
@@ -1308,6 +1308,6 @@ export function registerQueryCronSync(
       api.logger.warn("query cron: no se pudo sincronizar la autorización; falta el ID real en el resultado nativo.");
       return;
     }
-    await syncChanged({ action: mutation.action, jobId, job: job as PluginHookGatewayCronJob }, mutation);
+    await syncChanged({ action: mutation.action, jobId, job: job as QueryGatewayCronJob }, mutation);
   });
 }

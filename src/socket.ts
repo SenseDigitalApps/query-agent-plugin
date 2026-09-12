@@ -6,7 +6,7 @@ import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import WebSocket, { type RawData } from "ws";
-import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/channel-runtime";
+import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { dispatchQueryMessage } from "./inbound.js";
 import {

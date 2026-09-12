@@ -114,7 +114,7 @@ export function rememberQuerySession(
   const key = sessionKey?.trim();
   if (!key || !binding.threadId) return;
   loadFromDisk();
-  // Varios hooks enriquecen la misma sesion durante before_agent_start. El
+  // Varios hooks enriquecen la misma sesion durante agent_turn_prepare. El
   // hook generico de Query solo conoce threadId/jobId, mientras cron-sync ya
   // pudo haber guardado accountId/authKey/deliveryThreadId. Una escritura
   // parcial posterior no debe borrar esos campos: hacerlo deja al cron sin la

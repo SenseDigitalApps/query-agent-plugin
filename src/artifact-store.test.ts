@@ -1,7 +1,7 @@
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
-import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import {
   forgetArtifact,
   rememberArtifact,
@@ -18,6 +18,7 @@ beforeEach(async () => {
 });
 
 afterEach(async () => {
+  vi.restoreAllMocks();
   delete process.env.QUERY_ARTIFACT_STATE_FILE;
   delete process.env.QUERY_ARTIFACT_REUSE_TTL_MS;
   resetArtifactStore();
@@ -98,8 +99,11 @@ describe("memoria de artifacts subidos", () => {
   });
 
   it("admite un limite de reuso para quien lo quiera", () => {
+    const now = Date.now();
+    const clock = vi.spyOn(Date, "now").mockReturnValue(now);
     rememberArtifact("thread-1", REPORT, 42);
-    process.env.QUERY_ARTIFACT_REUSE_TTL_MS = "0.0001";
+    process.env.QUERY_ARTIFACT_REUSE_TTL_MS = "1";
+    clock.mockReturnValue(now + 2);
     resetArtifactStore();
     expect(rememberedArtifact("thread-1", REPORT)).toBeUndefined();
   });
