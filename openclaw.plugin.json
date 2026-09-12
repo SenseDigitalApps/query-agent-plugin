@@ -217,6 +217,7 @@
       "query_attachment_send",
       "query_modules_list",
       "query_module_describe",
+      "query_module_categories_list",
       "query_records_search",
       "query_records_aggregate",
       "query_record_propose",
