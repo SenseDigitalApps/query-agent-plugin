@@ -40,8 +40,7 @@
   },
   "openclaw": {
     "extensions": [
-      "./dist/index.js",
-      "./dist/tools-entry.js"
+      "./dist/index.js"
     ],
     "setupEntry": "./dist/setup-entry.js",
     "compat": {
