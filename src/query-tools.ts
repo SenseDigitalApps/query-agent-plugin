@@ -1,6 +1,7 @@
 import { Type } from "typebox";
 import { jsonResult, textResult } from "openclaw/plugin-sdk/tool-results";
-import { getQuerySession } from "./query-session-store.js";
+import { resolveQuerySession } from "./query-session-store.js";
+import { primeScheduleCredential } from "./cron-sync.js";
 import { scheduledCredential, scheduledToolContext } from "./scheduled-context.js";
 import {
   defineToolPlugin,
@@ -1038,10 +1039,20 @@ export default defineToolPlugin({
         },
         execute: async (toolCallId, params, signal, onUpdate) => {
           const invoke = (resolved: unknown) => definition.execute!(resolved, config, { api, toolCallId, signal, onUpdate });
-          const session = getQuerySession(sessionKey);
+          let session = resolveQuerySession(sessionKey);
+          // OpenClaw 2026.9.4 does not propagate cron trigger/job context to
+          // every Codex preparation hook. Recover the scheduler-owned binding
+          // at the first Query tool boundary, where the real sessionKey is
+          // always available, before resolving any human credential.
+          if (!session?.jobId) {
+            await primeScheduleCredential(api, { sessionKey });
+            session = resolveQuerySession(sessionKey);
+          }
           if (!session?.jobId) {
             const supplied = params as Record<string, unknown>;
-            const value = await invoke({ ...supplied, thread_id: supplied.thread_id ?? session?.threadId });
+            // El hilo derivado del runtime es confiable y prevalece sobre un
+            // parametro del modelo, que nunca puede cambiar de canal.
+            const value = await invoke({ ...supplied, thread_id: session?.threadId ?? supplied.thread_id });
             return typeof value === "string" ? textResult(value, value) : jsonResult(value);
           }
           try {

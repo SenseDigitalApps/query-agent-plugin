@@ -904,6 +904,107 @@ describe("arranque del turno de un cron", () => {
     },
   );
 
+  it.each([
+    "agent:query:cron:gate-cron",
+    "agent:query:cron:gate-cron:run:run-9-4",
+  ])("recupera jobId desde la sessionKey nativa de OpenClaw 9.4: %s", async (sessionKey) => {
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("cron_changed")?.(cronAdded("gate-cron"));
+    requestQueryScheduleAuth.mockResolvedValue({
+      socketUrl: SOCKET,
+      auth: {
+        source: "schedule",
+        token: "scheduled-beneficiary",
+        expires_in: 900,
+        external_id: "gate-cron",
+        identity: { id: 2 },
+      },
+    });
+
+    const decision = await hooks.get("before_agent_run")!({}, { sessionKey });
+
+    expect(decision).toEqual({ outcome: "pass" });
+    expect(requestQueryScheduleAuth).toHaveBeenCalledWith(THREAD, "gate-cron", "sales");
+    expect(getQuerySession(sessionKey)).toMatchObject({
+      jobId: "gate-cron",
+      accountId: "sales",
+      deliveryThreadId: THREAD,
+    });
+  });
+
+  it.each(["denied", "authorized"])(
+    "before_agent_reply protege crones Codex antes de inferencia: %s",
+    async (scenario) => {
+      const { api, hooks } = fakeApi();
+      registerQueryCronSync(api as never, vi.fn());
+      await hooks.get("cron_changed")?.(cronAdded("codex-cron"));
+      requestQueryScheduleAuth.mockResolvedValue(scenario === "denied" ? undefined : {
+        socketUrl: SOCKET,
+        auth: {
+          source: "schedule",
+          token: "scheduled-beneficiary",
+          expires_in: 900,
+          external_id: "codex-cron",
+          identity: { id: 2 },
+        },
+      });
+
+      const result = await hooks.get("before_agent_reply")!(
+        { cleanedBody: "Do scheduled work" },
+        { sessionKey: "agent:query:cron:codex-cron:run:run-9-4", trigger: "cron" },
+      );
+
+      if (scenario === "authorized") expect(result).toBeUndefined();
+      else expect(result).toMatchObject({
+        handled: true,
+        reason: "query_schedule_authorization_missing",
+        reply: { isError: true },
+      });
+      expect(requestQueryScheduleAuth).toHaveBeenCalledWith(THREAD, "codex-cron", "sales");
+    },
+  );
+
+  it("adopta en el gate un cron Query creado despues del arranque", async () => {
+    const { api, hooks } = fakeApi();
+    let jobs: Array<Record<string, unknown>> = [];
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("gateway_start")?.({}, {
+      getCron: () => ({ list: vi.fn(async () => jobs) }),
+    });
+    jobs = [{
+      id: "late-query-cron",
+      delivery: { channel: "query", accountId: "sales", to: THREAD },
+    }];
+    requestQueryScheduleAuth.mockResolvedValue(undefined);
+
+    const result = await hooks.get("before_agent_reply")!(
+      { cleanedBody: "Do scheduled work" },
+      { sessionKey: "agent:query:cron:late-query-cron:run:run-late", trigger: "cron" },
+    );
+
+    expect(result).toMatchObject({
+      handled: true,
+      reason: "query_schedule_authorization_missing",
+      reply: { isError: true },
+    });
+    expect(requestQueryScheduleAuth).toHaveBeenCalledWith(THREAD, "late-query-cron", "sales");
+    await hooks.get("gateway_stop")?.();
+  });
+
+  it("no adopta una sessionKey cron ajena que no fue sincronizada por Query", async () => {
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+
+    const decision = await hooks.get("before_agent_run")!(
+      {},
+      { sessionKey: "agent:other:cron:foreign-job:run:run-9-4" },
+    );
+
+    expect(decision).toEqual({ outcome: "pass" });
+    expect(requestQueryScheduleAuth).not.toHaveBeenCalled();
+  });
+
   it("el gate pasa turnos humanos y crones ajenos, pero bloquea Query sin cuenta o destino", async () => {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, vi.fn());

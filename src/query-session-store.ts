@@ -143,6 +143,34 @@ export function getQuerySession(
 }
 
 /**
+ * Recupera el hilo humano desde una sessionKey nativa de Query.
+ *
+ * OpenClaw 2026.9.4 conserva este dato en la clave de sesion aunque algunos
+ * turnos ya no lo expongan como chatId/channelId en agent_turn_prepare. Solo
+ * aceptamos claves inequívocas del canal Query y ids numericos; cualquier otro
+ * canal o forma inesperada sigue sin adoptarse.
+ */
+export function queryThreadIdFromSessionKey(
+  sessionKey: string | undefined,
+): string | undefined {
+  const key = sessionKey?.trim();
+  if (!key) return undefined;
+  return /^agent:[^:]+:query:(?:group|direct):([1-9]\d*)$/.exec(key)?.[1];
+}
+
+/** Mantiene la ruta antigua y usa la sessionKey solo cuando falta el vinculo. */
+export function resolveQuerySession(
+  sessionKey: string | undefined,
+): QuerySessionBinding | undefined {
+  const existing = getQuerySession(sessionKey);
+  if (existing) return existing;
+  const threadId = queryThreadIdFromSessionKey(sessionKey);
+  if (!threadId) return undefined;
+  rememberQuerySession(sessionKey, { threadId });
+  return getQuerySession(sessionKey);
+}
+
+/**
  * Sesion Query por el canal al que pertenece.
  *
  * Red de seguridad para los hosts que ejecutan una herramienta sin decir de que

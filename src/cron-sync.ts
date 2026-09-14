@@ -167,6 +167,23 @@ function trimmed(value: unknown): string | undefined {
   return text || undefined;
 }
 
+/**
+ * OpenClaw 2026.9.4 can omit ``jobId`` from agent hooks while still exposing
+ * the scheduler-owned session key. Recover only the native cron segment; the
+ * caller must still prove that the id belongs to an adopted Query cron before
+ * requesting a scheduled credential.
+ */
+function cronJobIdFromHookContext(context: {
+  jobId?: string;
+  sessionKey?: string;
+}): string | undefined {
+  const explicit = context.jobId?.trim();
+  if (explicit) return explicit;
+  const sessionKey = context.sessionKey?.trim();
+  if (!sessionKey) return undefined;
+  return sessionKey.match(/^agent:[^:]+:cron:([^:]+)(?::run:[^:]+)?$/)?.[1]?.trim() || undefined;
+}
+
 function prunePendingMutations(now = Date.now()): void {
   while (
     pendingCronMutations.length &&
@@ -581,7 +598,7 @@ function sameTarget(left: SyncedCron | undefined, right: SyncedCron | undefined)
  * arrancar el turno, para que todo lo de abajo funcione igual que en una
  * conversacion normal y ninguna tool tenga que saber que la origino un cron.
  */
-async function primeScheduleCredential(
+export async function primeScheduleCredential(
   api: OpenClawPluginApi,
   context: {
     jobId?: string;
@@ -591,11 +608,35 @@ async function primeScheduleCredential(
     sessionKey?: string;
   },
 ): Promise<"not_query" | "authorized" | "blocked"> {
-  // ``jobId`` solo viene en ejecuciones disparadas por cron; un turno normal ya
-  // trae su credencial con el mensaje y no debe tocar nada de esto.
-  const externalId = context.jobId?.trim();
+  // OpenClaw normalmente entrega ``jobId``. En 2026.9.4 algunas rutas del
+  // scheduler solo preservan el id dentro de la sessionKey nativa.
+  const externalId = cronJobIdFromHookContext(context);
   if (!externalId) return "not_query";
-  const synced = syncedCrons.get(externalId);
+  let synced = syncedCrons.get(externalId);
+  // ``cron_changed`` is not guaranteed for jobs created through every Gateway
+  // surface (the CLI path in 2026.9.4 is one example). Resolve an unknown cron
+  // from the scheduler at execution time so a newly-created Query job cannot
+  // slip past the gate until the next Gateway restart adopts it.
+  if (!synced && !queryCronIds.has(externalId) && cronService?.list) {
+    try {
+      const jobs = await cronService.list({ includeDisabled: true });
+      const job = (jobs ?? []).find(
+        (candidate) => String((candidate as { id?: string })?.id ?? "").trim() === externalId,
+      ) as (QueryGatewayCronJob & { delivery?: CronDelivery }) | undefined;
+      if (job?.delivery?.channel === "query") {
+        queryCronIds.add(externalId);
+        const target = targetFromDelivery(job.delivery);
+        if (target) {
+          syncedCrons.set(externalId, target);
+          synced = target;
+        }
+      }
+    } catch (error) {
+      api.logger.warn(
+        `query cron ${externalId}: no se pudo verificar el inventario antes de ejecutar: ${String(error)}`,
+      );
+    }
+  }
   // Que la tarea es de Query hay que poder afirmarlo, no suponerlo: o el
   // contexto lo dice, o la sincronizacion la registro como nuestra. Lo que se
   // apunta aqui es lo que despues deja al guard bloquear un cron sin autor, asi
@@ -705,6 +746,25 @@ export function registerQueryCronSync(
   api.on("agent_turn_prepare", async (_event, context) => {
     await primeScheduleCredential(api, context ?? {});
   });
+  api.on("before_agent_reply", async (_event, context) => {
+    // Native Codex does not emit before_agent_run. Claim cron turns here so a
+    // missing scheduled credential stops before inference on every supported
+    // harness. An error payload also makes the scheduler persist a real error
+    // instead of a model-authored false `ok` summary.
+    const outcome = await primeScheduleCredential(api, context ?? {});
+    if (outcome === "not_query" || outcome === "authorized") return;
+    const session = getQuerySession(context?.sessionKey);
+    if (session?.authKey) forgetDelegatedAuth(session.authKey);
+    return {
+      handled: true,
+      reason: "query_schedule_authorization_missing",
+      reply: {
+        isError: true,
+        text: "query_schedule_authorization_missing: la tarea no tiene una credencial de ejecución vigente. " +
+          "No se inició el modelo ni se ejecutó el trabajo. Revisa la autorización persistida del mismo cron en Query.",
+      },
+    };
+  }, { eligibleTriggers: ["cron"], priority: 100 });
   api.on("before_agent_run", async (_event, context) => {
     // A preparation hook cannot stop inference. This gate returns a native
     // hook_block error, which OpenClaw propagates to the cron result and store.
@@ -712,8 +772,9 @@ export function registerQueryCronSync(
     if (outcome === "not_query") return { outcome: "pass" };
     const session = getQuerySession(context?.sessionKey);
     const credential = session?.authKey ? getDelegatedAuth(session.authKey) : undefined;
+    const externalId = cronJobIdFromHookContext(context ?? {});
     if (outcome === "authorized" && credential?.auth.source === "schedule" &&
-        credential.auth.external_id === context?.jobId && credential.auth.identity?.id) {
+        credential.auth.external_id === externalId && credential.auth.identity?.id) {
       return { outcome: "pass" };
     }
     if (session?.authKey) forgetDelegatedAuth(session.authKey);

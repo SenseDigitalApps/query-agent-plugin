@@ -3,9 +3,10 @@ import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { afterAll, afterEach, beforeAll, describe, expect, it, vi } from "vitest";
 import queryTools from "./query-tools.js";
-import { rememberQuerySession } from "./query-session-store.js";
+import { forgetQuerySession, rememberQuerySession } from "./query-session-store.js";
 import { forgetDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
 import { scheduledCredential } from "./scheduled-context.js";
+import { registerQueryCronSync } from "./cron-sync.js";
 
 const request = vi.fn();
 vi.mock("./socket.js", () => ({ requestQueryScheduleAuth: (...args: unknown[]) => request(...args) }));
@@ -37,6 +38,37 @@ function bind(sessionKey = "cron-session") {
 }
 
 describe("isolated Query tools", () => {
+  it("recovers a human Query thread from the native session key", async () => {
+    const sessionKey = "agent:query:query:group:73";
+    rememberDelegatedAuth("73", { token: "human-73", expires_in: 900 }, "wss://tenant-a.test");
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ modules: ["planning"] }) });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await tool(sessionKey).execute("call-human-73", {});
+
+    expect(result.details).toEqual({ modules: ["planning"] });
+    expect(fetch.mock.calls[0][1].headers["X-Query-Delegated-Token"]).toBe("human-73");
+    expect(fetch.mock.calls[0][0].toString()).toContain("tenant-a.test");
+    forgetDelegatedAuth("73");
+    forgetQuerySession(sessionKey);
+  });
+
+  it("does not let a model-supplied thread override the trusted Query session", async () => {
+    const sessionKey = "agent:query:query:group:73";
+    rememberDelegatedAuth("73", { token: "human-73-cross", expires_in: 900 }, "wss://tenant-a.test");
+    rememberDelegatedAuth("91", { token: "human-91", expires_in: 900 }, "wss://tenant-b.test");
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ modules: [] }) });
+    vi.stubGlobal("fetch", fetch);
+
+    await tool(sessionKey).execute("call-no-cross-thread", { thread_id: "91" });
+
+    expect(fetch.mock.calls[0][1].headers["X-Query-Delegated-Token"]).toBe("human-73-cross");
+    expect(fetch.mock.calls[0][0].toString()).toContain("tenant-a.test");
+    forgetDelegatedAuth("73");
+    forgetDelegatedAuth("91");
+    forgetQuerySession(sessionKey);
+  });
+
   it("runs without thread_id and ignores a model-supplied delivery identity", async () => {
     bind();
     request.mockResolvedValue({ socketUrl: "wss://tenant-a.test/ws/", auth: { token: "scheduled-a", source: "schedule", thread_id: "13", expires_in: 900 } });
@@ -88,3 +120,45 @@ describe("isolated Query tools", () => {
     expect(result.details.error).toBe("query_schedule_authorization_missing");
   });
 });
+
+  it("recovers a native cron binding lazily at the first Query tool call", async () => {
+    const sessionKey = "agent:query:cron:native-cron:run:run-9-4";
+    const hooks = new Map<string, (...args: any[]) => any>();
+    const api = {
+      logger: { info: vi.fn(), warn: vi.fn() },
+      on: vi.fn((name: string, handler: (...args: any[]) => any) => hooks.set(name, handler)),
+      registerTool: vi.fn(),
+    };
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("gateway_start")?.({}, {
+      getCron: () => ({
+        list: vi.fn(async () => [{
+          id: "native-cron",
+          delivery: { channel: "query", accountId: "query", to: "20" },
+        }]),
+      }),
+    });
+    request.mockResolvedValue({
+      socketUrl: "wss://tenant-a.test/ws/",
+      auth: {
+        token: "scheduled-native",
+        source: "schedule",
+        external_id: "native-cron",
+        thread_id: "20",
+        expires_in: 900,
+        identity: { id: 27 },
+      },
+    });
+    const fetch = vi.fn().mockResolvedValue({ ok: true, json: async () => ({ modules: [] }) });
+    vi.stubGlobal("fetch", fetch);
+
+    const result = await tool(sessionKey).execute("call-native", {});
+
+    expect(request).toHaveBeenCalledWith("20", "native-cron", "query");
+    expect(result.details).toEqual({ modules: [] });
+    expect(fetch.mock.calls[0][1].headers["X-Query-Delegated-Token"]).toBe("scheduled-native");
+    await hooks.get("gateway_stop")?.();
+    const authKey = `schedule:${JSON.stringify(["query", "native-cron", sessionKey])}`;
+    forgetDelegatedAuth(authKey);
+    forgetQuerySession(sessionKey);
+  });

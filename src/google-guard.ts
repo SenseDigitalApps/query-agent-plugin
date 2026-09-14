@@ -9,10 +9,12 @@ import { authorizeExternalAccount } from "./external-accounts.js";
 import { readConfiguredGoogleAccountEmail } from "./google-accounts.js";
 import { externalContextForRun } from "./external-context.js";
 import { scheduledCredential } from "./scheduled-context.js";
+import { primeScheduleCredential } from "./cron-sync.js";
 import {
   findQuerySessionByThread,
   getQuerySession,
   rememberQuerySession,
+  resolveQuerySession,
 } from "./query-session-store.js";
 
 /**
@@ -112,7 +114,7 @@ export async function evaluateGoogleToolCall(
 ): Promise<QueryBeforeToolCallResult | void> {
   const linkingTool = event.toolName.startsWith("query_google_");
   if (!isGoogleTool(event.toolName) && !linkingTool) return;
-  const cronSession = getQuerySession(ctx.sessionKey);
+  const cronSession = resolveQuerySession(ctx.sessionKey);
   let scheduled;
   if (cronSession?.jobId) {
     try { scheduled = await scheduledCredential(ctx.sessionKey); }
@@ -131,7 +133,7 @@ export async function evaluateGoogleToolCall(
   if (linkingTool) return;
 
   const session = scoped ? { threadId: scoped.threadId, jobId: undefined, authKey: undefined } :
-    getQuerySession(ctx.sessionKey) ?? findQuerySessionByThread(ctx.channelId);
+    resolveQuerySession(ctx.sessionKey) ?? findQuerySessionByThread(ctx.channelId);
   // Sin sesion Query no hay nada que aislar: este guard existe para las cuentas
   // que Query administra, no para adueñarse de las herramientas de Google.
   if (!session) return;
@@ -256,7 +258,7 @@ export function registerQueryGoogleGuard(api: OpenClawPluginApi): void {
     // canal del que salio: sus llamadas a Google pasarian sin que nadie las
     // reconozca como de Query. Se le traslada el mismo vinculo, que es tambien
     // la misma restriccion.
-    const parent = getQuerySession(ctx?.requesterSessionKey);
+    const parent = resolveQuerySession(ctx?.requesterSessionKey);
     const fromRequester =
       event.requester?.channel === "query"
         ? String(event.requester.threadId ?? "").trim()
@@ -269,7 +271,11 @@ export function registerQueryGoogleGuard(api: OpenClawPluginApi): void {
       accountId: parent?.accountId ?? event.requester?.accountId,
     });
   });
-  api.on("before_tool_call", async (event, ctx) =>
-    evaluateGoogleToolCall(event, ctx, api.logger),
-  );
+  api.on("before_tool_call", async (event, ctx) => {
+    if ((isGoogleTool(event.toolName) || event.toolName.startsWith("query_google_")) &&
+        !resolveQuerySession(ctx?.sessionKey)?.jobId) {
+      await primeScheduleCredential(api, { sessionKey: ctx?.sessionKey });
+    }
+    return evaluateGoogleToolCall(event, ctx, api.logger);
+  });
 }
