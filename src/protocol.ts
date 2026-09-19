@@ -33,6 +33,15 @@ export function parseQueryEvent(raw: string): QueryInboundEvent | null {
   if (value.type === "session.ready" && isRecord(value.data)) {
     return value as QuerySessionReadyEvent;
   }
+  if (typeof value.client_msg_id === "string" && isRecord(value.data)) {
+    if (["schedule.admin.received", "schedule.admin.polled", "schedule.admin.error"].includes(value.type))
+      return value as QueryInboundEvent;
+    if (value.type === "schedule.admin.command" &&
+        (typeof value.thread_id === "string" || typeof value.thread_id === "number") &&
+        typeof value.data.external_id === "string" && typeof value.data.request_hash === "string" &&
+        typeof value.data.revision === "string" && typeof value.data.action === "string" &&
+        value.data.execute === false && isRecord(value.data.patch)) return value as QueryInboundEvent;
+  }
   if (value.type === "auth.granted" && isRecord(value.data)) {
     return value as QueryAuthGrantedEvent;
   }

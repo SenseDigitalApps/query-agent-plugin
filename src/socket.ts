@@ -252,6 +252,18 @@ function runTextToSpeech(
 }
 
 export class QuerySocketMonitor {
+  private administration?: import("./schedule-administration.js").ScheduleAdministration;
+  private adminEnabled = false;
+  private adminPollAt = 0;
+  private readonly adminResults = new Map<string, { threadId: string; data: Record<string, unknown> }>();
+  private pollAdministration() {
+    if (!this.adminEnabled || Date.now() - this.adminPollAt < 30_000) return;
+    this.adminPollAt = Date.now();
+    for (const [id, result] of this.adminResults) this.send({ type: "schedule.admin.result", role: "system",
+      content: "", client_msg_id: id, thread_id: result.threadId, data: result.data });
+    this.send({ type: "schedule.admin.poll", role: "system", content: "",
+      client_msg_id: `admin-poll-${Date.now()}`, thread_id: "", data: {} });
+  }
   private readonly store: ResponseStore;
   private socket?: WebSocket;
   // Cierre pedido por nosotros. Sin esta marca no se puede distinguir un stop
@@ -345,11 +357,13 @@ export class QuerySocketMonitor {
           return;
         }
         socket.ping();
+        this.pollAdministration();
       }, account.heartbeatMs);
 
       const finish = (error?: unknown) => {
         if (settled) return;
         settled = true;
+        this.adminEnabled = false;
         setProvisionReady(account.accountId, account.url, false);
         clearInterval(heartbeat);
         abortSignal.removeEventListener("abort", abort);
@@ -417,6 +431,9 @@ export class QuerySocketMonitor {
         `[${this.options.account.accountId}] connected to Query`,
       );
       this.patchStatus({ running: true, lastError: undefined });
+      this.adminEnabled = (event.data as unknown as Record<string, unknown>).schedule_administration_version === 1;
+      this.adminPollAt = 0;
+      this.pollAdministration();
       await this.syncAgentProfile(event.data.agent_profile);
       if (!this.stopping && !this.options.abortSignal.aborted && this.socket?.readyState === WebSocket.OPEN) {
         setProvisionReady(this.options.account.accountId, this.options.account.url, true);
@@ -441,6 +458,36 @@ export class QuerySocketMonitor {
       await this.syncAgentProfile(event.data);
       return;
     }
+    if (event.type === "schedule.admin.command") {
+      if (!this.adminEnabled) return;
+      const { ScheduleAdministration } = await import("./schedule-administration.js");
+      const { queryScheduleAdministrationService } = await import("./cron-sync.js");
+      this.administration ??= new ScheduleAdministration(
+        `${this.options.account.stateFile ?? defaultResponseStorePath(this.options.account.accountId)}.schedule-admin.json`,
+        this.options.account.accountId, this.options.account.url, queryScheduleAdministrationService);
+      const data = await this.administration.apply(event);
+      const result = { threadId: String(event.thread_id), data };
+      this.adminResults.set(event.client_msg_id, result);
+      this.send({ type: "schedule.admin.result", role: "system", content: "",
+        client_msg_id: event.client_msg_id, thread_id: result.threadId, data });
+      return;
+    }
+    if (event.type === "schedule.admin.received") {
+      const pending = this.adminResults.get(event.client_msg_id);
+      if (pending && pending.data.external_id === event.data.external_id) {
+        this.adminResults.delete(event.client_msg_id);
+        if (event.data.status === "applied" && pending.data.applied === true) {
+          const job = pending.data.job as Record<string, any>;
+          this.send({ type: "schedule.sync", role: "system", content: "", client_msg_id: event.client_msg_id,
+            thread_id: String(job.delivery?.threadId ?? job.delivery?.to ?? pending.threadId),
+            data: { external_id: job.id, action: "updated", job, request_ack: true,
+              sync_source: "startup_adoption", authorization_version: 2,
+              query_account_id: this.options.account.accountId } });
+        }
+      }
+      return;
+    }
+    if (event.type === "schedule.admin.polled" || event.type === "schedule.admin.error") return;
     if (event.type === "schedule.synced") {
       const waiting = this.pendingScheduleSync.get(event.client_msg_id);
       if (waiting && waiting.externalId === event.data.external_id) {
@@ -494,7 +541,7 @@ export class QuerySocketMonitor {
       });
       return;
     }
-    await this.handleUserMessage(event);
+    if (event.type === "message") await this.handleUserMessage(event);
   }
 
   /**

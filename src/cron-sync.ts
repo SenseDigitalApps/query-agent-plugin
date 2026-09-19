@@ -155,6 +155,9 @@ type QueryCronService = QueryGatewayCronService & {
 };
 
 let cronService: QueryCronService | undefined;
+export function queryScheduleAdministrationService(): QueryGatewayCronService | undefined {
+  return cronService;
+}
 const pendingCronMutations: PendingCronMutation[] = [];
 const PENDING_MUTATION_TTL_MS = 30_000;
 
@@ -754,6 +757,9 @@ export function registerQueryCronSync(
   api.on("agent_turn_prepare", async (_event, context) => {
     await primeScheduleCredential(api, context ?? {});
   });
+  // Some SDK declarations omit the runtime-supported trigger filter. Keep the
+  // same options structurally, including priority, without removing the filter.
+  const scheduledReplyHookOptions = { eligibleTriggers: ["cron"], priority: 100 };
   api.on("before_agent_reply", async (_event, context) => {
     // Native Codex does not emit before_agent_run. Claim cron turns here so a
     // missing scheduled credential stops before inference on every supported
@@ -772,7 +778,7 @@ export function registerQueryCronSync(
           "No se inició el modelo ni se ejecutó el trabajo. Revisa la autorización persistida del mismo cron en Query.",
       },
     };
-  }, { eligibleTriggers: ["cron"], priority: 100 });
+  }, scheduledReplyHookOptions);
   api.on("before_agent_run", async (_event, context) => {
     // A preparation hook cannot stop inference. This gate returns a native
     // hook_block error, which OpenClaw propagates to the cron result and store.

@@ -85,6 +85,8 @@ export type QueryGatewayCronService = {
   list: (opts?: { includeDisabled?: boolean }) => Promise<QueryGatewayCronJob[]>;
   add: (input: Record<string, unknown>) => Promise<unknown>;
   update: (id: string, patch: Record<string, unknown>) => Promise<unknown>;
+  updateWithPrecondition?: (id: string, patch: Record<string, unknown>,
+    precondition: (job: QueryGatewayCronJob, nowMs: number) => void | Promise<void>) => Promise<unknown>;
   remove: (id: string) => Promise<{ removed?: boolean }>;
   removeStaleJobFamily?: (family: {
     declarationKey: string;

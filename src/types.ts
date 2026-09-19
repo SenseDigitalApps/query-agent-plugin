@@ -268,6 +268,9 @@ export type QueryScheduleSyncAck = {
 };
 
 export type QueryInboundEvent =
+  | import("./schedule-administration.js").ScheduleAdminCommand
+  | { type: "schedule.admin.received" | "schedule.admin.polled" | "schedule.admin.error";
+      client_msg_id: string; data: Record<string, unknown> }
   | { type: "schedule.synced"; client_msg_id: string; data: QueryScheduleSyncAck }
   | QuerySessionReadyEvent
   | QueryAgentProfileEvent
@@ -304,6 +307,8 @@ export type QueryOutboundEvent = {
     | "turn.adopted"
     | "error"
     | "schedule.sync"
+    | "schedule.admin.poll"
+    | "schedule.admin.result"
     | "schedule.probe.result"
     | "profile.seed"
     | "auth.refresh"
