@@ -137,6 +137,30 @@ describe("Query inbound dispatch recovery", () => {
     expect(result.text).toBe("Respuesta que solo aparecio en el stream.");
   });
 
+  it("keeps tools available for simple-intent turns across agents", async () => {
+    for (const agentId of ["manuela-villegas-marketing", "comunicaciones", "query"]) {
+      const dispatchReply = vi.fn(async (params: any) => {
+        await params.delivery.deliver({ text: "Paquete recibido y revisado." });
+        return { admission: { kind: "dispatch" }, dispatched: true,
+          ctxPayload: params.ctxPayload, routeSessionKey: `agent:${agentId}:test` };
+      });
+      setQueryRuntime({ channel: {
+        routing: { resolveAgentRoute: () => ({ agentId, accountId: "default", sessionKey: `agent:${agentId}:test` }) },
+        session: { resolveStorePath: () => "sessions.json", recordInboundSession: vi.fn() },
+        inbound: { dispatchReply },
+        reply: { dispatchReplyWithBufferedBlockDispatcher: vi.fn() },
+      } } as never);
+      await dispatchQueryMessage({ cfg: { channels: { query: {} } } as QueryConfig,
+        account, threadId: "test", event: { type: "message", role: "user",
+          content: "Hola, aqui tienes el paquete ZIP", client_msg_id: `test-tools-${agentId}`,
+          thread_id: "test", data: { attachments: [], effort_mode: "auto" } },
+      });
+      expect(dispatchReply).toHaveBeenCalledTimes(1);
+      expect(dispatchReply.mock.calls[0][0].replyOptions.fastModeOverride).toBe(true);
+      expect(dispatchReply.mock.calls[0][0].replyOptions.disableTools).not.toBe(true);
+    }
+  });
+
   it("filters Fast annotations from the final delivery callback", async () => {
     const dispatchReply = vi.fn(async (params: any) => {
       await params.delivery.deliver({

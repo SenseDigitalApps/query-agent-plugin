@@ -858,7 +858,8 @@ export async function dispatchQueryMessage(params: {
       replyOptions: {
         sourceReplyDeliveryMode: "automatic",
         ...effortRunOptions(effort.effectiveMode),
-        ...(effort.reason === "simple_intent" ? { disableTools: true } : {}),
+        // Effort controls latency, not authorization. Keep tools available even
+        // for greetings/short turns: they may include attachments or follow-ups.
         // OpenClaw separa el comentario publico del reasoning privado. Solo el
         // primero se usa como bitacora visible del turno.
         commentaryProgressEnabled: true,
