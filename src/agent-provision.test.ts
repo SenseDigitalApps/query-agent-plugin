@@ -3,7 +3,7 @@ import { mkdtemp, readdir, readFile, writeFile, rm, mkdir } from "node:fs/promis
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import * as profileFiles from "./agent-profile.js";
-import { provisionQueryAgent, registerQueryProvision, type ProvisionDependencies } from "./agent-provision.js";
+import { provisionQueryAgent, registerQueryProvision, verifyPendingProvisionActivations, type ProvisionDependencies } from "./agent-provision.js";
 
 const manifest = () => ({type: "query_openclaw_provision", version: 1, idempotency_key: "unique-key",
  agent: { suggested_id: "sales", workspace_slug: "sales", display_name: "Sales", personality: "Direct", mission: "Help", effort_mode: "normal" },
@@ -19,11 +19,20 @@ beforeEach(async () => {
  cfg = { agents: { list: [{ id: "old", workspace: join(root, "old") }] }, bindings: [], channels: { query: { url: "wss://query.example/ws/old/?token=old" } } };
  mutate = vi.fn(async ({ mutate: apply }: any) => { const draft = structuredClone(cfg); await apply(draft); cfg = draft; return {}; });
  ready = vi.fn(async () => true);
- deps = { config: { current: () => cfg, mutateConfigFile: mutate as any }, workspace: (_, id) => join(root, id), waitReady: ready as any, timeoutMs: 5 };
+ deps = { readSource: async () => structuredClone(cfg), config: { current: () => cfg, mutateConfigFile: mutate as any }, workspace: (_, id) => join(root, id), waitReady: ready as any, timeoutMs: 5 };
  vi.stubEnv("QUERY_OPENCLAW_TOKEN", "");
 });
 afterEach(async () => { vi.unstubAllEnvs(); vi.restoreAllMocks(); await rm(root, { recursive: true, force: true }); });
-describe("native Query provisioning", () => {
+describe.each(["legacy", "entries"])("native Query provisioning (%s)", schema => {
+ beforeEach(() => {
+   if (schema === "entries") {
+     const { id, ...entry } = cfg.agents.list[0];
+     cfg.agents = { entries: { [id]: entry } };
+   }
+ });
+ const agents = () => cfg.agents.entries
+   ? Object.entries(cfg.agents.entries).map(([id, entry]) => ({ id, ...(entry as object) }))
+   : cfg.agents.list;
  it("validates without writing config or files", async () => {
    expect((await provisionQueryAgent(manifest(), true, deps)).status).toBe("validated");
    expect(mutate).not.toHaveBeenCalled(); expect(await readdir(root)).toEqual([]);
@@ -41,7 +50,7 @@ describe("native Query provisioning", () => {
    const result=await provisionQueryAgent(manifest(), false, deps);
    expect(result.status).toBe("created"); expect(mutate).toHaveBeenCalledTimes(1);
    expect(mutate.mock.calls[0][0].afterWrite).toEqual({ mode: "auto" });
-   expect(cfg.agents.list[0]).toEqual(original.agents.list[0]); expect(cfg.channels.query.url).toBe(original.channels.query.url);
+   expect(schema === "entries" ? cfg.agents.entries.old : cfg.agents.list[0]).toEqual(schema === "entries" ? original.agents.entries.old : original.agents.list[0]); expect(cfg.channels.query.url).toBe(original.channels.query.url);
    expect(ready.mock.calls[1][0].map((x:any)=>x.id)).toEqual(["default", "sales"]);
    expect(JSON.stringify(result)).not.toContain("secret");
    await writeFile(join(root, "sales", "SOUL.md"), "human content");
@@ -50,10 +59,47 @@ describe("native Query provisioning", () => {
    expect((await provisionQueryAgent({...manifest(), idempotency_key:"different"}, false, deps)).error).toBe("manifest_collision");
  });
  it.each(["agent", "account", "workspace"])("blocks %s collisions", async kind => {
-   if(kind==="agent") cfg.agents.list.push({ id: "sales" });
+   if(kind==="agent") { if(schema==="entries") cfg.agents.entries.sales={}; else cfg.agents.list.push({ id: "sales" }); }
    if(kind==="account") cfg.channels.query.accounts={sales:{url:"wss://other/?token=other"}};
    if(kind==="workspace") await mkdir(join(root,"sales"));
    expect((await provisionQueryAgent(manifest(), false, deps)).status).toBe("failed"); expect(mutate).not.toHaveBeenCalled();
+ });
+ it("compares source rather than runtime defaults and preserves secret references",async()=>{
+   cfg.gateway={reload:{mode:"off"}};
+   cfg.agents.defaults={model:{primary:"test/model"}};
+   cfg.channels.query.accounts={other:{enabled:false,url:"${OTHER_URL}"}};
+   deps.config.current=()=>{const runtime=structuredClone(cfg);
+     runtime.agents.defaults.extraRuntimeDefault=true;
+     runtime.channels.query.accounts.other.url="wss://other.example/?token=resolved";
+     return runtime;
+   };
+   const result=await provisionQueryAgent(manifest(),false,deps);
+   expect(result.status).toBe("pending_activation");
+   expect(cfg.agents.defaults.extraRuntimeDefault).toBeUndefined();
+   expect(cfg.channels.query.accounts.other.url).toBe("${OTHER_URL}");
+   expect(mutate.mock.calls[0][0].base).toBe("source");
+ });
+ it.each(["agents","query","bindings"])("rejects a real concurrent source change in %s",async section=>{
+   ready.mockImplementationOnce(async()=>{
+     if(section==="agents")cfg.agents.defaults={workspace:"/changed"};
+     if(section==="query")cfg.channels.query.enabled=false;
+     if(section==="bindings")cfg.bindings.push({type:"route",agentId:"old",match:{channel:"telegram"}});
+     return true;
+   });
+   const result=await provisionQueryAgent(manifest(),false,deps);
+   expect(result.error).toBe("concurrent_configuration_change");
+   expect(agents()).toHaveLength(1);
+   expect(cfg.channels.query.accounts?.sales).toBeUndefined();
+   expect(await readdir(root)).toEqual([]);
+ });
+ it("accepts key reordering without losing unrelated changes",async()=>{
+   ready.mockImplementationOnce(async()=>{
+     cfg.channels.query=Object.fromEntries(Object.entries(cfg.channels.query).reverse());
+     cfg.messages={ackReaction:"ok"};
+     return true;
+   });
+   expect((await provisionQueryAgent(manifest(),false,deps)).status).toBe("created");
+   expect(cfg.messages).toEqual({ackReaction:"ok"});
  });
  it("blocks a conflicting tenant token",async()=>{
    vi.stubEnv("QUERY_OPENCLAW_TOKEN","other");
@@ -79,7 +125,7 @@ describe("native Query provisioning", () => {
    const original=mutate.getMockImplementation()!;
    mutate.mockImplementationOnce(async (...args:any[])=>{ await original(...args); throw new Error("after_write_failed"); });
    const result=await provisionQueryAgent(manifest(), false, deps);
-   expect(result.rollback).toBe("restored"); expect(cfg.agents.list).toHaveLength(1); expect(await readdir(root)).toEqual([]);
+   expect(result.rollback).toBe("restored"); expect(agents()).toHaveLength(1); expect(await readdir(root)).toEqual([]);
  });
  it("retains user files if rollback cleanup detects new content",async()=>{
    ready.mockImplementationOnce(async()=>true).mockImplementationOnce(async()=>{await writeFile(join(root,"sales","SOUL.md"),"human content");return false;});
@@ -107,8 +153,48 @@ describe("native Query provisioning", () => {
    expect(cfg.channels.query.accounts.sales.effortMode).toBe("careful");
    expect(await readdir(root)).toContain("sales");
  });
+ it.each(["off", "restart"])("retains a durable pending receipt for activation (%s)", async mode => {
+   if (mode === "off") cfg.gateway = { reload: { mode: "off" } };
+   else {
+     const apply = mutate.getMockImplementation()!;
+     mutate.mockImplementation(async (...args:any[]) => { await apply(...args); return { followUp: { requiresRestart: true } }; });
+   }
+   expect((await provisionQueryAgent(manifest(), false, deps)).status).toBe("pending_activation");
+   expect(mutate).toHaveBeenCalledTimes(1);
+   expect(ready).toHaveBeenCalledTimes(1);
+   const receipt = await readFile(join(root,"sales",".query-provision-activation.json"),"utf8");
+   expect(receipt).not.toContain("token");
+   expect(JSON.parse(receipt).status).toBe("pending_activation");
+   expect(await verifyPendingProvisionActivations(deps)).toEqual([{ agentId:"sales", accountId:"sales", status:"ready" }]);
+   expect(ready.mock.calls[1][0].map((x:any)=>x.id)).toEqual(["default","sales"]);
+   expect(mutate).toHaveBeenCalledTimes(1);
+   expect(await verifyPendingProvisionActivations(deps)).toEqual([]);
+ });
+ it("records failed activation without removing persisted config",async()=>{
+   cfg.gateway={reload:{mode:"off"}};
+   await provisionQueryAgent(manifest(),false,deps);
+   ready.mockResolvedValue(false);
+   expect(await verifyPendingProvisionActivations(deps)).toEqual([{agentId:"sales",accountId:"sales",status:"activation_failed"}]);
+   expect(agents()).toHaveLength(2); expect(mutate).toHaveBeenCalledTimes(1);
+ });
+ it("does not certify activation if an original account disappeared",async()=>{
+   cfg.gateway={reload:{mode:"off"}};
+   await provisionQueryAgent(manifest(),false,deps);
+   delete cfg.channels.query.url;
+   ready.mockClear();
+   expect(await verifyPendingProvisionActivations(deps)).toEqual([{agentId:"sales",accountId:"sales",status:"activation_failed"}]);
+   expect(ready).not.toHaveBeenCalled();
+ });
+ it("never verifies an activation receipt with a changed identity",async()=>{
+   cfg.gateway={reload:{mode:"off"}};
+   await provisionQueryAgent(manifest(),false,deps);
+   const p=join(root,"sales",".query-provision-activation.json");
+   const state=JSON.parse(await readFile(p,"utf8"));state.accountId="foreign";
+   await writeFile(p,JSON.stringify(state));ready.mockClear();
+   expect(await verifyPendingProvisionActivations(deps)).toEqual([]);expect(ready).not.toHaveBeenCalled();
+ });
  it("exposes the native tool only to trusted owner turns",()=>{
-   const registerTool=vi.fn(); registerQueryProvision({registerTool} as any);
+   const registerTool=vi.fn(); registerQueryProvision({registerTool,on:vi.fn()} as any);
    const factory=registerTool.mock.calls[0][0];
    expect(factory({})).toBeNull(); expect(factory({senderIsOwner:false})).toBeNull();
    expect(factory({senderIsOwner:true,sandboxed:true})).toBeNull();
