@@ -425,9 +425,9 @@ export class QuerySocketMonitor {
       // faltaba a las tareas que ya existian cuando arranco el gateway.
       try {
         const { backfillQuerySchedules } = await import("./cron-sync.js");
-        backfillQuerySchedules(
+        void backfillQuerySchedules(
           this.options.account.accountId,
-          sendQueryOutboundEvent,
+          undefined,
           this.options.log,
         );
       } catch (error) {

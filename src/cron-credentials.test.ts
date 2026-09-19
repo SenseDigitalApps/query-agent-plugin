@@ -666,7 +666,7 @@ describe("registro de la tarea", () => {
     expect(tools[0]({ messageChannel: "telegram" })).toBeNull();
   });
 
-  it("correlaciona dos creaciones nativas concurrentes por call ID y por ID real", async () => {
+  it.each(["cron", "automations"])("correlaciona creaciones concurrentes por call ID (%s)", async toolName => {
     const { api, hooks } = fakeApi();
     const send = vi.fn();
     registerQueryCronSync(api as never, send);
@@ -674,7 +674,7 @@ describe("registro de la tarea", () => {
     rememberQuerySession(SESSION, { threadId: ORIGIN_THREAD, accountId: "sales" });
     for (const actor of ["alice", "bob"]) {
       rememberDelegatedAuth(ORIGIN_THREAD, { token: actor, expires_in: 900 }, SOCKET);
-      await hooks.get("before_tool_call")?.({ toolName: "cron", toolCallId: actor,
+      await hooks.get("before_tool_call")?.({ toolName, toolCallId: actor,
         params: { action: "add", job: { delivery: cronAdded().job.delivery } } },
         { sessionKey: SESSION });
     }
@@ -682,24 +682,24 @@ describe("registro de la tarea", () => {
       const job = { id: `real-${actor}`, delivery: cronAdded().job.delivery };
       await hooks.get("cron_changed")?.({ action: "added", jobId: job.id, job });
       expect(send.mock.calls.at(-1)?.[1].data.delegated_token).toBeUndefined();
-      await hooks.get("after_tool_call")?.({ toolName: "cron", toolCallId: actor,
+      await hooks.get("after_tool_call")?.({ toolName, toolCallId: actor,
         params: { action: "add" }, result: { content: [{ type: "text", text: JSON.stringify(job) }] } }, {});
       expect(send.mock.calls.at(-1)?.[1].data).toMatchObject({ external_id: job.id, delegated_token: actor, authorization_version: 2 });
     }
     hooks.get("gateway_stop")?.();
   });
 
-  it("mantiene isolated, limpia la sesión humana y bloquea la CLI autenticada", async () => {
+  it.each(["cron", "automations"])("mantiene isolated y captura autorización (%s)", async toolName => {
     const { api, hooks } = fakeApi();
     const send = vi.fn();
     registerQueryCronSync(api as never, send);
     rememberQuerySession(SESSION, { threadId: ORIGIN_THREAD, accountId: "sales" });
     rememberDelegatedAuth(ORIGIN_THREAD, { token: "editor-turn", expires_in: 900 }, SOCKET);
-    const native = await hooks.get("before_tool_call")?.({ toolName: "cron", toolCallId: "update-call", params: {
+    const native = await hooks.get("before_tool_call")?.({ toolName, toolCallId: "update-call", params: {
       action: "update", jobId: "existing", patch: { sessionTarget: "session:direct:13", delivery: { channel: "query", accountId: "sales", to: "channel:86" } },
     } }, { sessionKey: SESSION });
     expect(native.params.patch).toMatchObject({ sessionTarget: "isolated", sessionKey: null });
-    await hooks.get("after_tool_call")?.({ toolName: "cron", toolCallId: "update-call", params: {},
+    await hooks.get("after_tool_call")?.({ toolName, toolCallId: "update-call", params: {},
       result: { id: "existing", ...native.params.patch } }, {});
     expect(send.mock.calls.at(-1)?.[1].data).toMatchObject({
       action: "updated", external_id: "existing", delegated_token: "editor-turn", authorization_version: 2,

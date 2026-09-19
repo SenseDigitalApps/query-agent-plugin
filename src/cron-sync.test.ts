@@ -11,6 +11,16 @@ import {
 import { forgetDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
 import { setOpenClawConfigLoader } from "./google-accounts.js";
 
+const scheduleAuth = vi.hoisted(() => vi.fn(async (_thread: string, externalId: string) => ({
+  auth: { token: "test-only", source: "schedule", external_id: externalId, identity: { id: 2 } },
+  socketUrl: "wss://query.example/ws",
+})));
+vi.mock("./socket.js", async (importOriginal) => ({
+  ...await importOriginal<typeof import("./socket.js")>(),
+  requestQueryScheduleAuth: scheduleAuth,
+}));
+const accepted = async (_account: string, event: any) => ({ external_id: event.data.external_id, authorized: true });
+
 type Hook = (...args: any[]) => unknown;
 
 const stateDirectory = mkdtempSync(join(tmpdir(), "query-cron-sync-"));
@@ -177,7 +187,7 @@ describe("backfill de crones preexistentes", () => {
   /** Arranca el gateway con tareas ya registradas y devuelve los hooks. */
   async function startWithExistingCrons(
     jobs: unknown[],
-    send = vi.fn(),
+    send = vi.fn(accepted),
   ) {
     const { api, hooks } = fakeApi();
     registerQueryCronSync(api as never, send);
@@ -205,7 +215,7 @@ describe("backfill de crones preexistentes", () => {
   it("anuncia la tarea que Query nunca llego a conocer", async () => {
     const { send } = await startWithExistingCrons([existingJob]);
 
-    backfillQuerySchedules("sales", send);
+    await backfillQuerySchedules("sales", send);
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(send).toHaveBeenLastCalledWith(
@@ -231,7 +241,7 @@ describe("backfill de crones preexistentes", () => {
       "mensaje-posterior",
     );
 
-    backfillQuerySchedules("sales", send);
+    await backfillQuerySchedules("sales", send);
 
     expect(send.mock.calls[0][1].data).toMatchObject({
       sync_source: "startup_adoption",
@@ -244,8 +254,8 @@ describe("backfill de crones preexistentes", () => {
   it("no repite el anuncio al reconectar", async () => {
     const { send } = await startWithExistingCrons([existingJob]);
 
-    backfillQuerySchedules("sales", send);
-    backfillQuerySchedules("sales", send);
+    await backfillQuerySchedules("sales", send);
+    await backfillQuerySchedules("sales", send);
 
     expect(send).toHaveBeenCalledTimes(1);
   });
@@ -256,12 +266,12 @@ describe("backfill de crones preexistentes", () => {
     });
     const { api } = await startWithExistingCrons([existingJob], failing);
 
-    backfillQuerySchedules("sales", failing, api.logger as never);
+    await backfillQuerySchedules("sales", failing, api.logger as never);
     expect(api.logger.warn).toHaveBeenCalled();
 
     // Sigue pendiente: el siguiente `session.ready` vuelve a intentarlo.
-    const retry = vi.fn();
-    backfillQuerySchedules("sales", retry);
+    const retry = vi.fn(accepted);
+    await backfillQuerySchedules("sales", retry);
     expect(retry).toHaveBeenCalledTimes(1);
   });
 
@@ -271,7 +281,7 @@ describe("backfill de crones preexistentes", () => {
       { ...existingJob, id: "cron-otro", delivery: { ...existingJob.delivery, accountId: "soporte" } },
     ]);
 
-    backfillQuerySchedules("sales", send);
+    await backfillQuerySchedules("sales", send);
 
     expect(send).toHaveBeenCalledTimes(1);
     expect(send.mock.calls[0][0]).toBe("sales");
@@ -288,8 +298,34 @@ describe("backfill de crones preexistentes", () => {
     });
     expect(send).toHaveBeenCalledTimes(1);
 
-    backfillQuerySchedules("sales", send);
+    await backfillQuerySchedules("sales", send);
     expect(send).toHaveBeenCalledTimes(1);
+  });
+
+  it("retains rejected, missing and mismatched ACKs until a confirmed retry", async () => {
+    for (const reply of [undefined, { external_id: "cron-viejo", authorized: false }, { external_id: "other", authorized: true }]) {
+      await startWithExistingCrons([existingJob]);
+      const confirm = vi.fn().mockResolvedValue(reply);
+      await backfillQuerySchedules("sales", confirm);
+      const retry = vi.fn(accepted);
+      await backfillQuerySchedules("sales", retry);
+      await backfillQuerySchedules("sales", retry);
+      expect(retry).toHaveBeenCalledTimes(1);
+    }
+  });
+
+  it("deduplicates reconnects while waiting for ACK and survives concurrent removal", async () => {
+    const { hooks } = await startWithExistingCrons([existingJob]);
+    let resolve!: (value: any) => void;
+    const confirm = vi.fn(() => new Promise<any>((done) => { resolve = done; }));
+    const first = backfillQuerySchedules("sales", confirm);
+    await backfillQuerySchedules("sales", confirm);
+    expect(confirm).toHaveBeenCalledTimes(1);
+    await hooks.get("cron_changed")?.({ action: "removed", jobId: existingJob.id });
+    resolve({ external_id: existingJob.id, authorized: true });
+    await first;
+    await backfillQuerySchedules("sales", confirm);
+    expect(confirm).toHaveBeenCalledTimes(1);
   });
 
   it("ignora una tarea sin destino resoluble", async () => {
@@ -297,7 +333,7 @@ describe("backfill de crones preexistentes", () => {
       { id: "cron-sin-cuenta", delivery: { channel: "query", threadId: "private-9" } },
     ]);
 
-    backfillQuerySchedules("sales", send);
+    await backfillQuerySchedules("sales", send);
     expect(send).not.toHaveBeenCalled();
   });
 });
@@ -351,6 +387,32 @@ describe("prueba no destructiva de cron", () => {
       drive_available: true,
     });
     setOpenClawConfigLoader(undefined);
+    hooks.get("gateway_stop")?.();
+  });
+
+  it("fails closed on missing, wrong or unavailable scheduled credentials without leaking them", async () => {
+    const { api, hooks } = fakeApi();
+    const run = vi.fn();
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("gateway_start")?.({}, { getCron: () => ({ run, list: async () => [{
+      id: "probe-auth", delivery: { channel: "query", accountId: "sales", to: "42" },
+    }] }) });
+    for (const scenario of ["missing", "wrong-source", "wrong-id", "transport"]) {
+      if (scenario === "transport") scheduleAuth.mockRejectedValueOnce(new Error("private-error"));
+      else scheduleAuth.mockResolvedValueOnce((scenario === "missing" ? undefined : {
+        auth: { token: "do-not-expose", source: scenario === "wrong-source" ? "human" : "schedule",
+          external_id: scenario === "wrong-id" ? "other" : "probe-auth", identity: { id: 2 } },
+      }) as never);
+      const result = await probeQuerySchedule({ externalId: "probe-auth", threadId: "42", queryAccountId: "sales" });
+      expect(result.ok).toBe(false);
+      expect(result.checks.scheduled_authorization).toBe(false);
+      expect(JSON.stringify(result)).not.toMatch(/do-not-expose|private-error/);
+    }
+    scheduleAuth.mockClear();
+    const result = await probeQuerySchedule({ externalId: "probe-auth", threadId: "42", queryAccountId: "foreign" });
+    expect(result.ok).toBe(false);
+    expect(scheduleAuth).not.toHaveBeenCalled();
+    expect(run).not.toHaveBeenCalled();
     hooks.get("gateway_stop")?.();
   });
 

@@ -143,6 +143,7 @@ const pendingBackfill = new Map<
 // reconocerse como nuestro: es lo que decide si sus herramientas pasan por el
 // control de cuentas externas o se las salta.
 const queryCronIds = new Set<string>();
+const backfillInFlight = new Set<string>();
 // Runtime receipts omit summaries. Keep the structured completion evidence,
 // scoped by account and cron, without storing message contents or credentials.
 const cronCompletions = new Map<string, {
@@ -193,6 +194,11 @@ function prunePendingMutations(now = Date.now()): void {
   }
 }
 
+// OpenClaw now emits automations; cron remains a supported legacy alias.
+function isSchedulerTool(name: string): boolean {
+  return ["cron", "automations"].includes(name.trim().toLowerCase());
+}
+
 function mutationAction(value: unknown): PendingCronMutation["action"] | undefined {
   if (value === "add") return "added";
   if (value === "update") return "updated";
@@ -224,7 +230,7 @@ function captureCronMutation(
   context: { sessionKey?: string; toolCallId?: string },
   pinned?: Awaited<ReturnType<typeof externalContextForRun>>,
 ): void {
-  if (event.toolName.trim().toLowerCase() !== "cron") return;
+  if (!isSchedulerTool(event.toolName)) return;
   const action = mutationAction(event.params.action);
   if (!action) return;
   const session = getQuerySession(context.sessionKey);
@@ -438,55 +444,46 @@ async function adoptExistingQueryCrons(api: OpenClawPluginApi): Promise<void> {
  * Anuncia a Query los crones que ya existian cuando arranco el gateway.
  *
  * Lo llama el socket al quedar lista la sesion: antes de eso no hay a quien
- * mandarselo. Cada tarea se suelta una sola vez por proceso -se borra del mapa
- * al conseguirlo-, asi que reconectar no repite el anuncio.
+ * mandarselo. Cada tarea se retira solo tras confirmación positiva del backend.
+ * Un rechazo o timeout conserva el pendiente para la próxima conexión.
  *
  * La adopción nunca reutiliza la credencial corta que casualmente esté viva en
  * el canal: esa credencial puede pertenecer a una conversación posterior y no
  * prueba quién creó el cron histórico. Query lo registra para que su migración
  * administrativa resuelva la identidad con evidencia durable.
  */
-export function backfillQuerySchedules(
+export async function backfillQuerySchedules(
   accountId: string,
-  sendEvent: typeof sendQueryOutboundEvent = sendQueryOutboundEvent,
+  confirm: typeof confirmQueryScheduleSync = confirmQueryScheduleSync,
   log?: { info?: (message: string) => void; warn?: (message: string) => void },
-): void {
-  if (!pendingBackfill.size) return;
-  let announced = 0;
-  for (const [jobId, entry] of [...pendingBackfill]) {
-    if (entry.target.accountId !== accountId) continue;
+): Promise<void> {
+  await Promise.all([...pendingBackfill].map(async ([jobId, entry]) => {
+    if (entry.target.accountId !== accountId || backfillInFlight.has(jobId)) return;
+    backfillInFlight.add(jobId);
     const outbound: QueryOutboundEvent = {
-      type: "schedule.sync",
-      role: "system",
-      content: "",
-      client_msg_id: "",
+      type: "schedule.sync", role: "system", content: "", client_msg_id: "",
       thread_id: entry.target.threadId,
       data: {
-        action: "added",
-        external_id: jobId,
-        job: entry.job,
-        sync_source: "startup_adoption",
-        authorization_version: 2,
+        action: "added", external_id: jobId, job: entry.job,
+        sync_source: "startup_adoption", authorization_version: 2,
         query_account_id: accountId,
       },
     };
     try {
-      sendEvent(accountId, outbound);
-      pendingBackfill.delete(jobId);
-      announced += 1;
-    } catch (error) {
-      // La sesion se cayo entre medias: se deja pendiente para el proximo
-      // ``session.ready`` en vez de darlo por anunciado.
-      log?.warn?.(
-        `query cron backfill fallo para ${jobId}: ${String(error)}`,
-      );
+      const ack = await confirm(accountId, outbound);
+      if (!ack || ack.external_id !== jobId || ack.authorized !== true) {
+        log?.warn?.(`query cron backfill pendiente ${jobId}: ${ack ? "authorization_rejected" : "confirmation_missing"}; reintento en próxima conexión.`);
+        return;
+      }
+      // An update/removal during the request must not be overwritten by a late ACK.
+      if (pendingBackfill.get(jobId) === entry) pendingBackfill.delete(jobId);
+      log?.info?.(`query cron backfill confirmado ${jobId}.`);
+    } catch {
+      log?.warn?.(`query cron backfill pendiente ${jobId}: transport_error; reintento en próxima conexión.`);
+    } finally {
+      backfillInFlight.delete(jobId);
     }
-  }
-  if (announced) {
-    log?.info?.(
-      `query cron backfill anuncio ${announced} tarea(s) preexistente(s).`,
-    );
-  }
+  }));
 }
 
 export async function cancelQuerySchedules(
@@ -538,6 +535,17 @@ export async function probeQuerySchedule(params: {
     query_account: explicitQueryAccountId(delivery ?? {}) === params.queryAccountId,
     delivery_target: String(target ?? "").trim().replace(/^(direct|channel):/, "") === params.threadId.replace(/^(direct|channel):/, ""),
   };
+  // Request only against a matching inventory entry; never borrow human auth.
+  checks.scheduled_authorization = false;
+  if (Object.entries(checks).filter(([key]) => key !== "scheduled_authorization").every(([, value]) => value)) {
+    try {
+      const granted = await requestQueryScheduleAuth(String(target), params.externalId, params.queryAccountId);
+      checks.scheduled_authorization = Boolean(
+        granted?.auth.token && granted.auth.source === "schedule" &&
+        granted.auth.external_id === params.externalId && granted.auth.identity?.id
+      );
+    } catch { /* Transport failure is not a healthy authorization. */ }
+  }
   const googleAccountId = params.googleAccountId?.trim();
   if (googleAccountId) {
     const google = await inspectGoogleWorkspaceConfiguration(googleAccountId);
@@ -555,7 +563,7 @@ export async function probeQuerySchedule(params: {
     ok,
     checks,
     detail: ok
-      ? "La tarea, su destino y sus integraciones requeridas están configurados."
+      ? "La tarea y su destino están configurados y Query confirmó la credencial programada. Las integraciones se revisaron solo a nivel de configuración; no se ejecutó el cron."
       : "La prueba encontró una configuración incompleta; no se ejecutó el cron.",
   };
 }
@@ -792,7 +800,7 @@ export function registerQueryCronSync(
         /\bopenclaw\s+cron\s+(add|edit)\b/i.test(String(event.params?.command ?? ""))) {
       return { block: true, blockReason: "Para crones Query autenticados usa la herramienta nativa cron en modo isolated; la CLI no captura la autorización del creador." };
     }
-    if (event.toolName !== "cron" || !mutationAction(event.params.action)) return;
+    if (!isSchedulerTool(event.toolName) || !mutationAction(event.params.action)) return;
     let pinned;
     const runId = context?.runId ?? event.runId;
     if (runId && session && !session.jobId) {
@@ -809,7 +817,7 @@ export function registerQueryCronSync(
       context ?? {},
       pinned,
     );
-    if (session && !session.jobId && event.toolName === "cron" &&
+    if (session && !session.jobId && isSchedulerTool(event.toolName) &&
         ["add", "update"].includes(String(event.params.action))) {
       const key = event.params.action === "add" ? "job" : "patch";
       const patch = isRecord(event.params[key]) ? event.params[key] : {};
@@ -1350,7 +1358,7 @@ export function registerQueryCronSync(
     return syncChanged(event);
   });
   api.on("after_tool_call", async (event, context) => {
-    if (event.toolName !== "cron") return;
+    if (!isSchedulerTool(event.toolName)) return;
     const callId = context?.toolCallId ?? event.toolCallId;
     if (!callId) return;
     const index = pendingCronMutations.findIndex((item) => item.toolCallId === callId);
