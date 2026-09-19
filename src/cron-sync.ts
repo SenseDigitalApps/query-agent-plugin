@@ -759,7 +759,7 @@ export function registerQueryCronSync(
   });
   // Some SDK declarations omit the runtime-supported trigger filter. Keep the
   // same options structurally, including priority, without removing the filter.
-  const scheduledReplyHookOptions = { eligibleTriggers: ["cron"], priority: 100 };
+  const scheduledReplyHookOptions = { eligibleTriggers: ["cron"] as const, priority: 100 };
   api.on("before_agent_reply", async (_event, context) => {
     // Native Codex does not emit before_agent_run. Claim cron turns here so a
     // missing scheduled credential stops before inference on every supported
