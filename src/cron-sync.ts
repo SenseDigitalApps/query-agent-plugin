@@ -121,6 +121,20 @@ type PendingCronMutation = {
   originClientMsgId?: string;
   creatorUserId?: number;
   runAsUserId?: number;
+  /**
+   * Quien pide la mutacion administra el tenant, segun el contexto firmado
+   * que manda Query junto al token.
+   *
+   * Sin esto se exigia que el editor fuera tambien el ejecutor de la tarea.
+   * En una tarea heredada el ejecutor suele ser justo quien ya no esta, asi
+   * que el administrador no podia tocarla: fallaba con ``identity_mismatch``
+   * y nadie quedaba en condiciones de arreglarla.
+   *
+   * No concede nada. Query es quien decide con que identidad corre un cron y
+   * solo emite credencial para esa; aqui unicamente se deja de imponer la del
+   * editor. Query ni siquiera lee el ``run_as_user_id`` que enviamos.
+   */
+  actorIsTenantAdmin?: boolean;
   capturedAt: number;
 };
 
@@ -912,7 +926,8 @@ export function registerQueryCronSync(
         if (!ack.authorized) throw Object.assign(new Error("query_schedule_authorization_rejected"), {
           authorizationReason: ack.error && /^[a-z_]{1,80}$/.test(ack.error) ? ack.error : undefined,
         });
-        if (ack.run_as_user_id !== mutation?.runAsUserId) {
+        // Un administrador conserva a proposito el ejecutor original.
+        if (!mutation?.actorIsTenantAdmin && ack.run_as_user_id !== mutation?.runAsUserId) {
           throw new Error("query_schedule_authorization_identity_mismatch");
         }
       } else sendEvent(destination.accountId, outbound);
@@ -1082,6 +1097,7 @@ export function registerQueryCronSync(
               requestedTarget: targetFromDelivery(delivery), delegatedToken: actor.auth.token,
               originClientMsgId: actor.clientMsgId, creatorUserId: actor.auth.identity?.id,
               runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
+              actorIsTenantAdmin: actor.auth.identity?.is_tenant_admin === true,
               capturedAt: Date.now(),
             }, true);
             const publicResult = { ok: true, action: "removed", job_id: jobId, removed: true };
@@ -1113,10 +1129,12 @@ export function registerQueryCronSync(
               originClientMsgId: actor.clientMsgId,
               creatorUserId: actor.auth.identity?.id,
               runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
+              actorIsTenantAdmin: actor.auth.identity?.is_tenant_admin === true,
               capturedAt: Date.now(),
             };
             await syncChanged({ action: "updated", jobId, job: current }, mutation, true);
-            await confirmAuthorization(jobId, effectiveDelivery, mutation.runAsUserId);
+            await confirmAuthorization(jobId, effectiveDelivery,
+              mutation.actorIsTenantAdmin ? undefined : mutation.runAsUserId);
             const requestedAt = Date.now();
             cronCompletions.delete(cronCompletionKey(actor.queryAccountId, jobId));
             const runResult = await cronService.run(jobId, "force");
@@ -1187,10 +1205,12 @@ export function registerQueryCronSync(
                 originClientMsgId: actor.clientMsgId,
                 creatorUserId: actor.auth.identity?.id,
                 runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
+                actorIsTenantAdmin: actor.auth.identity?.is_tenant_admin === true,
                 capturedAt: Date.now(),
               };
               await syncChanged({ action: "updated", jobId: item.jobId, job: resultingJob }, mutation, true);
-              await confirmAuthorization(item.jobId, item.delivery, mutation.runAsUserId);
+              await confirmAuthorization(item.jobId, item.delivery,
+                mutation.actorIsTenantAdmin ? undefined : mutation.runAsUserId);
               updated.push({ job_id: item.jobId, session_target: "isolated" });
             }
             const publicResult = { ok: true, action: "updated_many", count: updated.length, jobs: updated };
@@ -1266,10 +1286,14 @@ export function registerQueryCronSync(
             creatorUserId: actor.auth.identity?.id,
             runAsUserId:
               (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
+            // Crear sigue fijando al autor; editar una tarea ajena, no.
+            actorIsTenantAdmin:
+              action !== "added" && actor.auth.identity?.is_tenant_admin === true,
             capturedAt: Date.now(),
           };
           await syncChanged({ action, jobId, job: resultingJob }, mutation, true);
-          const authorization = await confirmAuthorization(jobId, effectiveDelivery, mutation.runAsUserId);
+          const authorization = await confirmAuthorization(jobId, effectiveDelivery,
+            mutation.actorIsTenantAdmin ? undefined : mutation.runAsUserId);
           if (params.action === "add" && params.job.enabled !== false) {
             activationAttempted = true;
             await cronService.update(jobId, { enabled: true });

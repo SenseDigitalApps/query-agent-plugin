@@ -130,6 +130,12 @@ export type QueryDelegatedIdentity = {
   username?: string;
   email?: string;
   display_name?: string;
+  /**
+   * Quien habla administra el tenant. Es contexto que manda Query, no un
+   * permiso: sirve para no imponerle aqui restricciones que Query no le impone.
+   * Toda operacion se comprueba igualmente del lado de Query.
+   */
+  is_tenant_admin?: boolean;
 };
 
 /** Credencial corta con la que el agente actua en nombre del usuario. */

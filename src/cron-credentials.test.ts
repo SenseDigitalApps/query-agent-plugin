@@ -197,6 +197,35 @@ describe("eliminacion desde el chat", () => {
 });
 
 describe("registro de la tarea", () => {
+  it("un administrador edita una tarea que ejecuta otra persona", async () => {
+    // El ejecutor heredado suele ser justo quien ya no esta. Exigir que el
+    // editor fuera el ejecutor dejaba la tarea sin quien la arreglara.
+    const { api, hooks, tools } = fakeApi();
+    const job = { id: "inherited-cron", agentId: "query", name: "Auditoria", sessionTarget: "isolated",
+      delivery: { channel: "query", accountId: "sales", to: "channel:86" } };
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("gateway_start")?.({}, { getCron: () => ({
+      list: vi.fn().mockResolvedValue([job]), add: vi.fn(), update: vi.fn().mockResolvedValue(job), run: vi.fn(),
+    }) });
+    rememberQuerySession(SESSION, { threadId: "24", accountId: "sales" });
+    rememberExternalContext({ sessionKey: SESSION, senderId: "1", threadId: "24",
+      queryAccountId: "sales", socketUrl: SOCKET, agentToken: "agent", clientMsgId: "admin-message",
+      auth: { token: "signed-admin", expires_in: 900, identity: { id: 1, is_tenant_admin: true } } });
+    vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ targets: [{ thread_id: "86" }] }) }));
+    const tool = tools[0]({ messageChannel: "query", sessionKey: SESSION, requesterSenderId: "1",
+      agentAccountId: "sales", agentId: "query" });
+
+    // Query conserva al ejecutor original (38), distinto del administrador (1).
+    confirmQueryScheduleSync.mockResolvedValue({ external_id: job.id, authorized: true, run_as_user_id: 38 });
+    requestQueryScheduleAuth.mockResolvedValue({ socketUrl: SOCKET, auth: {
+      token: "scheduled", source: "schedule", external_id: job.id, identity: { id: 38 } } });
+
+    const result = await tool.execute("admin-call", { action: "update", job_id: job.id, patch: {} });
+
+    expect(result.details).toMatchObject({ ok: true, action: "updated", job_id: job.id });
+    expect(result.details.authorization).toMatchObject({ authorized: true, run_as_user_id: 38 });
+  });
+
   it.each(["add", "update", "run"])("%s espera el acuse y falla sin autorización, sin iniciar el agente", async (action) => {
     const { api, hooks, tools } = fakeApi();
     const job = { id: "support-cron", agentId: "query", name: "Support", sessionTarget: "isolated",
