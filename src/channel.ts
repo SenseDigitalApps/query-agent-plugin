@@ -41,6 +41,8 @@ function newOutboundClientMsgId(deliveryQueueId?: string): string {
 }
 
 export function uploadTargetForOutbound(to: string, threadId?: string | number | null): string {
+  // An explicit private recipient wins over an inherited source conversation.
+  if (/^(user:|username:|direct:)/i.test(to.trim())) return to.trim();
   if (threadId !== undefined && threadId !== null && String(threadId).trim()) {
     return String(threadId).trim();
   }
@@ -134,6 +136,9 @@ export async function sendOutboundEvent(params: {
   deliveryQueueId?: string;
   data?: Record<string, unknown>;
 }) {
+  if (/^(user:|username:|direct:)/i.test(params.to.trim())) {
+    params = {...params, threadId: params.to.trim()};
+  }
   const { sendQueryOutboundEvent } = await import("./socket.js");
   const accountId = params.accountId?.trim() || DEFAULT_ACCOUNT_ID;
   const rewritten = await rewritePrivateLinksForOutbound(

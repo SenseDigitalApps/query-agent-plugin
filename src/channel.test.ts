@@ -1,11 +1,16 @@
 import { WebSocketServer, type WebSocket } from "ws";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { createServer } from "node:http";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
 import { queryPlugin, sendOutboundEvent, uploadTargetForOutbound } from "./channel.js";
 import type { QueryConfig, QueryOutboundEvent } from "./types.js";
+
+vi.mock("./socket.js", () => ({
+  getQueryAccountForUpload: () => undefined,
+  sendQueryOutboundEvent: () => {throw new Error("No monitor in isolated test");},
+}));
 
 const cleanupTasks: Array<() => Promise<void>> = [];
 
@@ -36,6 +41,19 @@ describe("uploadTargetForOutbound", () => {
 });
 
 describe("sendOutboundEvent", () => {
+  it.each(['user:7','username:owner','direct:17'])('routes proactive private %s to its recipient instead of the source thread', async to => {
+    const server = new WebSocketServer({port:0});
+    const address = server.address();
+    if (!address || typeof address === 'string') throw new Error('No server');
+    cleanupTasks.push(async()=>{for(const client of server.clients) client.terminate();server.close();});
+    const event = new Promise<QueryOutboundEvent>((resolve,reject)=>{
+      server.once('connection',socket=>receive(socket).then(resolve,reject));
+      server.once('error',reject);
+    });
+    expect(uploadTargetForOutbound(to,999)).toBe(to);
+    await sendOutboundEvent({cfg:{channels:{query:{accounts:{private:{enabled:true,url:`ws://127.0.0.1:${address.port}/ws/openclaw-agent/8/`,token:'test-token'}}}}} as QueryConfig,accountId:'private',to,threadId:999,text:'Mensaje privado proactivo'});
+    await expect(event).resolves.toMatchObject({role:'assistant',thread_id:to,content:'Mensaje privado proactivo',data:{to,thread_id:to}});
+  });
   it("falls back to a direct Query socket when no gateway monitor is active", async () => {
     const server = new WebSocketServer({ port: 0 });
     const address = server.address();

@@ -426,3 +426,7 @@ El mensaje nuevo de Query invoca `query_agent_provision` con un manifiesto v1. H
 Se puede validar con `dry_run: true`. La ejecucion normal agrega agente, cuenta y binding en una sola mutacion y comprueba `session.ready` de la cuenta nueva y las anteriores. Usa la recarga oficial del canal Query: puede interrumpir temporalmente todas sus cuentas. No requiere una version modificada de OpenClaw. La URL raiz legacy permanece como cuenta default al agregar cuentas nombradas.
 
 Ante `existing_accounts_not_ready`, recuperar primero las cuentas ya caidas. Ante `manual_recovery_required` o `recovery_pending`, no repetir altas ni borrar archivos: revisar configuracion, conexiones y el marcador `.query-provision.json`. Un lock abandonado requiere revision del operador. La herramienta no modifica agentes existentes ni sirve para rotar tokens o borrar agentes.
+
+## Mensajes proactivos al privado
+
+El agente puede usar el envío de mensajes del canal `query` cuando necesite avisar al usuario, sin solicitar aprobación por cada mensaje. Destinos: `username:<username exacto de Query>`, `user:<ID de Query>` o `direct:<ID del hilo privado>`. Core resuelve la persona dentro del tenant del agente y exige usuario activo con acceso al agente; no hace falta que el usuario haya iniciado antes el privado. Un destino privado explícito prevalece sobre el threadId heredado del canal de origen, también para adjuntos. Esta facultad permite mensajes y enlaces al formulario privado, no leer ni copiar credenciales en el chat.

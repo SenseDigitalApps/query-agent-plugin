@@ -516,7 +516,7 @@ export function queryImportStatusForThread(
 
 
 async function postPrivate(threadId: string, params: Record<string, unknown>, name: string, log: QueryToolLog): Promise<unknown> {
-  const allowed = new Set(["action", "account_id", "integration", "label", "operation_id", "document_id", "idempotency_key", "text"]);
+  const allowed = new Set(["action", "account_id", "integration", "label", "secret_fields", "operation_id", "document_id", "idempotency_key", "text"]);
   if (Object.keys(params).some(key => !allowed.has(key))) return {ok: false, error: "private_form_required"};
   return postQuery(threadId, "private-delivery/", {...params, thread_id: threadId}, name, log);
 }
@@ -535,8 +535,8 @@ export default defineToolPlugin({
     }),
     tool({
       name: "query_private_request", label: "Query: entrega privada",
-      description: "Solicita entrega privada de cualquier credencial. Usa integration=credential para contraseñas, API keys, tokens, claves privadas o conjuntos de credenciales de cualquier servicio, incluso sin adaptador disponible. Se guardan cifradas sin validación externa ni consumidor conectado. OpenAI y LinkedIn tienen adaptadores de uso; protected_information es exclusivamente información para analizar, nunca secretos técnicos. Query crea el botón Entregar de forma privada en el chat privado del usuario. Renovar usa account_id. Nuevo requiere integration y label sin datos secretos. Nunca pidas valores en el chat, comandos, archivos ni herramientas. Para contraseñas SMTP usa query_smtp_connect. Configurar no autoriza publicaciones ni activa tareas. Sólo los adaptadores del catálogo pueden consumir credenciales; no elijas URLs ni destinos alternativos.",
-      parameters: Type.Object({thread_id: THREAD_PARAM, account_id: Type.Optional(Type.String()), integration: Type.Optional(Type.Union([Type.Literal("credential"),Type.Literal("openai"),Type.Literal("linkedin"),Type.Literal("protected_information")])), label: Type.Optional(Type.String({maxLength:100}))}, {additionalProperties:false}),
+      description: "Solicita entrega privada de cualquier credencial mediante un contenedor dentro del chat. Para una key usa integration=credential y secret_fields=[\"api_key\"]; para varios valores usa secret_fields con sus nombres, por ejemplo [\"client_id\",\"client_secret\",\"access_token\",\"refresh_token\"]. Los nombres nunca deben contener valores, contraseñas, tokens ni defaults. Los 1 a 12 valores se entregan juntos directamente a Core; el modelo sólo recibe estado. secret_fields sólo aplica a credential; OpenAI y LinkedIn tienen campos fijos. Al renovar omite secret_fields para conservarlos. Usa integration=credential para contraseñas, API keys, tokens, claves privadas o conjuntos de credenciales de cualquier servicio, incluso sin adaptador disponible. Se guardan cifradas sin validación externa ni consumidor conectado. OpenAI y LinkedIn tienen adaptadores de uso; protected_information es exclusivamente información para analizar, nunca secretos técnicos. Query crea el botón Entregar de forma privada en el chat privado del usuario. Renovar usa account_id. Nuevo requiere integration y label sin datos secretos. Nunca pidas valores en el chat, comandos, archivos ni herramientas. Para contraseñas SMTP usa query_smtp_connect. Configurar no autoriza publicaciones ni activa tareas. Sólo los adaptadores del catálogo pueden consumir credenciales; no elijas URLs ni destinos alternativos.",
+      parameters: Type.Object({thread_id: THREAD_PARAM, account_id: Type.Optional(Type.String()), integration: Type.Optional(Type.Union([Type.Literal("credential"),Type.Literal("openai"),Type.Literal("linkedin"),Type.Literal("protected_information")])), label: Type.Optional(Type.String({maxLength:100})), secret_fields: Type.Optional(Type.Array(Type.String({pattern:"^[a-z][a-z0-9_]{0,63}$"}), {minItems:1,maxItems:12,uniqueItems:true}))}, {additionalProperties:false}),
       execute: async ({thread_id, ...params}, _config, context) => postPrivate(thread_id, {...params, action:"request"}, "query_private_request", context.api.logger),
     }),
     tool({
@@ -555,14 +555,14 @@ export default defineToolPlugin({
     ...["accounts", "grants", "connect", "revoke", "disconnect"].map((action) => tool({
       name: `query_smtp_${action}`,
       label: `Query SMTP: ${action}`,
-      description: "Gestiona cuentas SMTP autorizadas en Query. connect devuelve el enlace privado al formulario; nunca pidas contraseñas en el chat. grants y revoke requieren administrador. La conexión no autoriza envíos.",
-      parameters: Type.Object({thread_id: THREAD_PARAM, account_id: Type.Optional(Type.String()), beneficiary_id: Type.Optional(Type.Integer())}, {additionalProperties: false}),
+      description: "Gestiona cuentas SMTP autorizadas en Query. connect crea una tarjeta Conectar correo en el privado del beneficiario y devuelve el enlace web alternativo. El usuario introduce sólo su contraseña en el modal autenticado de Query. Usa esta herramienta para configurar SMTP/WorkMail; no generes scripts, archivos instaladores, comandos de consola ni servicios locales. Nunca pidas contraseñas en el chat. grants y revoke requieren administrador. grants permite filtrar por beneficiary_username (username exacto de Query, no login SMTP) o beneficiary_id; si envías ambos deben coincidir. La conexión no autoriza envíos.",
+      parameters: Type.Object({thread_id: THREAD_PARAM, account_id: Type.Optional(Type.String()), ...(action === "grants" ? {beneficiary_id: Type.Optional(Type.Integer({minimum:1})), beneficiary_username: Type.Optional(Type.String({minLength:1,maxLength:150}))} : {})}, {additionalProperties: false}),
       execute: async ({thread_id, ...params}, _config, context) => postQuery(thread_id, "smtp/", {action, thread_id, ...params}, `query_smtp_${action}`, context.api.logger),
     })),
     tool({
       name: "query_smtp_preauthorize", label: "Query SMTP: autorizar correos",
-      description: "Autoriza direcciones exactas a un usuario del tenant. Requiere administrador; no concede administración del Gateway. SMTP genérico y WorkMail: servidor explícito, TLS directo 465 o STARTTLS obligatorio 587.",
-      parameters: Type.Object({thread_id: THREAD_PARAM, beneficiary_id: Type.Integer(), addresses: Type.Array(Type.String(), {minItems: 1, maxItems: 25}), provider: Type.Union([Type.Literal("smtp"), Type.Literal("workmail")]), host: Type.String(), port: Type.Union([Type.Literal(465), Type.Literal(587)]), tls: Type.Union([Type.Literal("tls"), Type.Literal("starttls")])}, {additionalProperties: false}),
+      description: "Autoriza direcciones exactas a un usuario del tenant. Indica beneficiary_username (username exacto de Query, no el usuario SMTP) o beneficiary_id; al enviar ambos deben identificar a la misma persona. Requiere administrador; no concede administración del Gateway. SMTP genérico y WorkMail: servidor explícito, TLS directo 465 o STARTTLS obligatorio 587.",
+      parameters: Type.Object({thread_id: THREAD_PARAM, beneficiary_id: Type.Optional(Type.Integer({minimum:1})), beneficiary_username: Type.Optional(Type.String({minLength:1,maxLength:150})), addresses: Type.Array(Type.String(), {minItems: 1, maxItems: 25}), provider: Type.Union([Type.Literal("smtp"), Type.Literal("workmail")]), host: Type.String(), port: Type.Union([Type.Literal(465), Type.Literal(587)]), tls: Type.Union([Type.Literal("tls"), Type.Literal("starttls")])}, {additionalProperties: false}),
       execute: async ({thread_id, ...params}, _config, context) => postQuery(thread_id, "smtp/", {action: "preauthorize", thread_id, ...params}, "query_smtp_preauthorize", context.api.logger),
     }),
     tool({

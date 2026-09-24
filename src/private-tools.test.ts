@@ -28,11 +28,11 @@ describe('private delivery registration and transport',()=>{
     vi.stubGlobal('fetch',fetchMock);
     const call=registered().find(c=>c[1]?.name==='query_private_request')!;
     const tool=call[0]({sessionKey:'test-private-session'});
-    await tool.execute('call',{thread_id:'42',integration:'openai',label:'My account'});
+    await tool.execute('call',{thread_id:'42',integration:'credential',label:'My account',secret_fields:['api_key','client_secret']});
     expect(fetchMock).toHaveBeenCalledTimes(1);
     const [url,options]=fetchMock.mock.calls[0] as unknown as [string,RequestInit];
     expect(url).toContain('/api/v4/openclaw-agent/private-delivery/');
-    expect(JSON.parse(String(options.body))).toMatchObject({action:'request',thread_id:'42',integration:'openai'});
+    expect(JSON.parse(String(options.body))).toMatchObject({action:'request',thread_id:'42',integration:'credential',secret_fields:['api_key','client_secret']});
     expect(options.headers).toMatchObject({'X-Query-Delegated-Token':'delegated-test'});
     await tool.execute('call2',{thread_id:'42',integration:'openai',label:'My account',api_key:'do-not-forward'});
     expect(fetchMock).toHaveBeenCalledTimes(1);

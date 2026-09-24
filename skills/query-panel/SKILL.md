@@ -451,3 +451,15 @@ Si Query rechaza la propuesta, la respuesta trae el motivo: campo inexistente,
 campo de solo lectura, valor fuera de las opciones permitidas o falta de
 permiso. Corrige con esa informacion y vuelve a proponer; no insistas con el
 mismo payload.
+
+## Conectar correo SMTP o WorkMail en Query
+
+Para «configurar correo», consulta `query_smtp_accounts` y selecciona la cuenta autorizada; si hay varias, identifica cuál necesita el usuario. Usa `query_smtp_connect` con su `account_id` y el hilo actual. Core crea en el privado del beneficiario la tarjeta **Conectar correo**. El botón abre un modal de Query con la cuenta identificada y un único campo de contraseña. Conserva el enlace web devuelto como alternativa.
+
+No crees scripts Python, instaladores, archivos con credenciales, comandos de consola ni servicios locales en OpenClaw para este flujo. No pidas que la contraseña se escriba como mensaje: el formulario la envía directamente a Core con la sesión humana. Recibes únicamente el estado; puedes consultarlo con `query_smtp_accounts`. Conectar no autoriza envíos ni activa tareas. Si falta la autorización administrativa, usa el flujo `query_smtp_preauthorize` con el administrador, manteniendo la contraseña fuera del agente.
+
+Puedes enviar avisos y enlaces por el privado con el canal Query sin pedir aprobación por cada mensaje. Usa `username:<username exacto de Query>`, `user:<ID>` o `direct:<hilo privado>`; el destinatario debe tener acceso al agente en este tenant. No incluyas valores secretos.
+
+## Una o varias credenciales en el chat
+
+Usa `query_private_request` con `integration=credential`, una etiqueta sin secretos y `secret_fields` con los nombres de 1 a 12 campos. Para una key: `["api_key"]`. Para un conjunto: `["client_id","client_secret","access_token","refresh_token"]`. No incluyas valores ni ejemplos secretos en esos nombres. Query abre un modal dentro del chat, con valores enmascarados y consentimiento; el envío completo va directamente al backend humano autenticado, no a herramientas. Renueva con `account_id` sin cambiar los campos. OpenAI y LinkedIn usan sus campos predefinidos. El enlace a Cuentas y credenciales queda como alternativa.
