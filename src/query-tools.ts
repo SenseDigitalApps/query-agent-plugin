@@ -514,12 +514,44 @@ export function queryImportStatusForThread(
     {}, "query_imports_status", log);
 }
 
+
+async function postPrivate(threadId: string, params: Record<string, unknown>, name: string, log: QueryToolLog): Promise<unknown> {
+  const allowed = new Set(["action", "account_id", "integration", "label", "operation_id", "document_id", "idempotency_key", "text"]);
+  if (Object.keys(params).some(key => !allowed.has(key))) return {ok: false, error: "private_form_required"};
+  return postQuery(threadId, "private-delivery/", {...params, thread_id: threadId}, name, log);
+}
+
 export default defineToolPlugin({
   id: "query-tools",
   name: "Query",
   description:
     "Consulta modulos, campos y registros de Query en nombre de la persona con la que conversas.",
   tools: (tool) => [
+    tool({
+      name: "query_private_accounts", label: "Query: cuentas privadas",
+      description: "Lista sólo las cuentas privadas del usuario y de este agente, y el catálogo de integraciones disponibles. No devuelve valores protegidos. Varias cuentas requieren selección explícita; no reutilices cuentas de otra persona.",
+      parameters: Type.Object({thread_id: THREAD_PARAM}, {additionalProperties: false}),
+      execute: async ({thread_id, ...params}, _config, context) => postPrivate(thread_id, {...params, action: "accounts"}, "query_private_accounts", context.api.logger),
+    }),
+    tool({
+      name: "query_private_request", label: "Query: entrega privada",
+      description: "Solicita entrega privada de cualquier credencial. Usa integration=credential para contraseñas, API keys, tokens, claves privadas o conjuntos de credenciales de cualquier servicio, incluso sin adaptador disponible. Se guardan cifradas sin validación externa ni consumidor conectado. OpenAI y LinkedIn tienen adaptadores de uso; protected_information es exclusivamente información para analizar, nunca secretos técnicos. Query crea el botón Entregar de forma privada en el chat privado del usuario. Renovar usa account_id. Nuevo requiere integration y label sin datos secretos. Nunca pidas valores en el chat, comandos, archivos ni herramientas. Para contraseñas SMTP usa query_smtp_connect. Configurar no autoriza publicaciones ni activa tareas. Sólo los adaptadores del catálogo pueden consumir credenciales; no elijas URLs ni destinos alternativos.",
+      parameters: Type.Object({thread_id: THREAD_PARAM, account_id: Type.Optional(Type.String()), integration: Type.Optional(Type.Union([Type.Literal("credential"),Type.Literal("openai"),Type.Literal("linkedin"),Type.Literal("protected_information")])), label: Type.Optional(Type.String({maxLength:100}))}, {additionalProperties:false}),
+      execute: async ({thread_id, ...params}, _config, context) => postPrivate(thread_id, {...params, action:"request"}, "query_private_request", context.api.logger),
+    }),
+    tool({
+      name: "query_private_revoke", label: "Query: revocar cuenta privada",
+      description: "Revoca únicamente la cuenta privada indicada del usuario para este agente. Bloquea usos posteriores; no revoca el token en el proveedor externo.",
+      parameters: Type.Object({thread_id:THREAD_PARAM,account_id:Type.String()}, {additionalProperties:false}),
+      execute: async ({thread_id, ...params}, _config, context) => postPrivate(thread_id, {...params,action:"revoke"}, "query_private_revoke", context.api.logger),
+    }),
+    tool({
+      name: "query_private_operation", label: "Query: usar integración privada",
+      description: "propose prepara generación/análisis OpenAI o publicación de texto LinkedIn con account_id, idempotency_key estable y text (nunca credenciales). Para analizar información protegida usa document_id: el contenido se resuelve en Core únicamente tras consentimiento humano. Query muestra contenido y destino para aprobación. execute sólo ejecuta operation_id ya aprobado; status devuelve estado y, sólo si el titular lo autorizó y estamos en su privado, resultado. Nunca inventes consentimiento, copies secretos mediante comandos ni reintentes uncertain con otra clave. Sin cron ni activación de automatizaciones.",
+      parameters: Type.Object({thread_id:THREAD_PARAM,action:Type.Union([Type.Literal("propose"),Type.Literal("execute"),Type.Literal("status")]),account_id:Type.Optional(Type.String()),operation_id:Type.Optional(Type.String()),document_id:Type.Optional(Type.String()),idempotency_key:Type.Optional(Type.String({maxLength:100})),text:Type.Optional(Type.String({maxLength:10000}))}, {additionalProperties:false}),
+      execute: async ({thread_id, ...params}, _config, context) => postPrivate(thread_id, params, "query_private_operation", context.api.logger),
+    }),
+
     ...["accounts", "grants", "connect", "revoke", "disconnect"].map((action) => tool({
       name: `query_smtp_${action}`,
       label: `Query SMTP: ${action}`,
