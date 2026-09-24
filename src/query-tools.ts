@@ -520,6 +520,26 @@ export default defineToolPlugin({
   description:
     "Consulta modulos, campos y registros de Query en nombre de la persona con la que conversas.",
   tools: (tool) => [
+    ...["accounts", "grants", "connect", "revoke", "disconnect"].map((action) => tool({
+      name: `query_smtp_${action}`,
+      label: `Query SMTP: ${action}`,
+      description: "Gestiona cuentas SMTP autorizadas en Query. connect devuelve el enlace privado al formulario; nunca pidas contraseñas en el chat. grants y revoke requieren administrador. La conexión no autoriza envíos.",
+      parameters: Type.Object({thread_id: THREAD_PARAM, account_id: Type.Optional(Type.String()), beneficiary_id: Type.Optional(Type.Integer())}, {additionalProperties: false}),
+      execute: async ({thread_id, ...params}, _config, context) => postQuery(thread_id, "smtp/", {action, thread_id, ...params}, `query_smtp_${action}`, context.api.logger),
+    })),
+    tool({
+      name: "query_smtp_preauthorize", label: "Query SMTP: autorizar correos",
+      description: "Autoriza direcciones exactas a un usuario del tenant. Requiere administrador; no concede administración del Gateway. SMTP genérico y WorkMail: servidor explícito, TLS directo 465 o STARTTLS obligatorio 587.",
+      parameters: Type.Object({thread_id: THREAD_PARAM, beneficiary_id: Type.Integer(), addresses: Type.Array(Type.String(), {minItems: 1, maxItems: 25}), provider: Type.Union([Type.Literal("smtp"), Type.Literal("workmail")]), host: Type.String(), port: Type.Union([Type.Literal(465), Type.Literal(587)]), tls: Type.Union([Type.Literal("tls"), Type.Literal("starttls")])}, {additionalProperties: false}),
+      execute: async ({thread_id, ...params}, _config, context) => postQuery(thread_id, "smtp/", {action: "preauthorize", thread_id, ...params}, "query_smtp_preauthorize", context.api.logger),
+    }),
+    tool({
+      name: "query_smtp_send", label: "Query SMTP: preparar o enviar correo",
+      description: "Exige account_id explícito. Si hay varias cuentas sin selección o preferencia válida, pregunta cuál usar. propose recibe mensaje e idempotency_key estable y devuelve enlace para revisión humana en Query. send recibe submission_id aprobado y transmite exactamente ese mensaje. Nunca cambia From, nunca inventa aprobación, nunca reintenta un resultado uncertain ni genera otra clave para repetirlo. accepted sólo significa aceptación SMTP, no entrega. No disponible para cron.",
+      parameters: Type.Object({thread_id: THREAD_PARAM, action: Type.Union([Type.Literal("propose"), Type.Literal("send")]), account_id: Type.String(), submission_id: Type.Optional(Type.String()), idempotency_key: Type.Optional(Type.String()), to: Type.Optional(Type.Array(Type.String(), {minItems: 1, maxItems: 50})), subject: Type.Optional(Type.String()), body: Type.Optional(Type.String())}, {additionalProperties: false}),
+      execute: async ({thread_id, ...params}, _config, context) => postQuery(thread_id, "smtp/", {thread_id, ...params}, "query_smtp_send", context.api.logger),
+    }),
+
     tool({
       name: "query_delivery_targets",
       label: "Query: destinos de tareas programadas",
