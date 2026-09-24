@@ -228,7 +228,18 @@
       "query_imports_propose",
       "query_imports_status",
       "query_artifact_new_version",
-      "brightdata_x_profile_posts"
+      "brightdata_x_profile_posts",
+      "query_smtp_accounts",
+      "query_smtp_grants",
+      "query_smtp_preauthorize",
+      "query_smtp_connect",
+      "query_smtp_revoke",
+      "query_smtp_disconnect",
+      "query_smtp_send",
+      "query_private_accounts",
+      "query_private_request",
+      "query_private_revoke",
+      "query_private_operation"
     ]
   }
 }
