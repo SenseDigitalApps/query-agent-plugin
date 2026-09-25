@@ -610,9 +610,23 @@ export default defineToolPlugin({
     }),
     tool({
       name: "query_private_operation", label: "Query: usar integración privada",
-      description: "propose prepara generación/análisis OpenAI o publicación de texto LinkedIn con account_id, idempotency_key estable y text (nunca credenciales). Para analizar información protegida usa document_id: el contenido se resuelve en Core únicamente tras consentimiento humano. Query muestra contenido y destino para aprobación. execute sólo ejecuta operation_id ya aprobado; status devuelve estado y, sólo si el titular lo autorizó y estamos en su privado, resultado. Nunca inventes consentimiento, copies secretos mediante comandos ni reintentes uncertain con otra clave. Sin cron ni activación de automatizaciones.",
+      description: "propose prepara generación/análisis OpenAI o publicación de texto LinkedIn con account_id, idempotency_key estable y text (nunca credenciales). Para analizar información protegida usa document_id: el contenido se resuelve en Core únicamente tras consentimiento humano. Query muestra contenido y destino para aprobación. execute sólo ejecuta operation_id ya aprobado; status devuelve estado y, sólo si el titular lo autorizó y estamos en su privado, resultado. Nunca inventes consentimiento, copies secretos mediante comandos ni reintentes uncertain con otra clave. Para crones LinkedIn usa query_linkedin con su autorización por cuenta, destino y acciones; esta herramienta conserva el flujo interactivo anterior.",
       parameters: Type.Object({thread_id:THREAD_PARAM,action:Type.Union([Type.Literal("propose"),Type.Literal("execute"),Type.Literal("status")]),account_id:Type.Optional(Type.String()),operation_id:Type.Optional(Type.String()),document_id:Type.Optional(Type.String()),idempotency_key:Type.Optional(Type.String({maxLength:100})),text:Type.Optional(Type.String({maxLength:10000}))}, {additionalProperties:false}),
       execute: async ({thread_id, ...params}, _config, context) => postPrivate(thread_id, params, "query_private_operation", context.api.logger),
+    }),
+    tool({
+      name: "query_linkedin", label: "Query: automatización LinkedIn",
+      description: "Usa cuentas LinkedIn ya guardadas en Query sin recibir sus tokens. accounts muestra destinos, capacidades y autorizaciones. Cuando el usuario solicita una automatización, registra el cron con query_cron_manage y desde ese mismo chat llama authorize con account_id, schedule_external_id real, destination (URN de la página) y actions: text, image y/o first_comment (text obligatorio). Esa instrucción autoriza una vez; no pidas aprobación por publicación ni envíes al usuario a la web. Sólo autoriza las acciones y el destino solicitados. El cron usa publish con cuenta, destino, texto, idempotency_key estable por ocurrencia y publicación; image_attachment_id toma una imagen del hilo, alt_text es opcional y first_comment agrega un comentario a la publicación creada. No toma tokens, URLs de imágenes ni destinos arbitrarios. waiting_image permite resume con operation_id después de retry_after_seconds; status sólo consulta. Nunca repitas completed/partial/uncertain/rejected con otra clave. partial indica que el post existe pero el comentario no se completó; informa ambos resultados sin volver a publicar. revoke_authorization revoca un cron desde el chat. La credencial programada determina qué cron ejecuta; no puedes elegir otro. Query renueva el token si LinkedIn concedió un refresh token válido; permisos faltantes o reconexión se informan en el chat. No uses query_private_operation para automatizar LinkedIn ni bloquees FTP/SMTP por una limitación del proveedor.",
+      parameters: Type.Object({thread_id: THREAD_PARAM,
+        action: Type.Union([Type.Literal("accounts"),Type.Literal("authorize"),Type.Literal("revoke_authorization"),Type.Literal("publish"),Type.Literal("resume"),Type.Literal("status")]),
+        account_id: Type.Optional(Type.String()), schedule_external_id: Type.Optional(Type.String({maxLength:200})),
+        destination: Type.Optional(Type.String({pattern:"^urn:li:organization:[0-9]+$"})),
+        actions: Type.Optional(Type.Array(Type.Union([Type.Literal("text"),Type.Literal("image"),Type.Literal("first_comment")]),{minItems:1,maxItems:3})),
+        idempotency_key: Type.Optional(Type.String({maxLength:100})), text: Type.Optional(Type.String({maxLength:3000})),
+        image_attachment_id: Type.Optional(Type.Integer({minimum:1})), alt_text: Type.Optional(Type.String({maxLength:4086})),
+        first_comment: Type.Optional(Type.String({maxLength:1250})), operation_id: Type.Optional(Type.String()),
+      }, {additionalProperties:false}),
+      execute: async ({thread_id,...params}, _config, context) => postQuery(thread_id,"linkedin/",{thread_id,...params},"query_linkedin",context.api.logger),
     }),
 
     ...["accounts", "grants", "connect", "revoke", "disconnect", "prefer"].map((action) => tool({

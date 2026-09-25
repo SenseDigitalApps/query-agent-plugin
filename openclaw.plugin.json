@@ -242,6 +242,7 @@
       "query_private_request",
       "query_private_revoke",
       "query_private_operation",
+      "query_linkedin",
       "query_ftp_authorize",
       "query_ftp_execute",
       "query_ftp_status",
