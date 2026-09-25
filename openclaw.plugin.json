@@ -236,6 +236,8 @@
       "query_smtp_revoke",
       "query_smtp_disconnect",
       "query_smtp_send",
+      "query_smtp_setup",
+      "query_smtp_prefer",
       "query_private_accounts",
       "query_private_request",
       "query_private_revoke",

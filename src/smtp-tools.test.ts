@@ -7,10 +7,10 @@ afterEach(()=>vi.unstubAllGlobals());
 import {getToolPluginMetadata} from 'openclaw/plugin-sdk/tool-plugin';
 
 describe('SMTP tool exposure', () => {
-  it('exposes seven tools through the actual plugin registration and no secret schema', () => {
+  it('exposes conversational SMTP tools through registration without secret schemas', () => {
     const metadata = getToolPluginMetadata(entry)!;
     const smtp = metadata.tools.filter(t => t.name.startsWith('query_smtp_'));
-    expect(smtp.map(t => t.name).sort()).toEqual(['accounts','grants','preauthorize','connect','revoke','disconnect','send'].map(n => `query_smtp_${n}`).sort());
+    expect(smtp.map(t => t.name).sort()).toEqual(['accounts','grants','preauthorize','connect','revoke','disconnect','send','setup','prefer'].map(n => `query_smtp_${n}`).sort());
     for (const tool of smtp) {
       expect(Object.keys(tool.parameters.properties ?? {})).not.toContain('password');
       expect(tool.parameters.additionalProperties).toBe(false);
@@ -48,3 +48,22 @@ it.each(['preauthorize','grants'])('forwards Query username and legacy ID for SM
   }
   expect(fetchMock).toHaveBeenCalledTimes(3);
 });
+
+it.each([
+  {action:'propose',attachment_ids:[23],idempotency_key:'stable',to:['to@example.com'],subject:'PDF',body:'Adjunto'},
+  {action:'revise',submission_id:'draft',attachment_ids:[],new_account_id:'second',expected_digest:'digest'},
+  {action:'send',submission_id:'draft',expected_digest:'digest'},
+  {action:'retry',submission_id:'rejected'},
+])('forwards conversational SMTP action $action to the same account service',async params=>{
+  const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({status:'accepted'})}))
+  vi.stubGlobal('fetch',fetchMock)
+  const registerTool=vi.fn()
+  entry.register({registerTool,pluginConfig:{},logger:{info:vi.fn(),warn:vi.fn(),error:vi.fn(),debug:vi.fn()}} as any)
+  const registration=registerTool.mock.calls.find(c=>c[1]?.name==='query_smtp_send')!
+  const tool=registration[0]({sessionKey:'smtp-test-session'})
+  await tool.execute('call',{thread_id:'42',account_id:'existing',...params})
+  const [url,options]=fetchMock.mock.calls[0] as any
+  expect(url).toContain('/api/v4/openclaw-agent/smtp/')
+  expect(JSON.parse(options.body)).toEqual({thread_id:'42',account_id:'existing',...params})
+  expect(options.headers).toMatchObject({'X-Query-Delegated-Token':'delegated-test'})
+})

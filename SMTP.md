@@ -1,22 +1,31 @@
-# SMTP en Query
+# SMTP desde el chat
 
-Herramientas registradas por query-tools desde index.ts y tools-entry.ts:
-query_smtp_accounts, query_smtp_grants, query_smtp_preauthorize,
-query_smtp_connect, query_smtp_revoke, query_smtp_disconnect, query_smtp_send.
+Herramientas: query_smtp_accounts, query_smtp_grants, query_smtp_preauthorize,
+query_smtp_connect, query_smtp_revoke, query_smtp_disconnect, query_smtp_prefer,
+query_smtp_setup y query_smtp_send. Mantener las nueve en la allowlist.
 
-Administración: autorizar dirección exacta, usuario y servidor. Autoservicio:
-Conectar → formulario autenticado de Query → contraseña → conexión validada.
-Nunca solicites ni transportes contraseñas en herramientas, chat o configuración
-de OpenClaw. SMTP vive en Core; Google Workspace conserva su implementación.
+Todo se completa desde la conversación. La página de cuentas es opcional para
+revisar. setup crea la cuenta propia con email/host/port/tls/login opcional;
+connect reconecta una existente. La contraseña se entrega a Core mediante la
+entrada privada dentro del chat; nunca viaja como mensaje ni parámetro de tool.
 
-Las respuestas path son rutas relativas al frontend del tenant de Query.
-Preséntalas como enlaces o dirige al usuario a Mis cuentas de correo.
-Para enviar, propone el contenido con account_id e idempotency_key estable.
-El usuario revisa y pulsa Autorizar y enviar en Query. No hace falta volver
-a llamar send salvo que quede aprobado sin ejecutar. No reintentes uncertain.
-Conectar no autoriza campañas. Un cron no tiene permiso en este alcance.
+send ofrece propose, revise, send, approve, status, submissions, cancel y retry.
+Una solicitud explícita de envío permite proponer y enviar en el mismo turno,
+sin otra confirmación. Un borrador se conserva hasta que el usuario pida enviarlo;
+«aprobada» basta si la propuesta es inequívoca. Core vincula la operación al
+mensaje humano firmado. Renovar credenciales antiguas con auth.refresh.
 
-Compilar con npm run build al preparar despliegue; npm run check y npm test
-antes de empaquetar. No se modifican compilados ni se reinicia el Gateway.
-Si la instalación usa una allowlist de herramientas, añade exclusivamente
-estos siete nombres; no requiere herramientas administrativas del Gateway.
+attachment_ids usa archivos del hilo (hasta 20 archivos y 20 MiB en total) sobre
+la misma cuenta SMTP; no usar un skill local distinto para adjuntos. revise
+cambia el mismo submission_id, incluidos adjuntos y new_account_id. Usar el
+expected_digest devuelto al editar/enviar. No modificar correos ya procesados.
+
+accepted significa aceptación SMTP, no llegada al buzón. No repetir accepted ni
+uncertain. retry sólo reintenta rejected tras una nueva solicitud del usuario y
+conserva idempotencia. Preguntar únicamente ante ambigüedad real. Conectar por sí
+solo no pide enviar; si ya había una solicitud de envío, continuar tras conectar.
+
+Requiere Core con migración bot_gateway.0013_smtp_chat, backend y frontend nuevos.
+Compilar con npm run build, comprobar con npm run check y ejecutar pruebas SMTP
+y tool-contract. Actualizar también skills/query-panel/SKILL.md en el despliegue.
+SMTP programado queda fuera de este alcance; Gmail/OAuth no cambia.

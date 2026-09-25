@@ -22,7 +22,7 @@ describe("Query installed tool contract", () => {
       for (const name of names) (declared.has(name) ? accepted : rejected).push(name);
     }, pluginConfig: {}, logger: {info:vi.fn(),warn:vi.fn(),error:vi.fn(),debug:vi.fn()}} as any);
     expect(rejected).toEqual([]);
-    expect(accepted.filter(n => n.startsWith("query_smtp_")).length).toBe(7);
+    expect(accepted.filter(n => n.startsWith("query_smtp_")).length).toBe(9);
     expect(accepted.filter(n => n.startsWith("query_private_")).length).toBe(4);
   });
 });
