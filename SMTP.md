@@ -28,4 +28,4 @@ solo no pide enviar; si ya había una solicitud de envío, continuar tras conect
 Requiere Core con migración bot_gateway.0013_smtp_chat, backend y frontend nuevos.
 Compilar con npm run build, comprobar con npm run check y ejecutar pruebas SMTP
 y tool-contract. Actualizar también skills/query-panel/SKILL.md en el despliegue.
-SMTP programado queda fuera de este alcance; Gmail/OAuth no cambia.
+Los crones autorizados pueden consultar cuentas y preparar/enviar correo con adjuntos usando la cuenta conectada de su identidad de ejecución. No requieren confirmación en cada ejecución. Usa una clave de idempotencia por ocurrencia programada y correo, estable ante reintentos; nunca generes otra para repetir accepted/uncertain/rejected. No pueden configurar cuentas, administrar permisos ni usar retry. Si falta conexión, informa en el chat para conectarla allí. FTP usa query_ftp_accounts y allow_schedules; una limitación de LinkedIn no invalida FTP ni SMTP.

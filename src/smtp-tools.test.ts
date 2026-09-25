@@ -1,9 +1,10 @@
 import {afterEach, describe, expect, it, vi} from 'vitest';
+const scheduled = vi.hoisted(() => ({credential: undefined as any}));
 vi.mock('./cron-sync.js', () => ({primeScheduleCredential: vi.fn()}));
-vi.mock('./scheduled-context.js', () => ({scheduledCredential: vi.fn(), scheduledToolContext: {getStore: () => undefined}}));
+vi.mock('./scheduled-context.js', () => ({scheduledCredential: vi.fn(), scheduledToolContext: {getStore: () => scheduled.credential}}));
 vi.mock('./delegated-store.js',()=>({getDelegatedAuth:()=>({auth:{token:'delegated-test'},socketUrl:'wss://query.test/ws/'}),peekDelegatedAuth:()=>undefined,delegatedAuthStoreDiagnostics:()=>({keys:[],stateFile:'test'}),rememberDelegatedAuth:vi.fn(),threadsWithDelegatedAuth:()=>[]}));
 import entry from './query-tools.js';
-afterEach(()=>vi.unstubAllGlobals());
+afterEach(()=>{vi.unstubAllGlobals(); scheduled.credential = undefined;});
 import {getToolPluginMetadata} from 'openclaw/plugin-sdk/tool-plugin';
 
 describe('SMTP tool exposure', () => {
@@ -67,3 +68,23 @@ it.each([
   expect(JSON.parse(options.body)).toEqual({thread_id:'42',account_id:'existing',...params})
   expect(options.headers).toMatchObject({'X-Query-Delegated-Token':'delegated-test'})
 })
+it('uses the scheduled identity for SMTP and private/FTP discovery instead of the interactive token', async () => {
+  scheduled.credential = {auth:{token:'scheduled-test',source:'schedule'},socketUrl:'wss://query.test/ws/'};
+  const fetchMock = vi.fn(async () => ({ok:true,json:async()=>({accounts:[],status:'accepted'})}));
+  vi.stubGlobal('fetch', fetchMock);
+  const registerTool = vi.fn();
+  entry.register({registerTool,pluginConfig:{},logger:{info:vi.fn(),warn:vi.fn(),error:vi.fn(),debug:vi.fn()}} as any);
+  for (const [name, params] of [
+    ['query_private_accounts', {}],
+    ['query_ftp_accounts', {}],
+    ['query_smtp_accounts', {}],
+    ['query_smtp_send', {action:'send',account_id:'account',submission_id:'scheduled-draft'}],
+  ] as const) {
+    const registration = registerTool.mock.calls.find(c => c[1]?.name === name)!;
+    const tool = registration[0]({sessionKey:'scheduled-test-session'});
+    await tool.execute('call', {thread_id:'42',...params});
+    const [, options] = fetchMock.mock.calls.at(-1) as unknown as [string, RequestInit];
+    expect(options.headers).toMatchObject({'X-Query-Delegated-Token':'scheduled-test'});
+  }
+  expect(fetchMock).toHaveBeenCalledTimes(4);
+});
