@@ -1,3 +1,6 @@
+import { AsyncLocalStorage } from "node:async_hooks";
+import { executeFtp, ftpBridge, runtimeIdentity, safeFtpError } from "./ftp-executor.js";
+const ftpWorkspace = new AsyncLocalStorage<string | undefined>();
 import { Type } from "typebox";
 import { jsonResult, textResult } from "openclaw/plugin-sdk/tool-results";
 import { resolveQuerySession } from "./query-session-store.js";
@@ -521,12 +524,72 @@ async function postPrivate(threadId: string, params: Record<string, unknown>, na
   return postQuery(threadId, "private-delivery/", {...params, thread_id: threadId}, name, log);
 }
 
+async function ftpTool(threadId:string, params:Record<string,unknown>, log:QueryToolLog) {
+  try {
+    const stored=await delegatedAuthForTool(threadId,"query_ftp",log);
+    if(!stored)return noCredential();
+    const bridge=ftpBridge(stored,threadId);
+    const action=params.action;
+    if(action==='authorize') {
+      const allowed=new Set(['action','account_id','label','host','port','root','operations','allow_schedules','username_field','password_field','protocol','access_mode']);
+      if(Object.keys(params).some(key=>!allowed.has(key)))return {ok:false,error:'ftp_invalid_parameters'};
+      const {account_id,label,...policy}=params;delete policy.action;
+      return await bridge({action,...(account_id?{account_id}:{label}),policy:{...policy,port:policy.port??21,root:policy.root??'/public_html',
+        operations:policy.operations??['connect','list'],allow_schedules:policy.allow_schedules??false,protocol:policy.protocol??'ftps',access_mode:policy.access_mode??'owner',
+        username_field:policy.username_field??'username',password_field:policy.password_field??'password',runtime_key:runtimeIdentity().publicKey}});
+    }
+    if(action==='accounts')return await bridge({action});
+    if(action==='permissions') {
+      if(Object.keys(params).some(k=>!['action','account_id','access_mode'].includes(k)))return {ok:false,error:'ftp_invalid_parameters'};
+      return await bridge(params);
+    }
+    if(action==='status'||action==='revoke') {
+      const field=action==='status'?'operation_id':'account_id';
+      if(Object.keys(params).some(k=>!['action',field].includes(k)))return {ok:false,error:'ftp_invalid_parameters'};
+      return await bridge({action,[field]:params[field]});
+    }
+    const allowed=new Set(['action','account_id','idempotency_key','path','destination','local_file']);
+    if(Object.keys(params).some(k=>!allowed.has(k)))return {ok:false,error:'ftp_invalid_parameters'};
+    return await executeFtp(bridge,{account_id:String(params.account_id),idempotency_key:String(params.idempotency_key),
+      local_file:params.local_file as string|undefined,
+      operation:{action:String(action),path:String(params.path),...(action==='rename'?{destination:String(params.destination)}:{})}},ftpWorkspace.getStore());
+  } catch(error) {return {ok:false,error:safeFtpError(error)};}
+}
+
 export default defineToolPlugin({
   id: "query-tools",
   name: "Query",
   description:
     "Consulta modulos, campos y registros de Query en nombre de la persona con la que conversas.",
   tools: (tool) => [
+    tool({
+      name:"query_ftp_authorize",label:"Query: autorizar FTP en OpenClaw",
+      description:"Configura FTP o FTPS en una sola tarjeta privada. Para cuenta nueva usa label y omite account_id: el usuario entrega credenciales y elige permisos en el mismo formulario. Para cuenta guardada usa account_id: reutiliza sus secretos sin pedirlos otra vez. No pide ni recibe secretos. El usuario confirma protocolo, servidor, carpeta, operaciones, cron y acceso owner o agent_members. agent_members sigue los miembros actuales del agente sin reautenticacion. Usa nombres de campos de la cuenta, nunca valores. No activa cron. FTP sin TLS requiere seleccion explicita en el formulario; nunca cambies a FTP como fallback ante un fallo FTPS.",
+      parameters:Type.Object({thread_id:THREAD_PARAM,account_id:Type.Optional(Type.String()),label:Type.Optional(Type.String({maxLength:100})),host:Type.String(),protocol:Type.Optional(Type.Union([Type.Literal("ftp"),Type.Literal("ftps")])),access_mode:Type.Optional(Type.Union([Type.Literal("owner"),Type.Literal("agent_members")])),port:Type.Optional(Type.Integer({minimum:1,maximum:65535})),root:Type.Optional(Type.String()),
+        operations:Type.Array(Type.Union(['connect','list','upload','rename'].map(v=>Type.Literal(v))),{minItems:1}),
+        allow_schedules:Type.Optional(Type.Boolean()),username_field:Type.Optional(Type.String()),password_field:Type.Optional(Type.String())},{additionalProperties:false}),
+      execute:async({thread_id,...params},_config,context)=>ftpTool(thread_id,{...params,action:'authorize'},context.api.logger),
+    }),
+    tool({
+      name:"query_ftp_execute",label:"Query: ejecutar FTP desde OpenClaw",
+      description:"Conecta, lista, sube o renombra archivos mediante una cuenta FTP/FTPS autorizada. Usa query_ftp_accounts para descubrir cuentas propias o compartidas por miembros del agente. La conexion sale del servidor OpenClaw. Nunca devuelve credenciales. Rutas remotas absolutas dentro de la carpeta autorizada; local_file debe estar en el workspace del agente, maximo 20 MiB. Usa idempotency_key estable por operacion y reutilizala al consultar un intento repetido. Un resultado uncertain requiere revision; no reintentes con otra clave. Subida mediante archivo temporal y rename, sin borrar el destino como alternativa.",
+      parameters:Type.Object({thread_id:THREAD_PARAM,account_id:Type.String(),action:Type.Union(['connect','list','upload','rename'].map(v=>Type.Literal(v))),idempotency_key:Type.String({minLength:1,maxLength:96}),path:Type.String(),destination:Type.Optional(Type.String()),local_file:Type.Optional(Type.String())},{additionalProperties:false}),
+      execute:async({thread_id,...params},_config,context)=>ftpTool(thread_id,params,context.api.logger),
+    }),
+    tool({name:'query_ftp_accounts',label:'Query: cuentas FTP disponibles',
+      description:'Lista cuentas FTP propias o compartidas para el usuario actual, segun su acceso vigente al agente. No devuelve secretos. Miembros nuevos pueden usar cuentas agent_members sin volver a configurar; los retirados pierden acceso.',
+      parameters:Type.Object({thread_id:THREAD_PARAM},{additionalProperties:false}),
+      execute:async({thread_id},_config,context)=>ftpTool(thread_id,{action:'accounts'},context.api.logger)}),
+    tool({name:'query_ftp_permissions',label:'Query: cambiar acceso FTP',
+      description:'Solo el propietario, desde un turno interactivo, puede cambiar acceso owner (solo yo) o agent_members (todos los usuarios con acceso vigente al agente). Usar cuando el propietario pida compartir o dejar de compartir. Conserva la credencial y no requiere reautenticar. Los miembros pueden usar, pero nunca gestionar permisos.',
+      parameters:Type.Object({thread_id:THREAD_PARAM,account_id:Type.String(),access_mode:Type.Union([Type.Literal('owner'),Type.Literal('agent_members')])},{additionalProperties:false}),
+      execute:async({thread_id,...params},_config,context)=>ftpTool(thread_id,{...params,action:'permissions'},context.api.logger)}),
+    ...['status','revoke'].map(action=>tool({
+      name:`query_ftp_${action}`,label:`Query FTP: ${action}`,
+      description:"Consulta el estado auditable de una operacion FTP o revoca el permiso FTP conservando la credencial guardada. Estado disponible para el actor de la operacion y el propietario, con acceso vigente al agente. Solo el propietario puede revocar, desde un turno humano.",
+      parameters:Type.Object({thread_id:THREAD_PARAM,...(action==='status'?{operation_id:Type.String()}:{account_id:Type.String()})},{additionalProperties:false}),
+      execute:async({thread_id,...params},_config,context)=>ftpTool(thread_id,{...params,action},context.api.logger),
+    })),
     tool({
       name: "query_private_accounts", label: "Query: cuentas privadas",
       description: "Lista sólo las cuentas privadas del usuario y de este agente, y el catálogo de integraciones disponibles. No devuelve valores protegidos. Varias cuentas requieren selección explícita; no reutilices cuentas de otra persona.",
@@ -1090,7 +1153,7 @@ export default defineToolPlugin({
           required: (((definition.parameters as unknown as { required?: string[] }).required ?? [])).filter((key) => key !== "thread_id"),
         },
         execute: async (toolCallId, params, signal, onUpdate) => {
-          const invoke = (resolved: unknown) => definition.execute!(resolved, config, { api, toolCallId, signal, onUpdate });
+          const invoke = (resolved: unknown) => ftpWorkspace.run(toolContext.workspaceDir, () => definition.execute!(resolved, config, { api, toolCallId, signal, onUpdate }));
           let session = resolveQuerySession(sessionKey);
           // OpenClaw 2026.9.4 does not propagate cron trigger/job context to
           // every Codex preparation hook. Recover the scheduler-owned binding

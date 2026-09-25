@@ -1,3 +1,6 @@
+import {mkdtempSync,rmSync} from "node:fs";
+import {tmpdir} from "node:os";
+import {join} from "node:path";
 import {afterEach,describe,expect,it,vi} from 'vitest';
 vi.mock('./cron-sync.js',()=>({primeScheduleCredential:vi.fn()}));
 vi.mock('./scheduled-context.js',()=>({scheduledCredential:vi.fn(),scheduledToolContext:{getStore:()=>undefined}}));
@@ -36,5 +39,33 @@ describe('private delivery registration and transport',()=>{
     expect(options.headers).toMatchObject({'X-Query-Delegated-Token':'delegated-test'});
     await tool.execute('call2',{thread_id:'42',integration:'openai',label:'My account',api_key:'do-not-forward'});
     expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+  it('registers FTP operations with no secret fields and injects the runtime key internally',async()=>{
+    const directory=mkdtempSync(join(tmpdir(),'query-ftp-tools-'));
+    const old=process.env.OPENCLAW_STATE_DIR;process.env.OPENCLAW_STATE_DIR=directory;
+    try {
+      const calls=registered();
+      for(const name of ['query_ftp_authorize','query_ftp_execute','query_ftp_status','query_ftp_revoke','query_ftp_accounts','query_ftp_permissions']) {
+        expect(calls.some(c=>c[1]?.name===name)).toBe(true);
+        const properties=getToolPluginMetadata(entry)!.tools.find(t=>t.name===name)!.parameters.properties!;
+        for(const key of ['password','values','runtime_key','private_key','tenant','owner_id','agent_id'])expect(properties).not.toHaveProperty(key);
+      }
+      const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({delivery_id:'opaque',consumer:'ftp'})}));vi.stubGlobal('fetch',fetchMock);
+      const tool= calls.find(c=>c[1]?.name==='query_ftp_authorize')![0]({sessionKey:'test-private-session'});
+      const params={thread_id:'42',account_id:'account',host:'ftp.example.test',operations:['connect','list']};
+      await tool.execute('request',params);
+      const request=JSON.parse(fetchMock.mock.calls[0][1].body);
+      expect(request).toMatchObject({action:'authorize',thread_id:'42',policy:{host:'ftp.example.test',allow_schedules:false}});
+      expect(request.policy.runtime_key).toContain('BEGIN PUBLIC KEY');
+      await tool.execute('injection',{...params,password:'DO-NOT-FORWARD'});
+      expect(fetchMock).toHaveBeenCalledTimes(1);
+      await tool.execute('new',{thread_id:'42',label:'New FTP',host:'ftp.example.test',protocol:'ftp',access_mode:'agent_members'});
+      const fresh=JSON.parse(fetchMock.mock.calls[1][1].body);
+      expect(fresh).not.toHaveProperty('account_id');
+      expect(fresh).toMatchObject({label:'New FTP',policy:{protocol:'ftp',access_mode:'agent_members'}});
+      const permissions=calls.find(c=>c[1]?.name==='query_ftp_permissions')![0]({sessionKey:'test-private-session'});
+      await permissions.execute('share',{thread_id:'42',account_id:'account',access_mode:'agent_members'});
+      expect(JSON.parse(fetchMock.mock.calls[2][1].body)).toMatchObject({action:'permissions',account_id:'account',access_mode:'agent_members'});
+    } finally {if(old===undefined)delete process.env.OPENCLAW_STATE_DIR;else process.env.OPENCLAW_STATE_DIR=old;rmSync(directory,{recursive:true,force:true});}
   });
 });

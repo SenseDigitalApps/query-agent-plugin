@@ -239,7 +239,13 @@
       "query_private_accounts",
       "query_private_request",
       "query_private_revoke",
-      "query_private_operation"
+      "query_private_operation",
+      "query_ftp_authorize",
+      "query_ftp_execute",
+      "query_ftp_status",
+      "query_ftp_revoke",
+      "query_ftp_accounts",
+      "query_ftp_permissions"
     ]
   }
 }

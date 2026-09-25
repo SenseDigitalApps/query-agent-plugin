@@ -430,3 +430,49 @@ Ante `existing_accounts_not_ready`, recuperar primero las cuentas ya caidas. Ant
 ## Mensajes proactivos al privado
 
 El agente puede usar el envío de mensajes del canal `query` cuando necesite avisar al usuario, sin solicitar aprobación por cada mensaje. Destinos: `username:<username exacto de Query>`, `user:<ID de Query>` o `direct:<ID del hilo privado>`. Core resuelve la persona dentro del tenant del agente y exige usuario activo con acceso al agente; no hace falta que el usuario haya iniciado antes el privado. Un destino privado explícito prevalece sobre el threadId heredado del canal de origen, también para adjuntos. Esta facultad permite mensajes y enlaces al formulario privado, no leer ni copiar credenciales en el chat.
+
+
+## FTP desde OpenClaw con credenciales privadas de Query
+
+Herramientas `query_ftp_authorize`, `query_ftp_accounts`, `query_ftp_permissions`,
+`query_ftp_execute`, `query_ftp_status` y `query_ftp_revoke`. Requieren Core con
+migracion `0012_private_ftp_executor` y el frontend actualizado.
+
+`query_ftp_authorize` recibe `label` para crear una cuenta o `account_id` para
+reutilizar una credencial generica guardada, incluso un JSON antiguo dentro de
+`credential`. Recibe destino, raiz, operaciones y permiso de cron; nunca valores
+secretos. El formulario privado recoge los valores solo si hacen falta y permite
+elegir protocolo y alcance. Guardar entrega la credencial y autoriza su uso en
+un mismo paso. No pedir contrasenas en chat, scripts ni comandos.
+
+Soporta `protocol: ftp` (sin TLS) y `ftps` (TLS explicito, por defecto). La interfaz
+explica el transporte sin cifrar cuando se selecciona FTP. Nunca se degrada TLS
+a FTP automaticamente. Core fija IP publica, raiz y operaciones; FTPS verifica
+el certificado. Acciones: connect/list/upload/rename. Upload: archivo del workspace
+confiable, maximo 20 MiB, temporal y rename sin borrar el destino como alternativa.
+No reintentar resultados uncertain con otra idempotency_key sin revisar el estado.
+
+`access_mode: owner` limita el uso al propietario; `agent_members` lo permite a
+usuarios activos con acceso actual al mismo agente y tenant (incluidos grupos y
+administradores segun reglas de Query). Entrar o salir del agente cambia el permiso
+automaticamente. `query_ftp_accounts` descubre las cuentas utilizables. Solo el
+propietario puede renovar/revocar el secreto o cambiar permisos; puede pedirlo en
+chat con `query_ftp_permissions` o hacerlo desde el panel, sin reautenticacion ni
+nueva entrega. Compartir permite usar la conexion, nunca ver la contrasena.
+
+El runtime genera su clave en `$OPENCLAW_STATE_DIR/query-ftp-runtime.json` (por
+defecto ~/.openclaw), con modo 0600. Persistirla fuera del workspace del agente.
+Recibe el secreto en memoria mediante un sobre cifrado; el modelo solo recibe
+metadatos/resultados. El administrador del runtime sigue siendo de confianza.
+Cambiar identidad del ejecutor o destino requiere nueva autorizacion del alcance.
+Los cron requieren delegacion vigente del actor y permiso `allow_schedules`; se
+revalida la membresia. Ninguna de estas herramientas crea ni activa cron.
+
+Las cuentas guardadas no se borran ni se rotan al vincularlas. Politicas antiguas
+sin protocolo o alcance conservan FTPS y owner. Las configuraciones FTP externas
+en OpenClaw no se modifican ni se importan automaticamente. SMTP/Gmail mantienen
+sus flujos. Usar una version Node compatible con OpenClaw.
+
+Pruebas reales locales desde Core: `python -B ftp_executor_e2e.py RUTA_PLUGIN ftp`
+y el mismo comando con `ftps`, tras `npm run build`. Usan servidores y CA temporales,
+credenciales ficticias y puente HTTP de prueba en loopback; no prueban produccion.

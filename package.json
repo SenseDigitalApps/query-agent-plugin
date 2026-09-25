@@ -21,6 +21,7 @@
     "prepack": "npm run build && npm test"
   },
   "dependencies": {
+    "basic-ftp": "6.2.1",
     "node-edge-tts": "^1.2.10",
     "typebox": "^1.3.3",
     "ws": "^8.18.3"
