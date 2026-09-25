@@ -3,7 +3,7 @@ import {constants,createCipheriv,generateKeyPairSync,publicEncrypt,randomBytes} 
 import {mkdtemp,writeFile,rm} from 'node:fs/promises';
 import {tmpdir} from 'node:os';
 import {join} from 'node:path';
-import {executeFtp,ftpBridge} from './ftp-executor.js';
+import {executeFtp,ftpBridge,ftpIdempotencyKey} from './ftp-executor.js';
 
 const identity=generateKeyPairSync('rsa',{modulusLength:2048,publicKeyEncoding:{type:'spki',format:'pem'},privateKeyEncoding:{type:'pkcs8',format:'pem'}});
 const secret='PRIVATE-password-TEST';
@@ -18,6 +18,8 @@ function fixture(options:{protocol?:string;failAccess?:boolean;failRename?:boole
   const bridge=vi.fn(async(body:Record<string,unknown>)=>{
     calls.push(body);
     if(body.action==='begin') {
+      // Same contract as Core: reject invalid keys before issuing any lease.
+      if(typeof body.idempotency_key!=='string'||! /^[a-zA-Z0-9_-]{1,96}$/.test(body.idempotency_key))throw new Error('ftp_invalid_idempotency_key');
       if(options.noEnvelope)return {operation_id:'op',status:'uncertain'};
       const payload={operation_id:'op',expires_at:new Date(Date.now()+(options.expired?-1000:60000)).toISOString(),operation:body.operation,
         policy:{protocol:options.protocol,host:'ftp.example.test',port:21,root:'/public_html',approved_ips:['93.184.216.34'],runtime_key:identity.publicKey,operations:['connect','list','upload','rename']},
@@ -30,10 +32,63 @@ function fixture(options:{protocol?:string;failAccess?:boolean;failRename?:boole
     if(body.action==='finish'&&options.failFinish)throw new Error('network');
     return {status:body.status};
   });
-  const run=(action='list',extra:Record<string,unknown>={},workspace?:string)=>executeFtp(bridge as any,
-    {account_id:'account',idempotency_key:'once',operation:{action,path:'/public_html',...extra},...(action==='upload'?{operation:{action,path:'/public_html/index.html'},local_file:'index.html'}:{})},workspace,identity,()=>client as any);
+  const run=(action='list',extra:Record<string,unknown>={},workspace?:string,key='once')=>executeFtp(bridge as any,
+    {account_id:'account',idempotency_key:key,operation:{action,path:'/public_html',...extra},...(action==='upload'?{operation:{action,path:'/public_html/index.html'},local_file:'index.html'}:{})},workspace,identity,()=>client as any);
   return {bridge,client,calls,run};
 }
+describe('FTP idempotency compatibility with Core',()=>{
+  const failedKeys=[
+    '2026-09-25:62b2c087-700a-4629-9a87-1ec267cb9827:ftp-connect',
+    '2026-09-25:62b2c087-700a-4629-9a87-1ec267cb9827:ftp-list-root',
+  ];
+  it.each(failedKeys)('executes the previously rejected cron key %s',async key=>{
+    const f=fixture();
+    expect(await f.run('list',{},undefined,key)).toMatchObject({ok:true,status:'completed'});
+    expect(f.calls[0].idempotency_key).toMatch(/^[a-zA-Z0-9_-]{1,96}$/);
+    expect(f.calls[0].idempotency_key).toBe(ftpIdempotencyKey(key));
+  });
+  it('preserves valid historic keys and avoids lossy separator collisions',()=>{
+    for(const key of ['once','2026-09-25_cron_list','A'.repeat(96)])expect(ftpIdempotencyKey(key)).toBe(key);
+    const variants=['day:connect','day/connect','day_connect'];
+    expect(new Set(variants.map(ftpIdempotencyKey)).size).toBe(variants.length);
+    expect(ftpIdempotencyKey(failedKeys[0])).toBe(ftpIdempotencyKey(failedKeys[0]));
+  });
+  it.each(['completed','uncertain'])('keeps %s replay identity without connecting',async status=>{
+    const seen=new Set<string>();let first:string|undefined;
+    const bridge=vi.fn(async(body:Record<string,unknown>)=>{
+      const key=String(body.idempotency_key);
+      if(!first)first=key;
+      seen.add(key);
+      return {operation_id:'existing-operation',status};
+    });
+    const client=vi.fn(()=>{throw new Error('must not connect');});
+    for(let n=0;n<2;n++){
+      expect(await executeFtp(bridge,{account_id:'account',idempotency_key:failedKeys[0],
+        operation:{action:'list',path:'/public_html'}},undefined,identity,client as any))
+        .toMatchObject({operation_id:'existing-operation',status});
+    }
+    expect(seen.size).toBe(1);expect(client).not.toHaveBeenCalled();
+    await executeFtp(bridge,{account_id:'account',idempotency_key:'historic_valid_key',
+      operation:{action:'connect',path:'/public_html'}},undefined,identity,client as any);
+    expect(bridge.mock.calls[2][0].idempotency_key).toBe('historic_valid_key');
+  });
+  it('rejects empty, oversized and control-containing keys before any bridge call',async()=>{
+    for(const key of ['', ' ', 'x'.repeat(97), 'line\nend']){
+      const f=fixture();
+      expect(await f.run('connect',{},undefined,key)).toMatchObject({ok:false,error:'ftp_invalid_idempotency_key'});
+      expect(f.bridge).not.toHaveBeenCalled();expect(f.client.access).not.toHaveBeenCalled();
+    }
+  });
+  it('preserves the safe Core validation code but never echoes arbitrary errors',async()=>{
+    for(const [code,expected] of [['ftp_invalid_idempotency_key','ftp_invalid_idempotency_key'],['PASS '+secret,'ftp_operation_failed']]){
+      vi.stubGlobal('fetch',vi.fn(async()=>({ok:false,json:async()=>({error:code})})));
+      const result=await executeFtp(ftpBridge({socketUrl:'wss://query.test/ws/',auth:{token:'test'}},'1'),
+        {account_id:'account',idempotency_key:'valid_key',operation:{action:'connect',path:'/public_html'}},undefined,identity);
+      expect(result).toMatchObject({ok:false,error:expected,status_recorded:false});
+      expect(JSON.stringify(result)).not.toContain(secret);
+    }
+  });
+});
 describe('FTP/FTPS runtime secret boundary',()=>{
   it('unseals only inside executor, pins endpoint, TLS and returns safe list',async()=>{
     const f=fixture();const result=await f.run();expect(result).toMatchObject({ok:true,status:'completed'});

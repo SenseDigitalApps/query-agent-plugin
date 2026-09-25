@@ -15,6 +15,17 @@ type Lease = {operation_id:string;expires_at:string;operation:Operation;policy:P
 type Reply = {operation_id?:string;status?:string;allowed?:boolean;envelope?:{key:string;nonce:string;data:string};[key:string]:unknown};
 export type Bridge = (body:Record<string,unknown>) => Promise<Reply>;
 
+// Preserve every identifier Core could already have recorded, including completed
+// or uncertain operations. Invalid formats were rejected before any side effect.
+// Hash (do not replace punctuation) so e.g. "day:connect" and "day/connect" differ.
+export function ftpIdempotencyKey(key: string): string {
+  if (typeof key !== 'string' || !key.trim() || key.length > 96 || /[\x00-\x1f\x7f]/.test(key)) {
+    throw new Error('ftp_invalid_idempotency_key');
+  }
+  if (/^[a-zA-Z0-9_-]{1,96}$/.test(key)) return key;
+  return 'qftp1_' + createHash('sha256').update('query-ftp-idempotency-v1\0').update(key).digest('hex');
+}
+
 // This key belongs to the runtime, not to a model tool. Persist across cron runs.
 export function runtimeIdentity() {
   const root = process.env.OPENCLAW_STATE_DIR || path.join(homedir(), '.openclaw');
@@ -39,7 +50,7 @@ const SAFE_ERRORS=new Set([
   'ftp_invalid_operations','ftp_invalid_field_mapping','ftp_invalid_runtime_key','ftp_stored_credential_required',
   'ftp_credential_fields_missing','ftp_public_destination_required','ftp_authorization_required','ftp_schedule_not_authorized',
   'ftp_operation_not_authorized','ftp_path_outside_root','ftp_root_mutation_forbidden','ftp_invalid_upload',
-  'ftp_idempotency_conflict','ftp_operation_expired','ftp_owner_required','owner_interactive_turn_required',
+  'ftp_invalid_idempotency_key','ftp_idempotency_conflict','ftp_operation_expired','ftp_owner_required','owner_interactive_turn_required',
   'account_unavailable','agent_unavailable','connection_unavailable','delegated_access_unavailable',
   'ftp_runtime_identity_unavailable','ftp_upload_workspace_required','ftp_upload_outside_workspace','ftp_upload_too_large',
   'ftp_upload_changed','ftp_lease_mismatch','ftp_lease_expired','ftp_root_not_canonical','ftp_unsafe_directory',
@@ -129,12 +140,13 @@ export async function executeFtp(bridge:Bridge, params:{account_id:string;idempo
   let timer:ReturnType<typeof setTimeout>|undefined, mutation=false;
   const output:Record<string,unknown>={};
   try {
+    const idempotencyKey=ftpIdempotencyKey(params.idempotency_key);
     const operation={...params.operation};
     if(operation.action==='upload') {
       bytes=await uploadBytes(params.local_file!,workspace);
       operation.size=bytes.length;operation.sha256=createHash('sha256').update(bytes).digest('hex');
     }
-    reply=await bridge({action:'begin',account_id:params.account_id,idempotency_key:params.idempotency_key,operation});
+    reply=await bridge({action:'begin',account_id:params.account_id,idempotency_key:idempotencyKey,operation});
     if(!reply.envelope) return {operation_id:reply.operation_id,status:reply.status};
     lease=unseal(reply,identity.privateKey);
     if(lease.operation_id!==reply.operation_id||JSON.stringify(lease.operation)!==JSON.stringify(operation)) {
