@@ -21,7 +21,9 @@ it('exposes LinkedIn automation without credentials or arbitrary remote URLs', (
 
 it.each([
   {action:'authorize', schedule_external_id:'cron-1', destination:'urn:li:organization:123', actions:['text','image','first_comment']},
+  {action:'authorize', schedule_external_id:'cron-1', destination:'urn:li:person:w2YPCkcV5w', actions:['text','image','first_comment']},
   {action:'publish', destination:'urn:li:organization:123', idempotency_key:'occurrence-1', text:'Post', image_attachment_id:7, first_comment:'Comment'},
+  {action:'publish', destination:'urn:li:person:w2YPCkcV5w', idempotency_key:'occurrence-person-1', text:'Post', image_attachment_id:7, first_comment:'Comment'},
   {action:'resume', operation_id:'operation-1'},
   {action:'revoke_authorization', schedule_external_id:'cron-1'},
 ])('forwards $action and uses the existing scheduled context when applicable', async params => {
