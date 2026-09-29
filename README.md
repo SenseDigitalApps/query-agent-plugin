@@ -476,3 +476,8 @@ sus flujos. Usar una version Node compatible con OpenClaw.
 Pruebas reales locales desde Core: `python -B ftp_executor_e2e.py RUTA_PLUGIN ftp`
 y el mismo comando con `ftps`, tras `npm run build`. Usan servidores y CA temporales,
 credenciales ficticias y puente HTTP de prueba en loopback; no prueban produccion.
+## Facturación electrónica Matías
+
+El plugin expone disponibilidad, estado, emisión por lotes, conciliación y
+PDF/XML mediante el puente delegado de Core. Consulta [BILLING.md](BILLING.md)
+para el contrato, los estados y la recuperación ante resultados inciertos.

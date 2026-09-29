@@ -556,12 +556,53 @@ async function ftpTool(threadId:string, params:Record<string,unknown>, log:Query
   } catch(error) {return {ok:false,error:safeFtpError(error)};}
 }
 
+async function billingTool(threadId: string, action: string, params: Record<string, unknown>, log: QueryToolLog) {
+  try {
+    const result = await postQuery(threadId, "billing/", {...params, thread_id: threadId, action}, `query_billing_${action}`, log);
+    if ((result as {error?: string})?.error === "http_404") {
+      return {ok: false, error: "billing_bridge_unavailable", detail: "Core debe desplegar POST /api/v4/openclaw-agent/billing/. No sustituir por rutas web ni edicion de campos."};
+    }
+    if (!result) throw new Error("empty_billing_response");
+    if (/^http_5\d\d$/.test((result as {error?: string}).error ?? "")) {
+      return {...result as Record<string, unknown>, outcome: "unknown", next_action: "query_billing_status_then_reconcile", items: params.items};
+    }
+    return result;
+  } catch {
+    // An HTTP timeout or invalid response is not evidence of non-emission.
+    // Never retry this POST or fall back to the web route.
+    return {ok: false, error: "billing_result_unknown", outcome: "unknown", next_action: "query_billing_status_then_reconcile", items: params.items};
+  }
+}
+
 export default defineToolPlugin({
   id: "query-tools",
   name: "Query",
   description:
     "Consulta modulos, campos y registros de Query en nombre de la persona con la que conversas.",
   tools: (tool) => [
+    ...(["availability", "status", "reconcile", "documents"] as const).map(action => tool({
+      name: `query_billing_${action}`,
+      label: `Query Matias: ${action}`,
+      description: "Facturacion electronica real de Core/Matias. availability consulta configuracion, permisos y modo por registro; status consulta estado local; reconcile consulta a Matias sin reenviar; documents obtiene PDF/XML como adjuntos descargables del chat, con permisos del usuario. Usa items con module_id y record_id exactos, maximo 50, y revisa cada resultado. Si mode=draft el registro origen crea un borrador fiscal, no una factura emitida. Solo emitted=true/outcome=issued confirma emision; queued no la confirma. Ante timeout, pending, unknown o reconciliation_required consulta estado y concilia antes de considerar un reenvio. No uses URLs web ni edicion de campos para estas operaciones.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        items: Type.Array(Type.Object({module_id: Type.Integer({minimum: 1}), record_id: Type.Integer({minimum: 1})}, {additionalProperties: false}), {minItems: 1, maxItems: 50}),
+        ...(action === "documents" ? {formats: Type.Optional(Type.Array(Type.Union([Type.Literal("pdf"), Type.Literal("xml")]), {minItems: 1, maxItems: 2}))} : {}),
+      }, {additionalProperties: false}),
+      execute: async ({thread_id, ...params}, _config, context) =>
+        billingTool(thread_id, action, params, context.api.logger),
+    })),
+    tool({
+      name: "query_billing_emit", label: "Query Matias: emitir lote identificado",
+      description: "Ejecuta la operacion real de facturacion Matias para el lote identificado cuando el usuario lo solicita explicitamente. user_request es una cita textual del mensaje actual del usuario que pide emitir; esa solicitud autoriza todo el lote, sin otra aprobacion ni tarjeta. Consulta availability primero. No llames para preguntas de estado ni para una mera creacion de registros. Usa los IDs originales, nunca edites campos fiscales ni crees otro registro para eludir idempotencia. Devuelve resultados individuales: record_created/record_exists son borradores y exponen draft con el registro fiscal; queued es solo encolado; issued/emitted=true es emision efectiva. Si el origen crea borrador, revisa disponibilidad y datos del draft antes de emitir ese registro fiscal bajo la misma solicitud. Ante resultado incierto usa status/reconcile; no reenvies automaticamente ni afirmes exito. No admite cron sin solicitud interactiva.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        items: Type.Array(Type.Object({module_id: Type.Integer({minimum: 1}), record_id: Type.Integer({minimum: 1})}, {additionalProperties: false}), {minItems: 1, maxItems: 50}),
+        user_request: Type.String({minLength: 1, maxLength: 4000}),
+      }, {additionalProperties: false}),
+      execute: async ({thread_id, ...params}, _config, context) =>
+        billingTool(thread_id, "emit", params, context.api.logger),
+    }),
     tool({
       name:"query_ftp_authorize",label:"Query: autorizar FTP en OpenClaw",
       description:"Configura FTP o FTPS en una sola tarjeta privada. Para cuenta nueva usa label y omite account_id: el usuario entrega credenciales y elige permisos en el mismo formulario. Para cuenta guardada usa account_id: reutiliza sus secretos sin pedirlos otra vez. No pide ni recibe secretos. El usuario confirma protocolo, servidor, carpeta, operaciones, cron y acceso owner o agent_members. agent_members sigue los miembros actuales del agente sin reautenticacion. Usa nombres de campos de la cuenta, nunca valores. No activa cron. FTP sin TLS requiere seleccion explicita en el formulario; nunca cambies a FTP como fallback ante un fallo FTPS.",
@@ -616,7 +657,7 @@ export default defineToolPlugin({
     }),
     tool({
       name: "query_linkedin", label: "Query: automatización LinkedIn",
-      description: "Usa cuentas LinkedIn ya guardadas en Query sin recibir sus tokens. accounts muestra destinos, capacidades y autorizaciones. Cuando el usuario solicita una automatización, registra el cron con query_cron_manage y desde ese mismo chat llama authorize con account_id, schedule_external_id real, destination (URN de organización o de perfil personal) y actions: text, image y/o first_comment (text obligatorio). Esa instrucción autoriza una vez; no pidas aprobación por publicación ni envíes al usuario a la web. Sólo autoriza las acciones y el destino solicitados. El cron usa publish con cuenta, destino, texto, idempotency_key estable por ocurrencia y publicación; image_attachment_id toma una imagen del hilo, alt_text es opcional y first_comment agrega un comentario a la publicación creada. No toma tokens, URLs de imágenes ni destinos arbitrarios. waiting_image permite resume con operation_id después de retry_after_seconds; status sólo consulta. Nunca repitas completed/partial/uncertain/rejected con otra clave. partial indica que el post existe pero el comentario no se completó; informa ambos resultados sin volver a publicar. revoke_authorization revoca un cron desde el chat. La credencial programada determina qué cron ejecuta; no puedes elegir otro. Query renueva el token si LinkedIn concedió un refresh token válido; permisos faltantes o reconexión se informan en el chat. No uses query_private_operation para automatizar LinkedIn ni bloquees FTP/SMTP por una limitación del proveedor.",
+      description: "Usa cuentas LinkedIn ya guardadas en Query sin recibir sus tokens. accounts muestra destinos, capacidades y autorizaciones. Cuando el usuario solicita una automatización, registra el cron con query_cron_manage y desde ese mismo chat llama authorize con account_id, schedule_external_id real, destination (URN de organización o de perfil personal) y actions: text, image y/o first_comment (text obligatorio). Esa instrucción autoriza una vez; no pidas aprobación por publicación ni envíes al usuario a la web. Sólo autoriza las acciones y el destino solicitados. Puedes autorizar varios destinos de una misma cuenta y cron llamando authorize por cada destino; se conservan autorizaciones independientes, sin reemplazar las anteriores. El autor guardado es el destino predeterminado, no un limite para el cron. El cron usa publish con cuenta, destino, texto, idempotency_key estable por ocurrencia y publicación; image_attachment_id toma una imagen del hilo, alt_text es opcional y first_comment agrega un comentario a la publicación creada. No toma tokens, URLs de imágenes ni destinos arbitrarios. waiting_image permite resume con operation_id después de retry_after_seconds; status sólo consulta. Nunca repitas completed/partial/uncertain/rejected con otra clave. partial indica que el post existe pero el comentario no se completó; informa ambos resultados sin volver a publicar. revoke_authorization con destination revoca solo ese destino; sin destination revoca todos los destinos de esa cuenta y cron. Puedes usar la misma idempotency_key de una ocurrencia para destinos distintos: Core separa las operaciones y devuelve destination en cada resultado. La credencial programada determina qué cron ejecuta; no puedes elegir otro. Query renueva el token si LinkedIn concedió un refresh token válido; permisos faltantes o reconexión se informan en el chat. No uses query_private_operation para automatizar LinkedIn ni bloquees FTP/SMTP por una limitación del proveedor.",
       parameters: Type.Object({thread_id: THREAD_PARAM,
         action: Type.Union([Type.Literal("accounts"),Type.Literal("authorize"),Type.Literal("revoke_authorization"),Type.Literal("publish"),Type.Literal("resume"),Type.Literal("status")]),
         account_id: Type.Optional(Type.String()), schedule_external_id: Type.Optional(Type.String({maxLength:200})),

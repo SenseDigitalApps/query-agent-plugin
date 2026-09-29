@@ -26,6 +26,7 @@ it.each([
   {action:'publish', destination:'urn:li:person:w2YPCkcV5w', idempotency_key:'occurrence-person-1', text:'Post', image_attachment_id:7, first_comment:'Comment'},
   {action:'resume', operation_id:'operation-1'},
   {action:'revoke_authorization', schedule_external_id:'cron-1'},
+  {action:'revoke_authorization', schedule_external_id:'cron-1', destination:'urn:li:person:Member_Test-1'},
 ])('forwards $action and uses the existing scheduled context when applicable', async params => {
   const isSchedule = ['publish','resume'].includes(params.action);
   if (isSchedule) scheduled.credential = {auth:{token:'cron-test',source:'schedule'},socketUrl:'wss://query.test/ws/'};
@@ -41,4 +42,31 @@ it.each([
   expect(url).toContain('/api/v4/openclaw-agent/linkedin/');
   expect(JSON.parse(String(options.body))).toEqual(data);
   expect(options.headers).toMatchObject({'X-Query-Delegated-Token':isSchedule ? 'cron-test' : 'human-test'});
+});
+
+it('keeps the same occurrence key and independent results for multiple destinations', async () => {
+  scheduled.credential = {auth:{token:'cron-test',source:'schedule'},socketUrl:'wss://query.test/ws/'};
+  const destinations = ['urn:li:person:Member_Test-1', 'urn:li:organization:456'];
+  const fetchMock = vi.fn(async (_url: string, options: RequestInit) => {
+    const body = JSON.parse(String(options.body));
+    return {ok:true,json:async()=>({destination:body.destination,operation_id:`op-${destinations.indexOf(body.destination)}`,status:'completed'})};
+  });
+  vi.stubGlobal('fetch', fetchMock);
+  const registerTool = vi.fn();
+  entry.register({registerTool,pluginConfig:{},logger:{info:vi.fn(),warn:vi.fn(),error:vi.fn(),debug:vi.fn()}} as any);
+  const tool = registerTool.mock.calls.find(c => c[1]?.name === 'query_linkedin')![0]({sessionKey:'linkedin-multiple'});
+  for (const destination of destinations) {
+    const result = await tool.execute('call', {thread_id:'42',action:'publish',account_id:'test-account',destination,idempotency_key:'same-occurrence',text:'Test'});
+    expect(JSON.stringify(result)).toContain(destination);
+    expect(JSON.stringify(result)).toContain(`op-${destinations.indexOf(destination)}`);
+  }
+  expect(fetchMock.mock.calls.map(c => JSON.parse(String(c[1].body)).idempotency_key)).toEqual(['same-occurrence','same-occurrence']);
+  expect(fetchMock).toHaveBeenCalledTimes(2);
+});
+
+it('accepts generic personal and organizational URNs but rejects other targets', () => {
+  const schema = getToolPluginMetadata(entry)!.tools.find(t => t.name === 'query_linkedin')!.parameters.properties!.destination;
+  const pattern = new RegExp(schema.pattern);
+  for (const value of ['urn:li:person:Member_Test-1','urn:li:organization:456']) expect(pattern.test(value)).toBe(true);
+  for (const value of ['urn:li:organization:abc','urn:li:person:','https://linkedin.com/in/test','urn:li:company:456']) expect(pattern.test(value)).toBe(false);
 });
