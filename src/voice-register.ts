@@ -24,6 +24,8 @@ import { QueryVoiceBridge, voiceBridgeHandler, type VoiceScope } from "./voice-b
 import { checkVoiceOAuthOnly } from "./voice-route.js";
 import { voiceRuns, type VoiceDelegationResult } from "./voice-run-binding.js";
 import { GatewayTalkDriver, type VoiceCallTarget } from "./voice-talk-driver.js";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
+import { voiceGatewayBootstrap } from "./voice-gateway-auth.js";
 import { VOICE_OPERATOR_ROLE, VOICE_OPERATOR_SCOPES, VoiceOperatorDevice } from "./voice-device.js";
 
 export type QueryVoiceConfig = {
@@ -103,15 +105,19 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
   const {identity, deps} = device.hostDeps();
   api.logger.info(`query_voice_device device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`);
 
+  const bootstrap = voiceGatewayBootstrap(gatewayUrl, (getRuntimeConfigSnapshot() ?? cfg).gateway?.auth,
+    Boolean(deps.loadDeviceAuthToken({deviceId: identity.deviceId, role: VOICE_OPERATOR_ROLE})));
   let driver: GatewayTalkDriver;
   const client = new GatewayClient({
     url: gatewayUrl,
+    ...bootstrap,
     role: VOICE_OPERATOR_ROLE,
     scopes: [...VOICE_OPERATOR_SCOPES],
     deviceIdentity: identity,
     hostDeps: deps,
     clientDisplayName: "Query voice bridge",
     onEvent: frame => driver?.handleGatewayEvent(frame as {event: string; payload?: unknown}),
+    onHelloOk: () => api.logger.info(`query_voice_gateway_connected device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`),
     onClose: () => driver?.handleGatewayClosed(),
     // Pending approval shows up here; never log the error body (it may carry tokens).
     onConnectError: () => api.logger.warn(`query_voice_gateway_connect_pending device=${identity.deviceId.slice(0, 12)}`),
@@ -144,6 +150,17 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
     auth: "plugin",
     handler: async (req, res) => { await handler(req, res); return true; },
   });
-  api.on("gateway_start", () => { client.start(); });
-  api.on("gateway_stop", () => { client.stop(); driver.handleGatewayClosed(); });
+  let started = false;
+  const start = () => {
+    if (started) return;
+    started = true;
+    api.logger.info(`query_voice_gateway_start device=${identity.deviceId.slice(0, 12)}`);
+    client.start();
+  };
+  const stop = () => { started = false; client.stop(); driver.handleGatewayClosed(); };
+  // A full channel runtime can be hydrated after the one-shot gateway_start hook.
+  // Services participate in runtime activation/replacement as well as initial boot.
+  api.registerService({id: "query-voice-gateway", start, stop});
+  api.on("gateway_start", start);
+  api.on("gateway_stop", stop);
 }
