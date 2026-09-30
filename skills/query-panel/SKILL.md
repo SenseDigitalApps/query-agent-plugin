@@ -1,6 +1,6 @@
 ---
 name: query-panel
-description: 'Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Use Query proposal tools, which enforce human approval or an administrator-authorized creation policy. Discovery-first: never assume module or field names.'
+description: 'Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Use Query proposal tools, which enforce human approval or an administrator-authorized creation policy. Also use for Matias electronic billing and LinkedIn multi-destination automation. Discovery-first: never assume module or field names.'
 ---
 
 # Query Panel Reader
@@ -109,7 +109,7 @@ desaparece del programador de OpenClaw.
 
 ## Cambiar datos mediante las herramientas de Query
 
-`query_record_propose` es la via para proponer cambios individuales. Sirve
+`query_record_propose` es la via para proponer cambios individuales de registros de negocio. La facturacion electronica usa exclusivamente las herramientas `query_billing_*` descritas mas abajo; no se sustituye por edicion de campos. Sirve
 tanto para crear como para actualizar. Por defecto deja una propuesta en el
 chat con 24 horas para aprobarla. Si un administrador autorizo al usuario a
 crear sin aprobacion, Query ejecuta las creaciones directamente, incluyendo
@@ -516,3 +516,52 @@ Puedes enviar avisos y enlaces por el privado con el canal Query sin pedir aprob
 ## Una o varias credenciales en el chat
 
 Usa `query_private_request` con `integration=credential`, una etiqueta sin secretos y `secret_fields` con los nombres de 1 a 12 campos. Para una key: `["api_key"]`. Para un conjunto: `["client_id","client_secret","access_token","refresh_token"]`. No incluyas valores ni ejemplos secretos en esos nombres. Query abre un modal dentro del chat, con valores enmascarados y consentimiento; el envío completo va directamente al backend humano autenticado, no a herramientas. Renueva con `account_id` sin cambiar los campos. OpenAI y LinkedIn usan sus campos predefinidos. El enlace a Cuentas y credenciales queda como alternativa.
+
+
+## Facturacion electronica Matias
+
+Antes de operar, descubre modulos y registros con las herramientas Query y resuelve
+sus IDs exactos. Carga herramientas diferidas con tool_search; en modo codigo
+busca por nombre en ALL_TOOLS. No declares una herramienta ausente sin buscarla.
+
+1. Usa `query_billing_availability` con `items: [{module_id, record_id}]` (1–50
+   pares unicos) para verificar configuracion, modo y permisos del usuario actual.
+2. Una consulta de estado usa `query_billing_status`, no emision.
+3. Solo cuando el mensaje humano actual pide explicitamente emitir, usa
+   `query_billing_emit` con los mismos items y `user_request` como cita textual
+   de esa solicitud. Esta autoriza el lote identificado sin otra confirmacion;
+   no emitas desde cron ni por el solo hecho de crear un registro.
+4. Revisa TODOS los resultados, aunque HTTP sea 200: `record_created` o
+   `record_exists` son borradores, no facturas emitidas. Descubre y revisa el
+   registro fiscal `draft.module_id`/`draft.id` antes de emitirlo bajo la misma
+   solicitud. `queued` es solo encolado; solo `issued`/`emitted=true` confirma.
+5. Ante timeout, `billing_result_unknown`, `pending`, `unknown` o
+   `reconciliation_required`, conserva IDs y consulta `query_billing_status`
+   y `query_billing_reconcile`; nunca reenvies automaticamente.
+6. `query_billing_documents` con `formats: ["pdf", "xml"]` obtiene adjuntos
+   descargables del chat. No inventes enlaces ni uses rutas web de Matias.
+
+`billing_bridge_unavailable` requiere desplegar el puente de Core; no autoriza
+usar otra API, editar campos fiscales o pedir credenciales. Estas herramientas
+mantienen el tenant y permisos del usuario efectivo; habilitarlas no concede
+permisos fiscales a nadie. No solicites ni expongas secretos de Matias.
+
+## LinkedIn: varios destinos de una cuenta y automatizacion
+
+Consulta `query_linkedin` con `action=accounts` antes de elegir cuenta/destinos.
+Con la solicitud del usuario, usa `authorize` una vez por cada destino exacto
+solicitado (URN de persona u organizacion), con la misma cuenta y el ID real del
+cron: las autorizaciones coexisten. No autorices otros destinos por comodidad.
+El autor predeterminado no limita los destinos autorizados del cron.
+
+Cada `publish` lleva destination exacto. La misma idempotency_key de ocurrencia
+puede servir para distintos destinos: Core separa resultados por destino.
+Conserva cuenta, cron, destino, operation_id y clave en reintentos; nunca vuelvas
+a publicar completed/partial/uncertain/rejected con una clave nueva.
+`revoke_authorization` CON destination revoca solo ese destino; SIN destination
+revoca todos los destinos de esa cuenta/cron. Usa la variante que corresponda
+a la solicitud, sin retirar autorizaciones ajenas.
+
+El backend requiere `bot_gateway.0016_linkedin_automation_destinations` y el
+puente de facturacion desplegados. No afirmar funcionamiento extremo a extremo
+solo porque las herramientas figuren en OpenClaw; informar errores reales de Core.
