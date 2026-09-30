@@ -449,7 +449,9 @@ export class QuerySocketMonitor {
           this.options.account.accountId,
           undefined,
           this.options.log,
-        );
+        ).catch((error) => {
+          this.options.log?.warn?.(`query cron backfill failed: ${String(error)}`);
+        });
       } catch (error) {
         this.options.log?.warn?.(
           `[${this.options.account.accountId}] query cron backfill no pudo ejecutarse: ${String(error)}`,
