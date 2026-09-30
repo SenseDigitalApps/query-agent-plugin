@@ -1,0 +1,266 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:query:agent-voice:1",
+  "title": "Query voice control-plane event v1",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "contract_version",
+    "call_id",
+    "event_id",
+    "sequence",
+    "type"
+  ],
+  "properties": {
+    "contract_version": {
+      "const": 1
+    },
+    "call_id": {
+      "type": "string",
+      "format": "uuid"
+    },
+    "event_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "sequence": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "type": {
+      "enum": [
+        "call.connecting",
+        "call.listening",
+        "call.error",
+        "call.ended",
+        "audio.started",
+        "audio.stopped",
+        "transcript.final",
+        "task.accepted",
+        "task.completed",
+        "task.cancelled",
+        "confirmation.required",
+        "usage.final",
+        "speech.activity",
+        "audio.activity",
+        "task.progress",
+        "presence.required",
+        "presence.confirmed"
+      ]
+    },
+    "run_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "consult_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "turn_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "item_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "role": {
+      "enum": [
+        "user",
+        "assistant"
+      ]
+    },
+    "text": {
+      "type": "string",
+      "maxLength": 16000
+    },
+    "error_code": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "confirmation_id": {
+      "type": "string",
+      "maxLength": 128
+    },
+    "usage": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "component",
+        "provider_response_id",
+        "auth_mode",
+        "input_tokens",
+        "output_tokens"
+      ],
+      "properties": {
+        "component": {
+          "enum": [
+            "voice",
+            "agent"
+          ]
+        },
+        "provider_response_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "auth_mode": {
+          "enum": [
+            "platform",
+            "oauth"
+          ]
+        },
+        "input_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        },
+        "output_tokens": {
+          "type": [
+            "integer",
+            "null"
+          ],
+          "minimum": 0
+        }
+      }
+    },
+    "challenge_id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 128
+    },
+    "deadline": {
+      "type": "string",
+      "format": "date-time"
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "transcript.final"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "item_id",
+          "role",
+          "text"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "task.accepted",
+              "task.completed",
+              "task.cancelled"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "run_id",
+          "consult_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "enum": [
+              "audio.started",
+              "audio.stopped"
+            ]
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "turn_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "confirmation.required"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "confirmation_id",
+          "text"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "usage.final"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "run_id",
+          "usage"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "presence.required"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "challenge_id",
+          "deadline"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "presence.confirmed"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "challenge_id"
+        ]
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "type": {
+            "const": "task.progress"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "run_id"
+        ]
+      }
+    }
+  ]
+}

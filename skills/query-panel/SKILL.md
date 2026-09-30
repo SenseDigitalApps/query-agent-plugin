@@ -109,7 +109,7 @@ desaparece del programador de OpenClaw.
 
 ## Cambiar datos mediante las herramientas de Query
 
-`query_record_propose` es la **unica** via para tocar datos de Query. Sirve
+`query_record_propose` es la via para proponer cambios individuales. Sirve
 tanto para crear como para actualizar. Por defecto deja una propuesta en el
 chat con 24 horas para aprobarla. Si un administrador autorizo al usuario a
 crear sin aprobacion, Query ejecuta las creaciones directamente, incluyendo
@@ -125,6 +125,8 @@ cargala primero con `tool_search`; no afirmes que no esta disponible antes de
 buscarla. Nunca crees un registro solo para mandar un link o una ruta local del
 archivo generado.
 
+La reparacion de almacenamiento descrita abajo usa su herramienta especifica;
+no es una nueva alta ni un permiso general para escribir por otra API.
 Nunca escribas en Query por otro camino, aunque dispongas de otra herramienta,
 otro token o la API general. Si crees que hace falta escribir de otra forma,
 dilo y detente.
@@ -144,9 +146,49 @@ Flujo:
    Incluye `intent`: una frase que explique por que, porque la lee la persona
    que decide.
 4. Lee la respuesta: `requires_confirmation=true` significa que la propuesta
-   espera aprobacion; `status=executed` permite informar que el registro se creo.
+   esperaba aprobacion al responder esa llamada; `status=executed` indica que
+   Core reporto la ejecucion. No uses una respuesta antigua como estado actual.
    Ante un error, informa el fallo; no repitas automaticamente una creacion si
    no sabes si se ejecuto.
+
+### Maestros y comprobacion de una propuesta aprobada
+
+Las herramientas de registros reciben el modulo descubierto con
+`query_module_describe`, tanto para `registers` como para `masters`. Core debe
+elegir `Table1` o `TableMaster`; el slug y el tipo de accion `bulk_update` no
+demuestran en que tabla se persistio. No descartes un fallo de enrutamiento
+solo porque el modulo de la propuesta sea correcto.
+
+Si la persona dice que ya aprobo o que no ve los registros, revisa la evidencia
+mas reciente del hilo y consulta `query_record_get` con los IDs devueltos por
+la ejecucion. Si no hay IDs disponibles, busca en el modulo con
+`query_records_search`, comprobando filtros y paginacion.
+Una busqueda vacia demuestra que esa consulta no encontro registros, no que la
+propuesta siga pendiente ni que no se haya escrito en otra tabla.
+
+No pidas aprobar otra vez por falta de un aviso en el turno. Si no puedes
+determinar el resultado, explica que no esta verificado y conserva `action_id`,
+modulo, IDs y errores disponibles para diagnosticarlo. No recrees las mismas
+altas ni uses otra ruta de escritura mientras su resultado sea incierto.
+
+Para diagnosticar la tabla de una propuesta original ejecutada de solo altas,
+usa `query_action_storage_repair` con `operation=inspect` y su `action_id`.
+Requiere administrador maestro. Si devuelve `can_repair=true` y el usuario
+ya pidio corregir esos registros, llama `operation=repair` con el
+`expected_digest` del diagnostico: la peticion en el chat es la autorizacion;
+no hace falta otra aprobacion visual. Si solo pidio revisar, entrega el
+diagnostico sin aplicar. Core exige un turno humano, mantiene la evidencia
+original y guarda el mapa de IDs antiguos y nuevos. Puede asignar nuevos
+consecutivos si los anteriores estan ocupados.
+
+`repaired` o `already_repaired` confirman la reparacion; consulta los nuevos
+`record_ids` para comprobar el resultado. `correct_storage` no es una
+reparacion: los IDs ya estan en la tabla esperada. Ante `blockers`, informa el
+motivo: no se trasladan automaticamente referencias entrantes, objetos
+dependientes, posibles duplicados ni datos exclusivos de maestro. Ante un
+timeout consulta `inspect` con el mismo `action_id`, que es idempotente; no
+recrees las altas. Un 404 de la ruta requiere desplegar Core con esta
+capacidad, no cambiar de API para forzar la escritura.
 
 ### Configurar el panel (modulos, campos, carpetas)
 
@@ -419,13 +461,12 @@ modulo tenga un campo real con slug `title` descubierto por
 `query_module_describe`. En la mayoria de registros Query, eso es distinto del
 titulo visible.
 
-Al terminar **no digas que el cambio quedo hecho**. No lo esta: esta esperando
-que alguien lo apruebe. Decir lo contrario hace que den por cerrado algo que
-sigue pendiente.
+Al terminar distingue la propuesta pendiente de una ejecucion reportada por
+Core. No anuncies un cambio aplicado si la respuesta sigue pendiente.
 
 Antes de proponer, mira si ya propusiste eso mismo en este canal. Si la
-respuesta trae `duplicate: true`, no se creo una segunda propuesta: la que ya
-estaba sigue esperando y es la que hay que mencionar.
+respuesta trae `duplicate: true`, no se creo una segunda propuesta: menciona la
+existente y su estado devuelto, sin asumir que sigue pendiente.
 
 ## Cuando la persona confirma escribiendo
 
@@ -444,8 +485,10 @@ Lo sabras porque el contexto del turno te lo dice:
 - *no tiene permiso para aplicarla* — sigue pendiente; que la apruebe alguien
   con ese permiso.
 
-Si no aparece ninguna de esas lineas, la propuesta sigue esperando aprobacion,
-aunque la persona haya escrito algo que a ti te suene a un si.
+Si no aparece ninguna de esas lineas, este turno no incluye un resultado de
+resolucion. La propuesta pudo resolverse antes o mediante el boton: su ausencia
+no demuestra que siga pendiente. Verifica con la evidencia y las consultas
+anteriores; tampoco interpretes por tu cuenta un si como ejecucion confirmada.
 
 Si Query rechaza la propuesta, la respuesta trae el motivo: campo inexistente,
 campo de solo lectura, valor fuera de las opciones permitidas o falta de

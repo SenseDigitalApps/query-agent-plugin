@@ -8,6 +8,7 @@ import { getDelegatedAuth } from "./delegated-store.js";
 import { authorizeExternalAccount } from "./external-accounts.js";
 import { readConfiguredGoogleAccountEmail } from "./google-accounts.js";
 import { externalContextForRun } from "./external-context.js";
+import { voiceContextForTool, hasVoiceExecution } from "./voice-execution-context.js";
 import { scheduledCredential } from "./scheduled-context.js";
 import { primeScheduleCredential } from "./cron-sync.js";
 import {
@@ -114,7 +115,7 @@ export async function evaluateGoogleToolCall(
 ): Promise<QueryBeforeToolCallResult | void> {
   const linkingTool = event.toolName.startsWith("query_google_");
   if (!isGoogleTool(event.toolName) && !linkingTool) return;
-  const cronSession = resolveQuerySession(ctx.sessionKey);
+  const cronSession = hasVoiceExecution() ? undefined : resolveQuerySession(ctx.sessionKey);
   let scheduled;
   if (cronSession?.jobId) {
     try { scheduled = await scheduledCredential(ctx.sessionKey); }
@@ -124,7 +125,7 @@ export async function evaluateGoogleToolCall(
   }
   let scoped;
   try {
-    scoped = scheduled ? undefined : await externalContextForRun(ctx.runId ?? event.runId);
+    scoped = await voiceContextForTool() ?? (scheduled ? undefined : await externalContextForRun(ctx.runId ?? event.runId));
   } catch {
     return blocked("No se pudo renovar internamente la credencial del turno de Query. Reintenta la operación; no reconectes Google.");
   }
@@ -272,7 +273,7 @@ export function registerQueryGoogleGuard(api: OpenClawPluginApi): void {
     });
   });
   api.on("before_tool_call", async (event, ctx) => {
-    if ((isGoogleTool(event.toolName) || event.toolName.startsWith("query_google_")) &&
+    if (!hasVoiceExecution() && (isGoogleTool(event.toolName) || event.toolName.startsWith("query_google_")) &&
         !resolveQuerySession(ctx?.sessionKey)?.jobId) {
       await primeScheduleCredential(api, { sessionKey: ctx?.sessionKey });
     }

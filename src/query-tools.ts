@@ -1,4 +1,5 @@
 import { AsyncLocalStorage } from "node:async_hooks";
+import { voiceContextForTool } from "./voice-execution-context.js";
 import { executeFtp, ftpBridge, runtimeIdentity, safeFtpError } from "./ftp-executor.js";
 const ftpWorkspace = new AsyncLocalStorage<string | undefined>();
 import { Type } from "typebox";
@@ -461,6 +462,11 @@ async function delegatedAuthForTool(
   log: QueryToolLog,
 ) {
   const scheduled = scheduledToolContext.getStore();
+  const voice = await voiceContextForTool();
+  if (voice) {
+    if (String(threadId) !== voice.threadId) throw new Error("voice_thread_mismatch");
+    return voice;
+  }
   if (scheduled) return scheduled;
   const lookupKey = String(threadId);
   const stale = peekDelegatedAuth(threadId);
@@ -496,6 +502,19 @@ async function delegatedAuthForTool(
   if (!refreshed?.token) return undefined;
   rememberDelegatedAuth(threadId, refreshed, stale.socketUrl, stale.clientMsgId);
   return getDelegatedAuth(threadId);
+}
+
+export function repairQueryActionStorageForThread(
+  params: { threadId: string; actionId: string; operation: "inspect" | "repair"; expectedDigest?: string },
+  log: QueryToolLog,
+): Promise<unknown> {
+  if (params.operation === "repair" && !params.expectedDigest) {
+    return Promise.resolve({ ok: false, error: "repair_inspection_required" });
+  }
+  return postQuery(params.threadId,
+    `actions/${encodeURIComponent(params.actionId)}/storage-repair/`,
+    { operation: params.operation, ...(params.expectedDigest ? { expected_digest: params.expectedDigest } : {}) },
+    "query_action_storage_repair", log);
 }
 
 export function proposeQueryImportForThread(
@@ -908,10 +927,23 @@ export default defineToolPlugin({
         ),
     }),
     tool({
+      name: "query_action_storage_repair",
+      label: "Query: diagnosticar y reparar tabla de registros",
+      description: "Revisa una propuesta original ejecutada de solo creaciones cuyo resultado no aparece en el modulo. Usa operation=inspect con su action_id; no adivines IDs ni tablas. Core comprueba ambas tablas segun el tipo actual del modulo y devuelve can_repair, blockers y expected_digest. Solo cuando el usuario haya pedido corregir esos registros, usa operation=repair con ese digest; esa instruccion en el chat autoriza la reparacion sin otra tarjeta. Requiere administrador maestro y un turno humano; no se ejecuta desde cron. Conserva datos y evidencia de la accion original y devuelve el mapa de IDs antiguos y nuevos. No traslada dependencias ambiguas: informa blockers sin recrear registros ni usar otra API. Ante timeout, vuelve a inspect con el mismo action_id. Solo repaired o already_repaired confirman reparacion; correct_storage indica que no hay traslado que hacer. Si Core no ofrece esta ruta, informa que falta desplegarlo, sin improvisar otra escritura.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        action_id: Type.String({ description: "UUID de la propuesta original ejecutada." }),
+        operation: Type.Union([Type.Literal("inspect"), Type.Literal("repair")]),
+        expected_digest: Type.Optional(Type.String()),
+      }, { additionalProperties: false }),
+      execute: async ({ thread_id, action_id, operation, expected_digest }, _config, context) =>
+        repairQueryActionStorageForThread({ threadId: thread_id, actionId: action_id, operation, expectedDigest: expected_digest }, context.api.logger),
+    }),
+    tool({
       name: "query_record_propose",
       label: "Query: proponer un cambio",
       description:
-        "Propone un registro real. Para altas, interpreta y normaliza cualquier fuente primero: 1 registro usa esta herramienta, 2 a 50 usan query_records_propose_batch y 51 o mas usan query_imports_propose. Por defecto deja una propuesta en el chat que dura 24 horas. Si un administrador autorizo a ese usuario a crear registros sin aprobacion, Query aplica las creaciones automaticamente y devuelve requires_confirmation=false con status=executed. Las actualizaciones siguen requiriendo aprobacion. Usala tanto para crear como para actualizar registros reales. Si la persona corrige una propuesta que sigue pendiente, vuelve a llamar esta tool con el action_id de esa propuesta: Query actualiza la misma tarjeta, sin pedir que la descarte ni crear otra. Los fields corregidos se mezclan con los ya propuestos; usa replace_proposal=true y envia la version completa solo cuando debas quitar cambios anteriores. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: publicalos en el canal actual llamando directamente query_attachment_send y nunca muestres la ruta local. Antes, consulta query_module_describe y usa los slugs exactos. Los campos calculator, calculador_initial, calculator_advanced y calculator_table tambien aceptan el valor inicial calculado por el agente; el frontend podra recalcularlo despues. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Lee la respuesta: solo si status=executed informa que se creo el registro; si requires_confirmation=true pide revisar la propuesta en el chat. No asumas exito ante errores.",
+        "Propone un registro real. Para altas, interpreta y normaliza cualquier fuente primero: 1 registro usa esta herramienta, 2 a 50 usan query_records_propose_batch y 51 o mas usan query_imports_propose. Por defecto deja una propuesta en el chat que dura 24 horas. Si un administrador autorizo a ese usuario a crear registros sin aprobacion, Query aplica las creaciones automaticamente y devuelve requires_confirmation=false con status=executed. Las actualizaciones siguen requiriendo aprobacion. Usala tanto para crear como para actualizar registros reales. Si la persona corrige una propuesta que sigue pendiente, vuelve a llamar esta tool con el action_id de esa propuesta: Query actualiza la misma tarjeta, sin pedir que la descarte ni crear otra. Los fields corregidos se mezclan con los ya propuestos; usa replace_proposal=true y envia la version completa solo cuando debas quitar cambios anteriores. No la uses para entregar HTML, PDF, imagenes, hojas de calculo u otros artifacts generados: publicalos en el canal actual llamando directamente query_attachment_send y nunca muestres la ruta local. Antes, consulta query_module_describe y usa los slugs exactos. Los campos calculator, calculador_initial, calculator_advanced y calculator_table tambien aceptan el valor inicial calculado por el agente; el frontend podra recalcularlo despues. Para un campo relacional ref_, envia {id: ...} con el id obtenido de query_records_search o {consecutivo: ...} si solo conoces el consecutivo; Query construye y valida el objeto relacional completo. Lee la respuesta: solo si status=executed informa que se creo el registro; si requires_confirmation=true pide revisar la propuesta en el chat. No asumas exito ante errores. Funciona por modulo para registers y masters; Core elige la tabla. Si la persona ya aprobo o no ve el registro, verifica con query_record_get usando los IDs del resultado o consulta el modulo. Una respuesta pendiente anterior o la ausencia de un aviso no prueban el estado actual; no pidas otra aprobacion ni repitas altas con resultado incierto.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         action_id: Type.Optional(
@@ -1059,7 +1091,7 @@ export default defineToolPlugin({
       name: "query_records_propose_batch",
       label: "Query: proponer varios cambios",
       description:
-        "Propone hasta 50 cambios en registros reales del mismo modulo en una tarjeta. Para crear: primero interpreta y normaliza la fuente (texto, CSV, Excel, PDF o imagen); 1 registro usa query_record_propose, 2 a 50 usan esta herramienta, 51 o mas usan query_imports_propose con un CSV normalizado. No dividas cargas grandes en lotes pequenos para evitar el importador. Si corriges un lote pendiente, incluye su action_id y envia items completo. No uses registros para entregar artifacts generados: publicalos con query_attachment_send. Cada item puede traer record_id (actualizar), omitirlo (crear) o delete: true con record_id (eliminar). Revisa los slugs con query_module_describe. Un error rechaza todo el lote; se aplica todo o nada al confirmar. Las propuestas duran 24 horas. Query puede ejecutar automaticamente lotes de solo altas con autorizacion administrativa; solo status=executed significa aplicado. Si requires_confirmation=true pide revisar. Ediciones y borrados siempre requieren aprobacion y sus permisos correspondientes.",
+        "Propone hasta 50 cambios en registros reales del mismo modulo en una tarjeta. Para crear: primero interpreta y normaliza la fuente (texto, CSV, Excel, PDF o imagen); 1 registro usa query_record_propose, 2 a 50 usan esta herramienta, 51 o mas usan query_imports_propose con un CSV normalizado. No dividas cargas grandes en lotes pequenos para evitar el importador. Si corriges un lote pendiente, incluye su action_id y envia items completo. No uses registros para entregar artifacts generados: publicalos con query_attachment_send. Cada item puede traer record_id (actualizar), omitirlo (crear) o delete: true con record_id (eliminar). Revisa los slugs con query_module_describe. Un error rechaza todo el lote; se aplica todo o nada al confirmar. Las propuestas duran 24 horas. Query puede ejecutar automaticamente lotes de solo altas con autorizacion administrativa; solo status=executed significa aplicado. Si requires_confirmation=true pide revisar. Ediciones y borrados siempre requieren aprobacion y sus permisos correspondientes. Funciona por modulo para registers y masters; bulk_update no identifica la tabla de destino. Ante una aprobacion previa o registros que no aparecen, verifica los IDs devueltos consultando el modulo. No deduzcas que sigue pendiente por falta de aviso ni recrees el lote mientras el resultado sea incierto.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         action_id: Type.Optional(
@@ -1215,6 +1247,11 @@ export default defineToolPlugin({
         },
         execute: async (toolCallId, params, signal, onUpdate) => {
           const invoke = (resolved: unknown) => ftpWorkspace.run(toolContext.workspaceDir, () => definition.execute!(resolved, config, { api, toolCallId, signal, onUpdate }));
+          const voice = await voiceContextForTool();
+          if (voice) {
+            const value = await invoke({ ...(params as Record<string, unknown>), thread_id: voice.threadId });
+            return typeof value === "string" ? textResult(value, value) : jsonResult(value);
+          }
           let session = resolveQuerySession(sessionKey);
           // OpenClaw 2026.9.4 does not propagate cron trigger/job context to
           // every Codex preparation hook. Recover the scheduler-owned binding

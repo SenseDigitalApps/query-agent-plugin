@@ -25,10 +25,47 @@ import {
   uploadQueryAttachmentForThread,
   proposeQueryImportForThread,
   queryImportStatusForThread,
+  repairQueryActionStorageForThread,
 } from "./query-tools.js";
 
 let stateDirectory: string;
 let previousStateFile: string | undefined;
+
+describe("action storage repair", () => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  beforeEach(() => {
+    rememberDelegatedAuth("thread-repair", { token: "repair-token", expires_in: 900 }, "wss://query.test/ws/openclaw-agent/8/", "message-repair");
+  });
+  afterEach(() => { vi.unstubAllGlobals(); forgetDelegatedAuth("thread-repair"); });
+
+  it("inspects the original action without applying a repair", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ status: "repair_preview", can_repair: true, expected_digest: "snapshot" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await repairQueryActionStorageForThread({ threadId: "thread-repair", actionId: "original", operation: "inspect" }, log);
+    expect(result).toMatchObject({ status: "repair_preview", expected_digest: "snapshot" });
+    const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://query.test/api/v4/openclaw-agent/actions/original/storage-repair/");
+    expect(JSON.parse(String(options.body))).toEqual({ operation: "inspect" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+
+  it("refuses repair without an inspection digest", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await repairQueryActionStorageForThread({ threadId: "thread-repair", actionId: "original", operation: "repair" }, log)).toMatchObject({ error: "repair_inspection_required" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("sends the original action and digest and preserves idempotent results", async () => {
+    const response = { ok: true, status: "already_repaired", mapping: [{ old_id: 9, new_id: 20 }], record_ids: [20] };
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => response }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await repairQueryActionStorageForThread({ threadId: "thread-repair", actionId: "original", operation: "repair", expectedDigest: "snapshot" }, log)).toEqual(response);
+    const [, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(options.body))).toEqual({ operation: "repair", expected_digest: "snapshot" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
+});
 
 describe("reviewed imports", () => {
   afterEach(() => { vi.unstubAllGlobals(); forgetDelegatedAuth("thread-import"); });

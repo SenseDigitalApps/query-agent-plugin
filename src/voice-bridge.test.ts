@@ -1,0 +1,56 @@
+import { afterEach, expect, it, vi } from "vitest";
+import { mkdtempSync, rmSync } from "node:fs";
+import { tmpdir } from "node:os";
+import { join } from "node:path";
+import { QueryVoiceBridge, type QueryTalkDriver, type VoiceScope } from "./voice-bridge.js";
+import { withVoiceExecution, voiceContextForTool } from "./voice-execution-context.js";
+import type { ExternalContext } from "./external-context.js";
+const dirs: string[] = [];
+afterEach(() => { for (const directory of dirs.splice(0)) rmSync(directory, {recursive: true, force: true}); });
+const scope: VoiceScope = {call_id: "f98a57d5-3587-4794-bc8f-58dc71de7391", tenant: "synthetic_a", user_id: 7, thread_id: 102, agent_id: 3};
+const payload = {provider: "openai", model: "gpt-realtime-2.1", transport: "webrtc", brain: "agent-consult"};
+const request = (data: Record<string, unknown> = payload, target = scope) => ({version: 1, scope: target, payload: data});
+
+it("durably claims starts and commands, isolates actors and never repeats an uncertain effect", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "query-voice-")); dirs.push(directory);
+  const driver: QueryTalkDriver = {verified: true, owns: () => true, start: vi.fn(async (_s, _p, emit) => {
+    emit({event_id: "ready", type: "call.listening"});
+    return {control_owner: "gateway", identity_bound: true, provider: "openai", model: "gpt-realtime-2.1", transport: "webrtc", auth_mode: "platform"} as const;
+  }), control: vi.fn(async () => { throw Error("lost response"); }), touch: vi.fn(async () => {})};
+  const bridge = new QueryVoiceBridge(directory, driver);
+  await bridge.dispatch("start", request());
+  const restored = new QueryVoiceBridge(directory, driver);
+  await restored.dispatch("start", request());
+  expect(driver.start).toHaveBeenCalledTimes(1);
+  await expect(restored.dispatch("events", request({after: 0}, {...scope, user_id: 8}))).rejects.toThrow("scope");
+  const events = await restored.dispatch("events", request({after: 0}));
+  expect((events.events as unknown[]).length).toBe(1);
+  const command = {kind: "cancel_task", run_id: "run-1", client_operation_id: "e5e834c6-71cf-4e73-8413-cddba5b04ea0"};
+  await expect(restored.dispatch("control", request(command))).rejects.toThrow("uncertain");
+  await expect(restored.dispatch("control", request(command))).rejects.toThrow("uncertain");
+  expect(driver.control).toHaveBeenCalledTimes(1);
+});
+
+it("driver validation is mandatory even when provider catalog is ready", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "query-voice-")); dirs.push(directory);
+  const start = vi.fn();
+  const bridge = new QueryVoiceBridge(directory, {verified: false, owns: () => false, start, control: vi.fn(), touch: vi.fn()});
+  await expect(bridge.dispatch("start", request())).rejects.toThrow("not_verified");
+  expect(start).not.toHaveBeenCalled();
+});
+
+it("voice executions retain their delegated identity across overlapping async work", async () => {
+  const context = {version: 1, sessionKey: "agent:query:query:102", senderId: "7", threadId: "102",
+    queryAccountId: "synthetic_a", socketUrl: "wss://synthetic.invalid/ws", agentToken: "synthetic",
+    clientMsgId: "voice-1", expiresAt: Date.now() + 1000,
+    auth: {source: "voice", token: "synthetic", identity: {id: 7}, external_account_identity: {id: 7}}} as ExternalContext;
+  const other = {...context, queryAccountId: "synthetic_b", senderId: "8", auth: {
+    ...context.auth, identity: {...context.auth.identity!, id: 8}, external_account_identity: {...context.auth.external_account_identity!, id: 8}}};
+  await Promise.all([context, other].map((ctx, i) => withVoiceExecution({runId: `run-${i}`, context: ctx, revalidate: async () => ctx}, async () => {
+    await Promise.resolve();
+    expect((await voiceContextForTool())?.senderId).toBe(ctx.senderId);
+  })));
+  expect(await voiceContextForTool()).toBeUndefined();
+  await expect(withVoiceExecution({runId: "run", context, revalidate: async () => other}, voiceContextForTool)).rejects.toThrow("identity_changed");
+  await expect(withVoiceExecution({runId: "run", context, revalidate: async () => {throw Error("revoked");}}, voiceContextForTool)).rejects.toThrow("revoked");
+});
