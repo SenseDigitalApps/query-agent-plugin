@@ -99,6 +99,7 @@
             "gatewayUrl": {"type": "string", "description": "WebSocket local del Gateway, p. ej. ws://127.0.0.1:18789"},
             "gatewayHttpUrl": {"type": "string", "description": "HTTP local del Gateway para la oferta SDP."},
             "journalDir": {"type": "string", "description": "Directorio exclusivo (0700) del diario de llamadas."},
+            "deviceDir": {"type": "string", "description": "Directorio exclusivo (0700) de la identidad de dispositivo operador del puente."},
             "routes": {
               "type": "array",
               "items": {

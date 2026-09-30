@@ -5,10 +5,11 @@
  * - when `channels.query.voice.enabled`, the Gateway-owned driver, its private
  *   HTTP bridge for Core and a dedicated operator connection to this Gateway.
  *
- * Secrets come only from the Gateway environment: QUERY_AGENT_VOICE_BRIDGE_TOKEN
- * (shared with Core, >= 32 chars) and QUERY_VOICE_GATEWAY_DEVICE_TOKEN (paired
- * operator device, `operator.write`, never `operator.admin`). No OAuth token or
- * Platform key is read here.
+ * Secrets: QUERY_AGENT_VOICE_BRIDGE_TOKEN (shared with Core, >= 32 chars) comes
+ * from the Gateway environment. The connection to this Gateway uses a dedicated
+ * operator device (src/voice-device.ts) that asks only for `operator.write` and
+ * must be approved once with `openclaw devices approve <requestId>`. No OAuth
+ * token or Platform key is read here.
  */
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-core";
 import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
@@ -23,6 +24,7 @@ import { QueryVoiceBridge, voiceBridgeHandler, type VoiceScope } from "./voice-b
 import { checkVoiceOAuthOnly } from "./voice-route.js";
 import { voiceRuns, type VoiceDelegationResult } from "./voice-run-binding.js";
 import { GatewayTalkDriver, type VoiceCallTarget } from "./voice-talk-driver.js";
+import { VOICE_OPERATOR_ROLE, VOICE_OPERATOR_SCOPES, VoiceOperatorDevice } from "./voice-device.js";
 
 export type QueryVoiceConfig = {
   enabled?: boolean;
@@ -31,6 +33,8 @@ export type QueryVoiceConfig = {
   gatewayUrl?: string;
   gatewayHttpUrl?: string;
   journalDir?: string;
+  /** Private directory (0700) for the bridge's own operator device key and token. */
+  deviceDir?: string;
   /** Trusted tenant + Query agent id -> local Query account. Exactly one match. */
   routes?: { tenant: string; agentId: number; accountId: string }[];
 };
@@ -88,23 +92,29 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
   const voice = (cfg.channels?.query as {voice?: QueryVoiceConfig} | undefined)?.voice;
   if (!voice?.enabled) return;
   const bridgeToken = process.env.QUERY_AGENT_VOICE_BRIDGE_TOKEN?.trim() ?? "";
-  const deviceToken = process.env.QUERY_VOICE_GATEWAY_DEVICE_TOKEN?.trim() ?? "";
   const gatewayUrl = voice.gatewayUrl?.trim() || "ws://127.0.0.1:18789";
   const gatewayHttpBase = voice.gatewayHttpUrl?.trim() || gatewayUrl.replace(/^ws/, "http");
-  if (bridgeToken.length < 32 || !deviceToken) {
-    api.logger.warn("query_voice_disabled reason=missing_private_tokens");
+  if (bridgeToken.length < 32) {
+    api.logger.warn("query_voice_disabled reason=missing_bridge_token");
     return;
   }
+  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || join(homedir(), ".openclaw");
+  const device = new VoiceOperatorDevice(voice.deviceDir?.trim() || join(stateDir, "query-voice-device"));
+  const {identity, deps} = device.hostDeps();
+  api.logger.info(`query_voice_device device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`);
 
   let driver: GatewayTalkDriver;
   const client = new GatewayClient({
     url: gatewayUrl,
-    deviceToken,
-    role: "operator",
-    scopes: ["operator.write"],
+    role: VOICE_OPERATOR_ROLE,
+    scopes: [...VOICE_OPERATOR_SCOPES],
+    deviceIdentity: identity,
+    hostDeps: deps,
     clientDisplayName: "Query voice bridge",
     onEvent: frame => driver?.handleGatewayEvent(frame as {event: string; payload?: unknown}),
     onClose: () => driver?.handleGatewayClosed(),
+    // Pending approval shows up here; never log the error body (it may carry tokens).
+    onConnectError: () => api.logger.warn(`query_voice_gateway_connect_pending device=${identity.deviceId.slice(0, 12)}`),
   });
   driver = new GatewayTalkDriver({
     verified: voice.verified === true,
@@ -125,8 +135,7 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
     },
     claimDelegation: (scope, target, claim) => claimDelegation(scope, target, claim, bridgeToken),
   });
-  const journal = voice.journalDir?.trim() ||
-    join(process.env.OPENCLAW_STATE_DIR?.trim() || join(homedir(), ".openclaw"), "query-voice-journal");
+  const journal = voice.journalDir?.trim() || join(stateDir, "query-voice-journal");
   const bridge = new QueryVoiceBridge(journal, driver);
   const handler = voiceBridgeHandler(bridge, bridgeToken);
   api.registerHttpRoute({

@@ -487,8 +487,9 @@ rechaza con `voice_platform_credential_reachable`, porque el runtime haría el
 fallback sin avisar. Cada run `talk-realtime-consult:*` se enlaza a su usuario
 Query en `before_tool_call` (`src/voice-run-binding.ts`); en voz solo quedan
 herramientas de lectura y propuesta. Deja `verified: false` hasta la prueba real.
-Secretos solo en el entorno: `QUERY_AGENT_VOICE_BRIDGE_TOKEN` y
-`QUERY_VOICE_GATEWAY_DEVICE_TOKEN` (dispositivo `operator.write`, nunca admin).
+Secreto en el entorno: `QUERY_AGENT_VOICE_BRIDGE_TOKEN`. El puente crea su
+propio dispositivo operador (solo `operator.write`), que se aprueba una vez con
+`openclaw devices approve <requestId>`.
 Ruta, bloqueos y activación: `query-core/docs/agent-voice/OAUTH-ROUTE.md`.
 
 ## Facturación electrónica Matías
