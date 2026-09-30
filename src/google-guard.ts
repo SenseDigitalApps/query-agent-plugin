@@ -5,9 +5,11 @@ import type {
   QueryToolContext,
 } from "./openclaw-compat.js";
 import { getDelegatedAuth } from "./delegated-store.js";
+import type { QueryDelegatedAuth } from "./types.js";
 import { authorizeExternalAccount } from "./external-accounts.js";
 import { readConfiguredGoogleAccountEmail } from "./google-accounts.js";
-import { externalContextForRun } from "./external-context.js";
+import { externalContextForRun, type ExternalContext } from "./external-context.js";
+import { VoiceRunRegistry, voiceRuns } from "./voice-run-binding.js";
 import { voiceContextForTool, hasVoiceExecution } from "./voice-execution-context.js";
 import { scheduledCredential } from "./scheduled-context.js";
 import { primeScheduleCredential } from "./cron-sync.js";
@@ -115,6 +117,18 @@ export async function evaluateGoogleToolCall(
 ): Promise<QueryBeforeToolCallResult | void> {
   const linkingTool = event.toolName.startsWith("query_google_");
   if (!isGoogleTool(event.toolName) && !linkingTool) return;
+  const runId = ctx.runId ?? event.runId;
+  if (VoiceRunRegistry.isTalkRun(runId)) {
+    // A Talk consult never resolves the thread's legacy slot or cron binding:
+    // only the identity Core issued for this call and run may pick an account.
+    const refusal = await voiceRuns.beforeToolCall({ ...ctx, runId }, event.toolName);
+    if (refusal) return blocked(`Google no está disponible en esta llamada de voz (${refusal}).`);
+    if (linkingTool) return blocked("La vinculación de cuentas de Google no se hace desde una llamada de voz.");
+    let voice;
+    try { voice = await voiceRuns.revalidate(runId!); }
+    catch { return blocked("No se pudo renovar la identidad de esta llamada de voz; no se usará otra credencial."); }
+    return evaluateScopedGoogleToolCall(event, voice, log);
+  }
   const cronSession = hasVoiceExecution() ? undefined : resolveQuerySession(ctx.sessionKey);
   let scheduled;
   if (cronSession?.jobId) {
@@ -139,6 +153,26 @@ export async function evaluateGoogleToolCall(
   // que Query administra, no para adueñarse de las herramientas de Google.
   if (!session) return;
 
+  const stored = scheduled?.credential ?? scoped ?? getDelegatedAuth(session.authKey ?? session.threadId);
+  return authorizeGoogleAccount(event, session, stored, scheduled?.threadId, log);
+}
+
+/** Voice path: the account decision uses only the identity bound to this run. */
+async function evaluateScopedGoogleToolCall(
+  event: QueryBeforeToolCallEvent,
+  scoped: ExternalContext,
+  log?: { info?: (message: string) => void; warn?: (message: string) => void },
+): Promise<QueryBeforeToolCallResult | void> {
+  return authorizeGoogleAccount(event, { threadId: scoped.threadId, jobId: undefined, authKey: undefined }, scoped, undefined, log);
+}
+
+async function authorizeGoogleAccount(
+  event: QueryBeforeToolCallEvent,
+  session: { threadId: string; jobId?: string; authKey?: string },
+  stored: { socketUrl: string; auth: QueryDelegatedAuth } | undefined,
+  scheduledThreadId: string | undefined,
+  log?: { info?: (message: string) => void; warn?: (message: string) => void },
+): Promise<QueryBeforeToolCallResult | void> {
   const params = event.params ?? {};
   const account = readParam(params, ACCOUNT_PARAM_KEYS);
   if (!account) {
@@ -149,7 +183,6 @@ export async function evaluateGoogleToolCall(
     );
   }
 
-  const stored = scheduled?.credential ?? scoped ?? getDelegatedAuth(session.authKey ?? session.threadId);
   if (!stored) {
     // Un cron sin ``run_as`` valido nunca recibe credencial, asi que este es el
     // punto en que se detiene: no hay a nombre de quien pedir la cuenta.
@@ -184,7 +217,7 @@ export async function evaluateGoogleToolCall(
     accountId: account.value,
     authenticatedEmail: declaredEmail?.value,
     configuredEmail: configuredEmail || undefined,
-    threadId: scheduled?.threadId ?? session.threadId,
+    threadId: scheduledThreadId ?? session.threadId,
   });
 
   const accountSubject =

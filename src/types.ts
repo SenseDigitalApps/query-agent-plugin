@@ -27,9 +27,11 @@ export type QueryChannelConfig = {
   /** Esfuerzo base del agente; `auto` escala deterministicamente por riesgo. */
   effortMode?: QueryEffortMode | string;
   accounts?: Record<string, QueryAccountConfig>;
+  /** Voz GPT-Live por OAuth; ver src/voice-register.ts. Solo en la raiz del canal. */
+  voice?: import("./voice-register.js").QueryVoiceConfig;
 };
 
-export type QueryAccountConfig = Omit<QueryChannelConfig, "accounts">;
+export type QueryAccountConfig = Omit<QueryChannelConfig, "accounts" | "voice">;
 
 export type ResolvedQueryAccount = {
   accountId: string;

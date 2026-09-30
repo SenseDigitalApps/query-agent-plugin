@@ -6,6 +6,7 @@ import { registerQueryCronSync } from "./src/cron-sync.js";
 import { registerQueryGoogleGuard } from "./src/google-guard.js";
 import queryToolsEntry from "./src/query-tools.js";
 import { registerBrightDataXTool } from "./src/brightdata-x-tool.js";
+import { registerQueryVoice } from "./src/voice-register.js";
 
 export default defineChannelPluginEntry({
   id: "query",
@@ -17,6 +18,7 @@ export default defineChannelPluginEntry({
     if ("on" in api && typeof api.on === "function") {
       registerQueryCronSync(api);
       registerQueryGoogleGuard(api);
+      registerQueryVoice(api);
     }
     queryToolsEntry.register(api);
     registerBrightDataXTool(api);

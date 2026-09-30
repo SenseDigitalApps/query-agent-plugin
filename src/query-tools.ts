@@ -1,5 +1,6 @@
 import { AsyncLocalStorage } from "node:async_hooks";
-import { voiceContextForTool } from "./voice-execution-context.js";
+import { voiceContextForTool, withVoiceExecution } from "./voice-execution-context.js";
+import { voiceRuns } from "./voice-run-binding.js";
 import { executeFtp, ftpBridge, runtimeIdentity, safeFtpError } from "./ftp-executor.js";
 const ftpWorkspace = new AsyncLocalStorage<string | undefined>();
 import { Type } from "typebox";
@@ -1247,9 +1248,20 @@ export default defineToolPlugin({
         },
         execute: async (toolCallId, params, signal, onUpdate) => {
           const invoke = (resolved: unknown) => ftpWorkspace.run(toolContext.workspaceDir, () => definition.execute!(resolved, config, { api, toolCallId, signal, onUpdate }));
-          const voice = await voiceContextForTool();
-          if (voice) {
-            const value = await invoke({ ...(params as Record<string, unknown>), thread_id: voice.threadId });
+          // A Talk consult run carries its Query identity only through the
+          // binding claimed in before_tool_call for this exact toolCallId. It
+          // never falls back to the thread's last text actor.
+          const voiceState = voiceRuns.toolCallState(toolCallId, sessionKey);
+          voiceRuns.forgetToolCall(toolCallId);
+          if (voiceState.kind === "refused") {
+            return { content: [{ type: "text" as const, text: voiceState.reason }], details: { ok: false, error: voiceState.reason } };
+          }
+          if (voiceState.kind === "voice") {
+            const { runId, binding } = voiceState;
+            const value = await withVoiceExecution(
+              { runId, context: binding.context, revalidate: () => voiceRuns.revalidate(runId) },
+              () => invoke({ ...(params as Record<string, unknown>), thread_id: binding.context.threadId }),
+            );
             return typeof value === "string" ? textResult(value, value) : jsonResult(value);
           }
           let session = resolveQuerySession(sessionKey);

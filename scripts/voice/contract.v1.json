@@ -261,6 +261,71 @@
           "run_id"
         ]
       }
+    },
+    {
+      "if": {
+        "properties": {
+          "usage": {
+            "properties": {
+              "component": {
+                "const": "voice"
+              }
+            },
+            "required": [
+              "component"
+            ]
+          }
+        },
+        "required": [
+          "usage"
+        ]
+      },
+      "then": {
+        "properties": {
+          "usage": {
+            "properties": {
+              "auth_mode": {
+                "const": "oauth"
+              }
+            }
+          }
+        }
+      }
     }
-  ]
+  ],
+  "$comment": "Voz solo por GPT-Live publicado (gpt-live-1-codex) con ChatGPT OAuth en OpenClaw; sin Platform ni fallback. Ver OAUTH-ROUTE.md.",
+  "$defs": {
+    "effective_route": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "provider",
+        "model",
+        "transport",
+        "auth_mode",
+        "control_owner",
+        "identity_bound"
+      ],
+      "properties": {
+        "provider": {
+          "const": "openai"
+        },
+        "model": {
+          "const": "gpt-live-1-codex"
+        },
+        "transport": {
+          "const": "webrtc"
+        },
+        "auth_mode": {
+          "const": "oauth"
+        },
+        "control_owner": {
+          "const": "gateway"
+        },
+        "identity_bound": {
+          "const": true
+        }
+      }
+    }
+  }
 }

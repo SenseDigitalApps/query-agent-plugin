@@ -8,14 +8,14 @@ import type { ExternalContext } from "./external-context.js";
 const dirs: string[] = [];
 afterEach(() => { for (const directory of dirs.splice(0)) rmSync(directory, {recursive: true, force: true}); });
 const scope: VoiceScope = {call_id: "f98a57d5-3587-4794-bc8f-58dc71de7391", tenant: "synthetic_a", user_id: 7, thread_id: 102, agent_id: 3};
-const payload = {provider: "openai", model: "gpt-realtime-2.1", transport: "webrtc", brain: "agent-consult"};
+const payload = {provider: "openai", model: "gpt-live-1-codex", transport: "webrtc", brain: "agent-consult", auth_mode: "oauth"};
 const request = (data: Record<string, unknown> = payload, target = scope) => ({version: 1, scope: target, payload: data});
 
 it("durably claims starts and commands, isolates actors and never repeats an uncertain effect", async () => {
   const directory = mkdtempSync(join(tmpdir(), "query-voice-")); dirs.push(directory);
   const driver: QueryTalkDriver = {verified: true, owns: () => true, start: vi.fn(async (_s, _p, emit) => {
     emit({event_id: "ready", type: "call.listening"});
-    return {control_owner: "gateway", identity_bound: true, provider: "openai", model: "gpt-realtime-2.1", transport: "webrtc", auth_mode: "platform"} as const;
+    return {control_owner: "gateway", identity_bound: true, provider: "openai", model: "gpt-live-1-codex", transport: "webrtc", auth_mode: "oauth"} as const;
   }), control: vi.fn(async () => { throw Error("lost response"); }), touch: vi.fn(async () => {})};
   const bridge = new QueryVoiceBridge(directory, driver);
   await bridge.dispatch("start", request());
@@ -53,4 +53,47 @@ it("voice executions retain their delegated identity across overlapping async wo
   expect(await voiceContextForTool()).toBeUndefined();
   await expect(withVoiceExecution({runId: "run", context, revalidate: async () => other}, voiceContextForTool)).rejects.toThrow("identity_changed");
   await expect(withVoiceExecution({runId: "run", context, revalidate: async () => {throw Error("revoked");}}, voiceContextForTool)).rejects.toThrow("revoked");
+});
+
+it("rejects every Platform or GA route before touching the driver", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "query-voice-")); dirs.push(directory);
+  const start = vi.fn();
+  const bridge = new QueryVoiceBridge(directory, {verified: true, owns: () => true, start, control: vi.fn(), touch: vi.fn()});
+  for (const variant of [
+    {...payload, model: "gpt-realtime-2.1"},
+    {...payload, auth_mode: "platform"},
+    {...payload, transport: "gateway-relay"},
+    {provider: "openai", model: "gpt-live-1-codex", transport: "webrtc", brain: "agent-consult"},
+  ]) {
+    await expect(bridge.dispatch("start", request(variant, {...scope, call_id: crypto.randomUUID()}))).rejects.toThrow("unsupported_voice_route");
+  }
+  expect(start).not.toHaveBeenCalled();
+});
+
+it("treats a Platform-billed voice usage event or route as a failed start", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "query-voice-")); dirs.push(directory);
+  const control = vi.fn(async () => ({}));
+  const platformRoute: QueryTalkDriver = {verified: true, owns: () => true, control, touch: vi.fn(),
+    start: vi.fn(async () => ({control_owner: "gateway", identity_bound: true, provider: "openai", model: "gpt-live-1-codex", transport: "webrtc", auth_mode: "platform"}) as never)};
+  await expect(new QueryVoiceBridge(directory, platformRoute).dispatch("start", request())).rejects.toThrow("voice_start_uncertain");
+  const usage: QueryTalkDriver = {verified: true, owns: () => true, control, touch: vi.fn(), start: vi.fn(async (_s, _p, emit) => {
+    emit({event_id: "u1", type: "usage.final", run_id: "voice-session:1",
+      usage: {component: "voice", provider_response_id: "r1", auth_mode: "platform", input_tokens: 1, output_tokens: 1}});
+    return {control_owner: "gateway", identity_bound: true, provider: "openai", model: "gpt-live-1-codex", transport: "webrtc", auth_mode: "oauth"} as const;
+  })};
+  await expect(new QueryVoiceBridge(directory, usage).dispatch("start", request(payload, {...scope, call_id: "0c6b5e0e-0a3e-4b1c-9b1e-5d7f0f3d2a11"}))).rejects.toThrow("voice_start_uncertain");
+});
+
+it("reports pre-effect refusals by code and never retries them as a new session", async () => {
+  const directory = mkdtempSync(join(tmpdir(), "query-voice-")); dirs.push(directory);
+  const start = vi.fn(async () => { throw Error("voice_oauth_profile_missing"); });
+  const bridge = new QueryVoiceBridge(directory, {verified: true, owns: () => false, start, control: vi.fn(), touch: vi.fn()});
+  await expect(bridge.dispatch("start", request())).rejects.toThrow("voice_oauth_profile_missing");
+  await expect(bridge.dispatch("start", request())).rejects.toThrow("voice_start_refused");
+  expect(start).toHaveBeenCalledTimes(1);
+  // Provider-side or unknown failures stay uncertain and opaque.
+  const opaque = new QueryVoiceBridge(directory, {verified: true, owns: () => false, control: vi.fn(), touch: vi.fn(),
+    start: vi.fn(async () => { throw Error("sk-leaked provider detail"); })});
+  await expect(opaque.dispatch("start", request(payload, {...scope, call_id: "3e0d2b8e-7a41-4f55-9d8e-2f7a4b1c6d90"})))
+    .rejects.toThrow("voice_start_uncertain");
 });

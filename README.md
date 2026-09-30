@@ -476,6 +476,21 @@ sus flujos. Usar una version Node compatible con OpenClaw.
 Pruebas reales locales desde Core: `python -B ftp_executor_e2e.py RUTA_PLUGIN ftp`
 y el mismo comando con `ftps`, tras `npm run build`. Usan servidores y CA temporales,
 credenciales ficticias y puente HTTP de prueba en loopback; no prueban produccion.
+## Voz móvil (GPT-Live por ChatGPT OAuth)
+
+`channels.query.voice` activa un driver Talk propio (`src/voice-talk-driver.ts`):
+`gpt-live-1-codex`, WebRTC, control Gateway y `agent-consult` sobre la misma
+sesión del chat privado. Se autentica **solo** con el perfil OAuth de OpenClaw.
+Si el Gateway puede alcanzar una credencial Platform (`OPENAI_API_KEY`, un
+perfil `openai` `api_key` o `talk.realtime.providers.openai.apiKey`), la voz se
+rechaza con `voice_platform_credential_reachable`, porque el runtime haría el
+fallback sin avisar. Cada run `talk-realtime-consult:*` se enlaza a su usuario
+Query en `before_tool_call` (`src/voice-run-binding.ts`); en voz solo quedan
+herramientas de lectura y propuesta. Deja `verified: false` hasta la prueba real.
+Secretos solo en el entorno: `QUERY_AGENT_VOICE_BRIDGE_TOKEN` y
+`QUERY_VOICE_GATEWAY_DEVICE_TOKEN` (dispositivo `operator.write`, nunca admin).
+Ruta, bloqueos y activación: `query-core/docs/agent-voice/OAUTH-ROUTE.md`.
+
 ## Facturación electrónica Matías
 
 El plugin expone disponibilidad, estado, emisión por lotes, conciliación y

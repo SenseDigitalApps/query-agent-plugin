@@ -1,18 +1,19 @@
 /** Query control-plane bridge. Host supplies a verified Talk driver, never a
- * second assistant. Not registered until the server's sender binding is proven.
+ * second assistant. The only admitted route is voice-route.ts (GPT-Live over
+ * ChatGPT OAuth); `verified` stays false until the live coordinated test.
  */
 import { createHash, timingSafeEqual } from "node:crypto";
 import { mkdirSync, readFileSync, writeFileSync, renameSync } from "node:fs";
 import { join } from "node:path";
 import type { IncomingMessage, ServerResponse } from "node:http";
+import { EFFECTIVE_VOICE_ROUTE, VOICE_START_REFUSALS, isEffectiveOAuthRoute, isRequestedOAuthRoute, type VoiceEffectiveRoute } from "./voice-route.js";
 
 export type VoiceScope = { call_id: string; tenant: string; user_id: number; thread_id: number; agent_id: number };
 type Payload = Record<string, unknown>;
 type Event = Payload & { event_id: string; sequence: number; call_id: string; type: string };
-export type VoiceEffectiveRoute = {control_owner: "gateway"; identity_bound: true;
-  provider: "openai"; model: "gpt-realtime-2.1"; transport: "webrtc"; auth_mode: "platform"};
-const expectedRoute: VoiceEffectiveRoute = {control_owner: "gateway", identity_bound: true,
-  provider: "openai", model: "gpt-realtime-2.1", transport: "webrtc", auth_mode: "platform"};
+export type { VoiceEffectiveRoute } from "./voice-route.js";
+// OAuth GPT-Live only. There is no Platform route and no fallback to one.
+const expectedRoute: VoiceEffectiveRoute = EFFECTIVE_VOICE_ROUTE;
 type Journal = { scope: VoiceScope; state: string; startDigest: string;
   operations: Record<string, { digest: string; status: string }>; events: Event[] };
 const canonical = (value: unknown): unknown => Array.isArray(value) ? value.map(canonical) :
@@ -35,6 +36,8 @@ function safeEvent(input: Payload & {event_id: string; type: string}): Payload &
     if (key === "usage") {
       const usage = input.usage as Payload;
       if (!usage || typeof usage !== "object") throw Error("invalid_voice_usage");
+      // Voice usage that is not OAuth would mean a Platform fallback happened.
+      if (usage.component === "voice" && usage.auth_mode !== "oauth") throw Error("voice_usage_auth_mode_mismatch");
       result.usage = Object.fromEntries(["component", "provider_response_id", "auth_mode", "input_tokens", "output_tokens"].map(k => [k, usage[k] ?? null]));
     } else {
       const value = input[key];
@@ -95,10 +98,10 @@ export class QueryVoiceBridge {
     const payload = request.payload;
     let journal = this.read(scope);
     if (operation === "start") {
-      if (payload.provider !== "openai" || payload.model !== "gpt-realtime-2.1" ||
-          payload.transport !== "webrtc" || payload.brain !== "agent-consult") throw Error("unsupported_voice_route");
+      if (!isRequestedOAuthRoute(payload)) throw Error("unsupported_voice_route");
       if (journal) {
         if (journal.startDigest !== digest(payload)) throw Error("voice_start_conflict");
+        if (journal.state === "refused") throw Error("voice_start_refused");
         if (journal.state !== "started" || !this.driver.owns(scope)) throw Error("voice_start_uncertain");
         return {...expectedRoute};
       }
@@ -116,7 +119,7 @@ export class QueryVoiceBridge {
           current.events.push({...event, call_id: scope.call_id, sequence: current.events.length + 1});
           this.write(current);
         });
-        if (Object.entries(expectedRoute).some(([key, value]) => route[key as keyof VoiceEffectiveRoute] !== value)) throw Error("voice_effective_route_mismatch");
+        if (!isEffectiveOAuthRoute(route)) throw Error("voice_effective_route_mismatch");
         journal = this.read(scope)!;
         if (journal.state !== "accepted") {
           await this.driver.control(scope, {kind: "close", client_operation_id: scope.call_id});
@@ -125,8 +128,15 @@ export class QueryVoiceBridge {
         journal.state = "started";
         this.write(journal);
         return {...expectedRoute};
-      } catch {
+      } catch (error) {
         journal = this.read(scope)!;
+        const code = error instanceof Error ? error.message : "";
+        if (journal.state === "accepted" && VOICE_START_REFUSALS.has(code)) {
+          // Refused before any Talk session existed: nothing to reconcile.
+          journal.state = "refused";
+          this.write(journal);
+          throw Error(code);
+        }
         if (journal.state === "accepted") journal.state = "unknown";
         this.write(journal);
         throw Error("voice_start_uncertain");
@@ -201,6 +211,11 @@ export function voiceBridgeHandler(bridge: QueryVoiceBridge, token: string) {
       const operation = req.url?.split("?")[0]?.split("/").pop() ?? "";
       const result = await bridge.dispatch(operation, JSON.parse(body));
       res.end(JSON.stringify(result));
-    } catch { res.writeHead(503); res.end('{"error":"voice_bridge_unavailable"}'); }
+    } catch (error) {
+      // Only our own pre-effect refusal codes leave this process.
+      const code = error instanceof Error ? error.message : "";
+      if (VOICE_START_REFUSALS.has(code)) { res.writeHead(409); res.end(JSON.stringify({error: code})); return; }
+      res.writeHead(503); res.end('{"error":"voice_bridge_unavailable"}');
+    }
   };
 }
