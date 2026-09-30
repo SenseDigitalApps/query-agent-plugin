@@ -116,6 +116,10 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
     deviceIdentity: identity,
     hostDeps: deps,
     clientDisplayName: "Query voice bridge",
+    // Default backend mode exempts local gateway-client from device pairing.
+    // This app control connection must obtain its own scoped device token.
+    clientName: "gateway-client",
+    mode: "ui",
     onEvent: frame => driver?.handleGatewayEvent(frame as {event: string; payload?: unknown}),
     onHelloOk: () => api.logger.info(`query_voice_gateway_connected device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`),
     onClose: () => driver?.handleGatewayClosed(),
