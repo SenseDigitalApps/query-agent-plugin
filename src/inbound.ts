@@ -654,6 +654,9 @@ export async function dispatchQueryMessage(params: {
   account: ResolvedQueryAccount;
   event: QueryUserMessageEvent;
   threadId: string;
+  abortSignal?: AbortSignal;
+  isStopRequested?: () => boolean;
+  onRunStarted?: (target: { sessionKey: string; runId: string }) => void;
   onProgress?: (detail: string) => void;
   onActivity?: (activity: QueryAgentActivity) => void;
   /** Borrador publico acumulado; nunca incluye el reasoning privado. */
@@ -669,6 +672,7 @@ export async function dispatchQueryMessage(params: {
   const core = getQueryRuntime();
   const { cfg, account, threadId } = params;
   const event = await materializeInboundMediaAttachments(params.event, { log: params.log });
+  params.abortSignal?.throwIfAborted();
   const peerId = threadId || account.accountId;
   const threadType = event.data?.thread_type;
   const sender = event.data?.sender;
@@ -856,6 +860,10 @@ export async function dispatchQueryMessage(params: {
       },
       replyPipeline: {},
       replyOptions: {
+        abortSignal: params.abortSignal,
+        onAgentRunStart: (ownedRunId) => {
+          params.onRunStarted?.({ sessionKey: route.sessionKey, runId: ownedRunId });
+        },
         sourceReplyDeliveryMode: "automatic",
         ...effortRunOptions(effort.effectiveMode),
         // Effort controls latency, not authorization. Keep tools available even
@@ -931,6 +939,9 @@ export async function dispatchQueryMessage(params: {
 
     const rawDispatchResult =
       turnResult && turnResult.dispatched ? turnResult.dispatchResult : undefined;
+    // A cancelled dispatch must never become an automatic recovery turn.
+    params.abortSignal?.throwIfAborted();
+    if (params.isStopRequested?.()) throw new Error("query_user_stop");
     const diagnostics: QueryDispatchDiagnostics = {
       toolCalls,
       contextChars: agentBody.length,

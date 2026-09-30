@@ -9,6 +9,7 @@ import WebSocket, { type RawData } from "ws";
 import type { ChannelAccountSnapshot } from "openclaw/plugin-sdk/core";
 import type { RuntimeEnv } from "openclaw/plugin-sdk/runtime";
 import { dispatchQueryMessage } from "./inbound.js";
+import { QueryTurnStop, abortQueryRun } from "./turn-stop.js";
 import {
   createActivityGate,
   heartbeatActivityLabel,
@@ -118,6 +119,7 @@ export type QuerySocketOptions = {
   getStatus: () => ChannelAccountSnapshot;
   setStatus: (status: ChannelAccountSnapshot) => void;
   dispatchMessage?: typeof dispatchQueryMessage;
+  abortRun?: typeof abortQueryRun;
 };
 
 function toText(data: RawData): string {
@@ -272,6 +274,7 @@ export class QuerySocketMonitor {
   private stopping = false;
   private legacyGeneralThreadId: string;
   private readonly inFlight = new Set<string>();
+  private readonly turnAborts = new Map<string, QueryTurnStop>();
   private runTask?: Promise<void>;
   // Renovaciones de credencial en curso, por turno. Una tarea larga puede
   // terminar con el token del turno ya vencido y necesita uno nuevo justo
@@ -456,6 +459,22 @@ export class QuerySocketMonitor {
     }
     if (event.type === "agent.profile") {
       await this.syncAgentProfile(event.data);
+      return;
+    }
+    if (event.type === "turn.abort") {
+      const key = `${event.thread_id}\u0000${event.client_msg_id}`;
+      const turn = this.turnAborts.get(key);
+      const cached = this.store.get(event.thread_id, event.client_msg_id);
+      if (cached) {
+        this.send(cachedResponseEvent(cached));
+      } else if (turn && (!turn.settled || turn.requestId)) {
+        turn.request(event.data.request_id);
+      } else {
+        this.send({ type: "turn.abort.result", role: "system", content: "",
+          thread_id: event.thread_id, client_msg_id: event.client_msg_id,
+          data: { request_id: event.data.request_id, state: "failed",
+            detail: "No se encontró una ejecución activa que pueda detenerse." } });
+      }
       return;
     }
     if (event.type === "schedule.admin.command") {
@@ -683,6 +702,8 @@ export class QuerySocketMonitor {
     }
 
     this.inFlight.add(turnKey);
+    const abort = new QueryTurnStop(this.options.abortRun);
+    this.turnAborts.set(turnKey, abort);
     const effort = resolveEffortMode({
       configuredMode: event.data?.effort_mode ?? this.options.account.effortMode,
       content: event.content,
@@ -783,6 +804,7 @@ export class QuerySocketMonitor {
     let partialTimer: ReturnType<typeof setTimeout> | undefined;
     const flushPartial = () => {
       partialTimer = undefined;
+      if (abort.controller.signal.aborted) return;
       if (!latestPartial || latestPartial === sentPartial) return;
       sentPartial = latestPartial;
       partialSequence += 1;
@@ -802,17 +824,21 @@ export class QuerySocketMonitor {
       partialTimer.unref?.();
     };
 
+    let dispatchPromise: ReturnType<typeof dispatchQueryMessage> | undefined;
     try {
       const dispatchAt = Date.now();
       this.options.log?.info?.(
         `[${this.options.account.accountId}] ${event.client_msg_id}: query_gateway_dispatch dispatch_ms=${dispatchAt - receivedAt}`,
       );
       const result = await withTimeout(
-        (this.options.dispatchMessage ?? dispatchQueryMessage)({
+        dispatchPromise = (this.options.dispatchMessage ?? dispatchQueryMessage)({
           cfg: this.options.cfg,
           account: this.options.account,
           event,
           threadId,
+          abortSignal: abort.controller.signal,
+          isStopRequested: () => Boolean(abort.requestId),
+          onRunStarted: (target) => abort.bind(target),
           onProgress: (detail) => {
             this.options.log?.debug?.(
               `[${this.options.account.accountId}] ${event.client_msg_id}: ${detail}`,
@@ -825,9 +851,13 @@ export class QuerySocketMonitor {
           onPartialReply: queuePartial,
           log: this.options.log,
           effort,
-        }),
+        }).finally(() => { abort.settled = true; }),
         this.options.account.responseTimeoutMs,
       );
+      if (abort.requestId) {
+        await abort.confirmed();
+        throw new Error("query_user_stop");
+      }
       if (partialTimer) clearTimeout(partialTimer);
       flushPartial();
       const agentDoneAt = Date.now();
@@ -945,6 +975,33 @@ export class QuerySocketMonitor {
       if (existing) {
         throw error;
       }
+      if (abort.requestId && !abort.settled) {
+        this.send({ type: "turn.abort.result", role: "system", content: "",
+          thread_id: threadId, client_msg_id: event.client_msg_id,
+          data: { request_id: abort.requestId, state: "failed" } });
+        // A timeout is not proof of cancellation. Keep ownership until the SDK
+        // actually drains; do not free Query's queue or allow a duplicate run.
+        await dispatchPromise?.catch(() => undefined);
+      }
+      if (abort.requestId && abort.settled) {
+        const confirmed = await abort.confirmed();
+        const stopped: CachedResponse = {
+          threadId, clientMsgId: event.client_msg_id, type: confirmed ? "message" : "error",
+          content: confirmed ? "Detenido. Las acciones ya ejecutadas no se deshacen."
+            : "Se interrumpió la respuesta, pero no se pudo confirmar la detención completa de la ejecución.",
+          data: { stop: { state: confirmed ? "stopped" : "failed", request_id: abort.requestId } },
+          completedAt: Date.now(),
+        };
+        await this.store.set(stopped);
+        this.send(cachedResponseEvent(stopped));
+        return;
+      }
+      if (abort.requestId) {
+        this.send({ type: "turn.abort.result", role: "system", content: "",
+          thread_id: threadId, client_msg_id: event.client_msg_id,
+          data: { request_id: abort.requestId, state: "failed",
+            detail: "No se pudo confirmar que la ejecución se haya detenido." } });
+      }
       const response: CachedResponse = {
         threadId,
         clientMsgId: event.client_msg_id,
@@ -982,6 +1039,7 @@ export class QuerySocketMonitor {
           `activity_emitted=${stats.emitted} activity_dropped=${stats.dropped}`,
       );
       this.inFlight.delete(turnKey);
+      this.turnAborts.delete(turnKey);
     }
   }
 

@@ -18,6 +18,24 @@ const account: ResolvedQueryAccount = {
 };
 
 describe("Query inbound dispatch recovery", () => {
+  it("passes the dispatch signal to OpenClaw and never recovers a cancelled empty reply", async () => {
+    const controller = new AbortController();
+    const dispatchReply = vi.fn(async (params: any) => {
+      expect(params.replyOptions.abortSignal).toBe(controller.signal);
+      controller.abort(new Error("user stop"));
+      return { dispatched: true };
+    });
+    setQueryRuntime({ channel: {
+      routing: { resolveAgentRoute: () => ({ agentId: "query", accountId: "default", sessionKey: "agent:query:stop" }) },
+      session: { resolveStorePath: () => "sessions.json", recordInboundSession: vi.fn() },
+      inbound: { dispatchReply }, reply: { dispatchReplyWithBufferedBlockDispatcher: vi.fn() },
+    } } as never);
+    await expect(dispatchQueryMessage({ cfg: {} as QueryConfig, account, threadId: "stop",
+      abortSignal: controller.signal, event: { type: "message", role: "user", content: "work",
+        client_msg_id: "stop-recovery", thread_id: "stop", data: { attachments: [] } },
+    })).rejects.toThrow("user stop");
+    expect(dispatchReply).toHaveBeenCalledTimes(1);
+  });
   it("recovers assistant text when OpenClaw omits the final delivery callback", async () => {
     const onActivity = vi.fn();
     const onPartialReply = vi.fn();

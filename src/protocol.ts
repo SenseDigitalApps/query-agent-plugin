@@ -30,6 +30,11 @@ export function parseQueryEvent(raw: string): QueryInboundEvent | null {
   if (!isRecord(value) || typeof value.type !== "string") {
     return null;
   }
+  if (value.type === "turn.abort" && value.role === "system" &&
+      typeof value.thread_id === "string" && value.thread_id.length > 0 &&
+      typeof value.client_msg_id === "string" && value.client_msg_id.length > 0 &&
+      isRecord(value.data) && typeof value.data.request_id === "string" &&
+      value.data.request_id.length > 0) return value as QueryInboundEvent;
   if (value.type === "session.ready" && isRecord(value.data)) {
     return value as QuerySessionReadyEvent;
   }

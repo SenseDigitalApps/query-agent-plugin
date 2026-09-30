@@ -274,6 +274,7 @@ export type QueryScheduleSyncAck = {
 };
 
 export type QueryInboundEvent =
+  | { type: "turn.abort"; role: "system"; thread_id: string; client_msg_id: string; data: { request_id: string } }
   | import("./schedule-administration.js").ScheduleAdminCommand
   | { type: "schedule.admin.received" | "schedule.admin.polled" | "schedule.admin.error";
       client_msg_id: string; data: Record<string, unknown> }
@@ -307,6 +308,7 @@ export type QueryAgentActivity = {
 
 export type QueryOutboundEvent = {
   type:
+    | "turn.abort.result"
     | "activity"
     | "message.delta"
     | "message"
