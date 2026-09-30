@@ -143,3 +143,18 @@ it("asks for presence after inactivity and only accepts the live challenge", asy
   await driver.control(scope, {kind: "presence", challenge_id: String(prompt!.challenge_id)});
   expect(events.at(-1)).toMatchObject({type: "presence.confirmed"});
 });
+
+it("refuses before creating a session when the Gateway's voice lines are full", async () => {
+  const {driver, request, emit} = setup({maxConcurrentCalls: 1});
+  await driver.start(scope, payload, emit);
+  await expect(driver.start({...scope, call_id: "5b4bd1f9-4a43-4f7e-8f6a-9c38b7fd7f1a", user_id: 8}, payload, emit))
+    .rejects.toThrow("voice_capacity_full");
+  expect(request.mock.calls.filter(([method]) => method === "talk.client.create")).toHaveLength(1);
+});
+
+it("passes Core's tenant host to the account resolver", async () => {
+  const resolveTarget = vi.fn(() => target);
+  const {driver, emit} = setup({resolveTarget});
+  await driver.start(scope, {...payload, core_host: "apius.itsquery.com"}, emit);
+  expect(resolveTarget).toHaveBeenCalledWith(scope, "apius.itsquery.com");
+});

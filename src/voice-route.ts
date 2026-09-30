@@ -68,6 +68,7 @@ export const VOICE_START_REFUSALS: ReadonlySet<string> = new Set([
   "voice_oauth_profile_missing",
   "voice_realtime_model_mismatch",
   "voice_gateway_unavailable",
+  "voice_capacity_full",
 ]);
 
 export type OAuthOnlyDeps = {

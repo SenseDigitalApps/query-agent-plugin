@@ -24,6 +24,7 @@ import { VoicePresenceGuard } from "./voice-presence.js";
 import { EFFECTIVE_VOICE_ROUTE, VOICE_OAUTH_ROUTE, isRequestedOAuthRoute, type OAuthOnlyVerdict,
   type VoiceEffectiveRoute } from "./voice-route.js";
 import type { VoiceDelegationClaim, VoiceDelegationResult, VoiceRunRegistry } from "./voice-run-binding.js";
+import type { VoiceCallTarget } from "./voice-target.js";
 
 type Payload = Record<string, unknown>;
 type Emit = (event: Payload & {event_id: string; type: string}) => void;
@@ -35,16 +36,7 @@ export type TalkGatewayClient = {
 
 export type TalkEventFrame = {event: string; payload?: unknown};
 
-/** Trusted mapping from Core's scope to this Gateway's Query account and route. */
-export type VoiceCallTarget = {
-  sessionKey: string;
-  /** OpenClaw agent that owns sessionKey; its auth store decides the credential. */
-  agentId: string;
-  accountId: string;
-  socketUrl: string;
-  agentToken: string;
-  coreApiBase: string;
-};
+export type { VoiceCallTarget } from "./voice-target.js";
 
 export type GatewayTalkDriverDeps = {
   verified: boolean;
@@ -52,7 +44,10 @@ export type GatewayTalkDriverDeps = {
   gatewayHttpBase: string;
   fetch: typeof fetch;
   registry: VoiceRunRegistry;
-  resolveTarget: (scope: VoiceScope) => VoiceCallTarget | undefined;
+  /** coreHost: the tenant API host Core reports in the start request. */
+  resolveTarget: (scope: VoiceScope, coreHost?: string) => VoiceCallTarget | undefined;
+  /** Live calls allowed on this Gateway at once; GPT-Live caps at 8. */
+  maxConcurrentCalls?: number;
   oauthOnly: (target: VoiceCallTarget) => OAuthOnlyVerdict;
   claimDelegation: (scope: VoiceScope, target: VoiceCallTarget, claim: VoiceDelegationClaim) => Promise<VoiceDelegationResult>;
   leaseMs?: number;
@@ -99,7 +94,9 @@ export class GatewayTalkDriver implements QueryTalkDriver {
 
   async start(scope: VoiceScope, payload: Payload, emit: Emit): Promise<VoiceEffectiveRoute> {
     if (!isRequestedOAuthRoute(payload)) throw Error("unsupported_voice_route");
-    const target = this.deps.resolveTarget(scope);
+    const live = [...this.calls.values()].filter(call => !call.ended).length;
+    if (live >= (this.deps.maxConcurrentCalls ?? 6)) throw Error("voice_capacity_full");
+    const target = this.deps.resolveTarget(scope, typeof payload.core_host === "string" ? payload.core_host : undefined);
     if (!target) throw Error("voice_account_unmapped");
     const verdict = this.deps.oauthOnly(target);
     if (!verdict.ok) throw Error(verdict.reason);

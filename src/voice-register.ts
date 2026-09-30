@@ -17,13 +17,13 @@ import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-au
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { join } from "node:path";
 import { homedir } from "node:os";
-import { resolveQueryAccount } from "./config.js";
 import { getQueryRuntime } from "./runtime.js";
 import type { QueryConfig } from "./types.js";
 import { QueryVoiceBridge, voiceBridgeHandler, type VoiceScope } from "./voice-bridge.js";
 import { checkVoiceOAuthOnly } from "./voice-route.js";
 import { voiceRuns, type VoiceDelegationResult } from "./voice-run-binding.js";
-import { GatewayTalkDriver, type VoiceCallTarget } from "./voice-talk-driver.js";
+import { GatewayTalkDriver } from "./voice-talk-driver.js";
+import { resolveVoiceTarget, type VoiceCallTarget, type VoiceRouteConfig } from "./voice-target.js";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
 import { voiceGatewayBootstrap } from "./voice-gateway-auth.js";
 import { VOICE_OPERATOR_ROLE, VOICE_OPERATOR_SCOPES, VoiceOperatorDevice } from "./voice-device.js";
@@ -37,34 +37,13 @@ export type QueryVoiceConfig = {
   journalDir?: string;
   /** Private directory (0700) for the bridge's own operator device key and token. */
   deviceDir?: string;
-  /** Trusted tenant + Query agent id -> local Query account. Exactly one match. */
-  routes?: { tenant: string; agentId: number; accountId: string }[];
+  /** Optional overrides. Without them the account is found by Core host + bot id. */
+  routes?: VoiceRouteConfig[];
+  /** Voice calls open at once on this Gateway (GPT-Live allows 8). Default 6. */
+  maxConcurrentCalls?: number;
 };
 
-/** wss://tenant.example/ws/openclaw-agent/<bot>/ -> https://tenant.example/api/v4/ */
-export function coreApiBaseFromSocket(socketUrl: string): string {
-  const url = new URL(socketUrl);
-  if (url.protocol !== "wss:" && !(url.protocol === "ws:" && ["localhost", "127.0.0.1", "::1"].includes(url.hostname))) {
-    throw Error("voice_core_url_insecure");
-  }
-  return `${url.protocol === "wss:" ? "https:" : "http:"}//${url.host}/api/v4/`;
-}
-
-export function resolveVoiceTarget(cfg: QueryConfig, scope: VoiceScope,
-    resolveRoute: (params: {cfg: QueryConfig; channel: string; accountId: string; peer: {kind: "direct"; id: string}}) => {sessionKey: string; agentId: string}):
-    VoiceCallTarget | undefined {
-  const voice = (cfg.channels?.query as {voice?: QueryVoiceConfig} | undefined)?.voice;
-  const matches = (voice?.routes ?? []).filter(route => route.tenant === scope.tenant && route.agentId === scope.agent_id);
-  if (matches.length !== 1) return undefined;
-  const account = resolveQueryAccount(cfg, matches[0].accountId);
-  if (!account.enabled || !account.configured) return undefined;
-  // Same route as src/inbound.ts for a private thread: direct peer = thread id.
-  const route = resolveRoute({cfg, channel: "query", accountId: account.accountId,
-    peer: {kind: "direct", id: String(scope.thread_id)}});
-  if (!route?.sessionKey || !route.agentId) return undefined;
-  return {sessionKey: route.sessionKey, agentId: route.agentId, accountId: account.accountId, socketUrl: account.url,
-    agentToken: account.token, coreApiBase: coreApiBaseFromSocket(account.url)};
-}
+export { coreApiBaseFromSocket, resolveVoiceTarget } from "./voice-target.js";
 
 async function claimDelegation(scope: VoiceScope, target: VoiceCallTarget,
     claim: {consult_id: string; run_id: string; question_digest: string}, bridgeToken: string): Promise<VoiceDelegationResult> {
@@ -132,8 +111,10 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
     gatewayHttpBase,
     fetch,
     registry: voiceRuns,
-    resolveTarget: scope => resolveVoiceTarget(cfg, scope, params =>
-      getQueryRuntime().channel.routing.resolveAgentRoute(params as never) as {sessionKey: string; agentId: string}),
+    maxConcurrentCalls: voice.maxConcurrentCalls,
+    resolveTarget: (scope, coreHost) => resolveVoiceTarget(cfg, scope, params =>
+      getQueryRuntime().channel.routing.resolveAgentRoute(params as never) as {sessionKey: string; agentId: string},
+      coreHost),
     oauthOnly: target => {
       // Same agent store the Talk session will resolve credentials from.
       const agentDir = resolveAgentDir(cfg, target.agentId);

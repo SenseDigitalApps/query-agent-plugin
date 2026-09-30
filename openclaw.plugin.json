@@ -100,6 +100,7 @@
             "gatewayHttpUrl": {"type": "string", "description": "HTTP local del Gateway para la oferta SDP."},
             "journalDir": {"type": "string", "description": "Directorio exclusivo (0700) del diario de llamadas."},
             "deviceDir": {"type": "string", "description": "Directorio exclusivo (0700) de la identidad de dispositivo operador del puente."},
+            "maxConcurrentCalls": {"type": "integer", "minimum": 1, "maximum": 8, "default": 6, "description": "Llamadas de voz simultáneas en este Gateway (GPT-Live admite 8)."},
             "routes": {
               "type": "array",
               "items": {
