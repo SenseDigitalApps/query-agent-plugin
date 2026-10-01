@@ -68,6 +68,7 @@ export const QUERY_DELIVERY_POLICY =
   "El usuario final esta en otro computador y no puede acceder al sistema de archivos del agente ni del servidor: una ruta local no cuenta como entrega. " +
   "Si generas o modificas cualquier archivo, publicalo en el topic o canal Query actual con query_attachment_send usando su ruta local interna como file_path. " +
   "Llama query_attachment_send directamente para publicar el archivo; nunca muestres file_path ni ninguna ruta local al usuario. " +
+  "Unica excepcion: un dashboard que la persona pidio fijar en el menu, compartir con usuarios o roles, seguir o tener siempre al dia se publica con query_dashboard_publish (HTML sin datos); un HTML con datos es un reporte y va por query_attachment_send. " +
   "Si la herramienta no aparece en el catalogo de este turno, reporta exactamente esa indisponibilidad sin inventar otra ruta de entrega. " +
   "Puedes usar LocalPath y rutas locales para leer adjuntos recibidos o crear archivos internamente, pero nunca las muestres como entrega final. " +
   "No envies localhost, 127.0.0.1, 0.0.0.0, IP privadas, Tailscale, rutas Windows/Linux ni enlaces privados. No uses registros de negocio para entregar archivos.]";

@@ -1,6 +1,6 @@
 ---
 name: query-panel
-description: 'Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Use Query proposal tools, which enforce human approval or an administrator-authorized creation policy. Also use for Matias electronic billing and LinkedIn multi-destination automation. Discovery-first: never assume module or field names.'
+description: 'Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Use Query proposal tools, which enforce human approval or an administrator-authorized creation policy. Also use for Matias electronic billing, LinkedIn multi-destination automation, and HTML reports or live dashboards pinned to the Query menu. Discovery-first: never assume module or field names.'
 ---
 
 # Query Panel Reader
@@ -467,6 +467,95 @@ Core. No anuncies un cambio aplicado si la respuesta sigue pendiente.
 Antes de proponer, mira si ya propusiste eso mismo en este canal. Si la
 respuesta trae `duplicate: true`, no se creo una segunda propuesta: menciona la
 existente y su estado devuelto, sin asumir que sigue pendiente.
+
+## Reportes y dashboards en vivo
+
+Un HTML con datos se entrega de una de dos formas. Elegir bien evita trabajo:
+el dashboard en vivo cuesta mas y solo vale la pena si alguien lo va a volver
+a abrir.
+
+**Regla:** por defecto, **reporte**. Solo **dashboard en vivo** si alguien va
+a volver a abrirlo en otro momento esperando ver los datos de ese momento.
+
+| La persona pide o dice | Entrega |
+|---|---|
+| Fijarlo, ponerlo en el menu, compartirlo con un rol o usuario | Dashboard en vivo |
+| "Seguimiento", "tablero", "monitorear", "cada dia/semana", "siempre actualizado", "en tiempo real" | Dashboard en vivo |
+| Convertir un reporte que ya existe | Dashboard en vivo |
+| Pregunta puntual o exploracion: "muestrame", "como vamos", "comparame" | Reporte |
+| Periodo cerrado ("septiembre", "2025"): esos datos ya no cambian | Reporte |
+| Para enviar, descargar o presentar | Reporte |
+| Datos de la web consultados ahora | Reporte |
+| Duda | Reporte |
+
+No preguntes antes de elegir. Si entregas un reporte de algo que parece
+recurrente, cierra con una linea: "Si quieres tenerlo en tu menu con datos al
+dia, lo convierto en dashboard en vivo."
+
+**Reporte:** genera el HTML con los datos dentro y publicalo con
+`query_attachment_send`.
+
+**Dashboard en vivo:** `query_dashboard_publish`. El HTML no lleva datos; los
+pide por nombre al abrirse y Query los consulta con los permisos del autor.
+
+1. Descubre modulos y campos, y prueba cada consulta con
+   `query_records_aggregate` o `query_records_search` antes de publicar.
+2. Declara las consultas con nombre. Usa fechas relativas (`{{start_of_month}}`,
+   `{{today}}`, `{{days_ago_30}}`...) para "este mes", "ultimos 30 dias", etc.
+3. Escribe el HTML con las clases `qd-*` y lee los datos con `QueryDashboard`.
+   No pongas titulo principal, boton de actualizar ni CSS propio de pagina:
+   Query ya los pone con el tema de la app.
+4. Si Query responde `dashboard_invalid`, lee `errors` (consulta que falla,
+   consulta sin usar, valores copiados en el HTML) y corrige todo de una vez.
+5. Si la persona pidio fijarlo o compartirlo, llama `query_dashboard_share` en
+   el mismo turno. Su instruccion es la autorizacion; no pidas otra.
+
+```json
+[
+  {"name": "ventas_mes", "source": "records_aggregate", "module": "ventas",
+   "metrics": [{"operation": "sum", "field": "valor", "alias": "total"}],
+   "group_by": ["fecha"], "time_granularity": {"fecha": "day"},
+   "date_filters": [{"field": "fecha", "from": "{{start_of_month}}", "to": "{{today}}"}]},
+  {"name": "meta_mes", "source": "static", "value": 120000000}
+]
+```
+
+```html
+<div class="qd-page">
+  <div class="qd-grid qd-cols-2">
+    <div class="qd-card qd-kpi">
+      <span class="qd-kpi-label">Ventas del mes</span>
+      <span class="qd-kpi-value" id="total">—</span>
+    </div>
+    <div class="qd-card qd-kpi">
+      <span class="qd-kpi-label">Meta</span>
+      <span class="qd-kpi-value" id="meta">—</span>
+    </div>
+  </div>
+</div>
+<script>
+QueryDashboard.render(function (data) {
+  var filas = QueryDashboard.rows(data.ventas_mes);
+  var total = filas.reduce(function (s, f) { return s + (f.total || 0); }, 0);
+  document.getElementById("total").textContent = QueryDashboard.format.currency(total);
+  document.getElementById("meta").textContent = QueryDashboard.format.currency(data.meta_mes.value);
+});
+</script>
+```
+
+Quien ve un dashboard:
+
+- Recien publicado solo lo ve su autor y no esta fijado.
+- "Fijalo" sin decir para quien: fijalo solo para la persona y ofrece
+  compartirlo.
+- "Compartelo con Cobranza y con Ana": `query_dashboard_share` con
+  `groups: ["Cobranza"]`, `users: ["Ana"]`. Si vuelve `audience_unresolved`
+  no se aplico nada: muestra los candidatos y pregunta.
+- Al confirmar, di quien lo ve (campo `audience`) y que lo ven con los permisos
+  del autor, aunque no tengan acceso a esos modulos.
+- Para cambiar un dashboard existente, busca su id con `query_dashboards_list`
+  y publica una version nueva con `dashboard_id`: conserva nombre, fijado y
+  audiencia.
 
 ## Cuando la persona confirma escribiendo
 

@@ -327,6 +327,101 @@ export async function uploadQueryAttachmentForThread(params: {
   }
 }
 
+const MAX_DASHBOARD_HTML_BYTES = 1_500_000;
+
+/**
+ * Publica un dashboard en vivo: el HTML va sin datos y las consultas con
+ * nombre las ejecuta Query con los permisos del autor cada vez que alguien lo
+ * abre. Query valida antes de guardar (consultas que corren, SDK en uso y
+ * ningun valor del resultado copiado en el HTML) y devuelve los errores por
+ * consulta para corregir en un solo intento.
+ */
+export async function publishQueryDashboardForThread(params: {
+  threadId?: string;
+  filePath?: string;
+  html?: string;
+  name?: string;
+  description?: string;
+  queries: unknown;
+  controls?: unknown;
+  dashboardId?: number;
+  log: QueryToolLog;
+}): Promise<unknown> {
+  const threadId = attachmentThreadId(params.threadId);
+  if (!threadId) {
+    return {
+      ok: false,
+      error: "thread_required",
+      detail: "Indica thread_id; solo puede omitirse cuando hay exactamente una conversacion Query activa.",
+    };
+  }
+  let html = params.html ?? "";
+  if (params.filePath) {
+    if (!isLocalArtifactPath(params.filePath)) {
+      return { ok: false, error: "local_file_required", detail: "file_path debe ser una ruta local absoluta del HTML." };
+    }
+    try {
+      const { readFile, stat } = await import("node:fs/promises");
+      const info = await stat(params.filePath);
+      if (!info.isFile() || info.size > MAX_DASHBOARD_HTML_BYTES) {
+        return { ok: false, error: "html_too_large", detail: "El HTML supera 1.5 MB o no es un archivo." };
+      }
+      html = await readFile(params.filePath, "utf8");
+    } catch {
+      return { ok: false, error: "file_unreadable", detail: "No se pudo leer el HTML local. No compartas la ruta." };
+    }
+  }
+  if (!html.trim()) {
+    return { ok: false, error: "html_required", detail: "Envia file_path con el HTML del dashboard." };
+  }
+  const result = (await postQuery(
+    threadId,
+    `threads/${encodeURIComponent(threadId)}/dashboards/publish/`,
+    {
+      html,
+      queries: params.queries,
+      ...(params.name ? { name: params.name } : {}),
+      ...(params.description ? { description: params.description } : {}),
+      ...(params.controls !== undefined ? { controls: params.controls } : {}),
+      ...(params.dashboardId !== undefined ? { dashboard_id: params.dashboardId } : {}),
+    },
+    "query_dashboard_publish",
+    params.log,
+  )) as { ok?: boolean; attachment?: { url?: string } } | undefined;
+  if (!result?.ok || !result.attachment?.url) return result;
+  return {
+    ...result,
+    // Igual que query_attachment_send: OpenClaw agrega details.media al turno
+    // y el socket lo entrega como adjunto del mensaje, sin copiar enlaces.
+    media: { url: result.attachment.url, attachments: [result.attachment] },
+  };
+}
+
+export async function shareQueryDashboardForThread(params: {
+  threadId: string;
+  dashboardId: number;
+  pinned?: boolean;
+  name?: string;
+  users?: Array<string | number>;
+  groups?: Array<string | number>;
+  mode?: "add" | "remove" | "replace";
+  log: QueryToolLog;
+}): Promise<unknown> {
+  return postQuery(
+    params.threadId,
+    `threads/${encodeURIComponent(params.threadId)}/dashboards/${params.dashboardId}/share/`,
+    {
+      ...(params.pinned !== undefined ? { pinned: params.pinned } : {}),
+      ...(params.name ? { name: params.name } : {}),
+      ...(params.users !== undefined ? { users: params.users } : {}),
+      ...(params.groups !== undefined ? { groups: params.groups } : {}),
+      ...(params.mode ? { mode: params.mode } : {}),
+    },
+    "query_dashboard_share",
+    params.log,
+  );
+}
+
 export async function callQuery(
   threadId: string,
   path: string,
@@ -729,7 +824,11 @@ export default defineToolPlugin({
       name: "query_attachment_send",
       label: "Query: entregar archivo",
       description:
-        "Sube un archivo generado o modificado al sistema nativo de attachments de Query para dejarlo visible y descargable en el chat. Usa esta herramienta para HTML, PDF, Word, Excel, CSV, imagenes, audio, video, ZIP, dashboards y presentaciones. Nunca muestres file_path al usuario ni uses registros de negocio para entregar archivos.",
+        "Sube un archivo generado o modificado al sistema nativo de attachments de Query para dejarlo visible y descargable en el chat. Usa esta herramienta para HTML, PDF, Word, Excel, CSV, imagenes, audio, video, ZIP y presentaciones. " +
+        "Un HTML con datos enviado aqui es un REPORTE: una foto de los datos del momento, con los datos escritos dentro. Es la opcion por defecto para analisis, informes, comparaciones, periodos cerrados, datos de la web y todo lo que se va a enviar o descargar. " +
+        "Si la persona pide fijarlo en el menu, compartirlo con usuarios o roles, hacerle seguimiento o tenerlo siempre al dia, usa query_dashboard_publish. " +
+        "Si un reporte parece de seguimiento recurrente, al final ofrece en una linea convertirlo en dashboard en vivo; no lo conviertas sin que lo pida. " +
+        "Nunca muestres file_path al usuario ni uses registros de negocio para entregar archivos.",
       parameters: Type.Object({
         file_path: Type.String({
           description: "Ruta local absoluta del archivo que el agente ya genero.",
@@ -758,6 +857,118 @@ export default defineToolPlugin({
           kind,
           log: context.api.logger,
         }),
+    }),
+    tool({
+      name: "query_dashboard_publish",
+      label: "Query: publicar dashboard en vivo",
+      description:
+        "Publica un DASHBOARD EN VIVO: un HTML sin datos que Query llena cada vez que alguien lo abre, consultando con los permisos del autor. " +
+        "Usala SOLO si la persona pide fijarlo en el menu, compartirlo con usuarios o roles, hacerle seguimiento, tenerlo siempre al dia, o convertir un reporte. " +
+        "En cualquier otro caso (analisis, informe, comparacion, periodo cerrado, datos de la web, algo para enviar) entrega un reporte con query_attachment_send. En la duda, reporte. " +
+        "Antes descubre modulos y campos (query_module_describe) y prueba las consultas con query_records_search/query_records_aggregate. " +
+        "queries: lista de consultas con name en snake_case y source: " +
+        "records_aggregate {module, metrics, group_by, filters, date_filters, time_granularity}; " +
+        "records_query {module, filters, columns, sort, limit<=200} (mismos parametros que query_records_aggregate y query_records_search); " +
+        "static {value} solo para metas o umbrales fijos. " +
+        "Fechas relativas en cualquier valor, resueltas al abrir: {{today}}, {{yesterday}}, {{start_of_week}}, {{start_of_month}}, {{end_of_month}}, {{start_of_last_month}}, {{end_of_last_month}}, {{start_of_year}}, {{end_of_year}}, {{days_ago_N}}, {{start_of_months_ago_N}}. Nunca escribas fechas fijas para 'este mes' o 'este anio'. " +
+        "El HTML no puede contener datos: leelos con QueryDashboard.render(function (data) { var filas = QueryDashboard.rows(data.nombre); ... }) o await QueryDashboard.query('nombre'). " +
+        "Cada resultado trae ok y rows (o value si es static); usa QueryDashboard.ok(r), QueryDashboard.format.currency/number/percent/compact/date y QueryDashboard.theme.palette para colores de graficas. " +
+        "Query rechaza la publicacion si una consulta falla, si una consulta declarada no se usa en el HTML o si encuentra valores del resultado copiados en el HTML; lee errors y corrige todo en un intento. " +
+        "Estilo: Query ya pone el tema de la app, la fuente, el titulo y el boton Actualizar. No agregues titulo principal, boton de actualizar ni CSS de pagina; usa estas clases: " +
+        "qd-page, qd-grid (con qd-cols-2/3/4, qd-span-2, qd-span-full), qd-card (qd-card-header, qd-card-title, qd-card-subtitle), qd-kpi (qd-kpi-label, qd-kpi-value, qd-kpi-delta is-up/is-down, qd-kpi-icon), " +
+        "qd-table-wrap + qd-table (td.is-number), qd-badge (is-primary/success/warning/danger/info), qd-progress, qd-list, qd-chart, qd-empty, qd-error, qd-muted. " +
+        "Graficas con Chart.js o ECharts desde cdnjs.cloudflare.com o cdn.jsdelivr.net; no hay otro acceso a red. " +
+        "Para una version nueva del mismo dashboard envia dashboard_id: conserva nombre, fijado y audiencia. " +
+        "Recien publicado solo lo ve su autor y no esta fijado: si la persona pidio fijarlo o compartirlo, llama query_dashboard_share en el mismo turno. " +
+        "El dashboard aparece como adjunto en el chat; no muestres la ruta local.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        file_path: Type.String({
+          description: "Ruta local absoluta del HTML del dashboard (sin datos).",
+        }),
+        name: Type.Optional(Type.String({ description: "Nombre visible del dashboard." })),
+        description: Type.Optional(Type.String({ description: "Una frase sobre que muestra." })),
+        queries: Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+          minItems: 1,
+          maxItems: 20,
+          description: "Consultas con nombre que el HTML lee con QueryDashboard.",
+        }),
+        controls: Type.Optional(
+          Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+            description:
+              "Filtros opcionales del visor: {slug, label, type: text|number|date|datetime|boolean|select, default, options}. Se usan en las consultas como {{slug}} y se cambian con QueryDashboard.setControls.",
+          }),
+        ),
+        dashboard_id: Type.Optional(
+          Type.Integer({ minimum: 1, description: "Id del dashboard al que se le publica una version nueva." }),
+        ),
+      }),
+      execute: async (
+        { thread_id, file_path, name, description, queries, controls, dashboard_id },
+        _config,
+        context,
+      ) =>
+        publishQueryDashboardForThread({
+          threadId: thread_id,
+          filePath: file_path,
+          name,
+          description,
+          queries,
+          controls,
+          dashboardId: dashboard_id,
+          log: context.api.logger,
+        }),
+    }),
+    tool({
+      name: "query_dashboard_share",
+      label: "Query: fijar y compartir dashboard",
+      description:
+        "Fija o quita del menu Dashboards, renombra y define quien ve un dashboard en vivo. " +
+        "La instruccion explicita de la persona en el chat es la autorizacion: aplica sin pedir otra confirmacion. Solo el autor o un administrador pueden hacerlo. " +
+        "users y groups aceptan nombre, usuario, correo o id. mode=add (por defecto) suma a la audiencia, remove quita y replace deja exactamente la lista enviada (replace sin listas = solo el autor). " +
+        "Sin audiencia explicita solo lo ve el autor: si la persona dice 'fijalo' sin decir para quien, fijalo para ella sola y ofrece compartirlo. " +
+        "Si vuelve audience_unresolved no se aplico nada: muestra los candidatos y pregunta, o reintenta con el id. " +
+        "Quienes reciben acceso ven los datos con los permisos del autor aunque no tengan acceso a esos modulos; mencionalo al confirmar junto con el texto de audience.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        dashboard_id: Type.Integer({ minimum: 1 }),
+        pinned: Type.Optional(Type.Boolean({ description: "true lo fija en el menu Dashboards; false lo quita." })),
+        name: Type.Optional(Type.String({ description: "Nuevo nombre visible en el menu." })),
+        users: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Integer()]))),
+        groups: Type.Optional(
+          Type.Array(Type.Union([Type.String(), Type.Integer()]), { description: "Roles de Query." }),
+        ),
+        mode: Type.Optional(
+          Type.Union([Type.Literal("add"), Type.Literal("remove"), Type.Literal("replace")]),
+        ),
+      }, { additionalProperties: false }),
+      execute: async ({ thread_id, dashboard_id, pinned, name, users, groups, mode }, _config, context) =>
+        shareQueryDashboardForThread({
+          threadId: thread_id,
+          dashboardId: dashboard_id,
+          pinned,
+          name,
+          users,
+          groups,
+          mode,
+          log: context.api.logger,
+        }),
+    }),
+    tool({
+      name: "query_dashboards_list",
+      label: "Query: listar dashboards en vivo",
+      description:
+        "Lista los dashboards en vivo que la persona puede abrir: id, nombre, si esta fijado, quien lo ve y si puede administrarlo (can_manage). " +
+        "Usala para encontrar dashboard_id antes de publicar una version nueva, fijarlo o compartirlo; no adivines ids.",
+      parameters: Type.Object({ thread_id: THREAD_PARAM }),
+      execute: async ({ thread_id }, _config, context) =>
+        callQuery(
+          thread_id,
+          `threads/${encodeURIComponent(thread_id)}/dashboards/`,
+          {},
+          "query_dashboards_list",
+          context.api.logger,
+        ),
     }),
     tool({
       name: "query_modules_list",
