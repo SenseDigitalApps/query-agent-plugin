@@ -52,6 +52,7 @@ it.each(['preauthorize','grants'])('forwards Query username and legacy ID for SM
 
 it.each([
   {action:'propose',attachment_ids:[23],idempotency_key:'stable',to:['to@example.com'],subject:'PDF',body:'Adjunto'},
+  {action:'propose',idempotency_key:'html',to:['to@example.com'],subject:'Informe',body_html:'<p>Hola</p>'},
   {action:'revise',submission_id:'draft',attachment_ids:[],new_account_id:'second',expected_digest:'digest'},
   {action:'send',submission_id:'draft',expected_digest:'digest'},
   {action:'retry',submission_id:'rejected'},
