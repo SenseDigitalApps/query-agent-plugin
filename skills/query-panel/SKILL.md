@@ -486,6 +486,7 @@ a volver a abrirlo en otro momento esperando ver los datos de ese momento.
 | Periodo cerrado ("septiembre", "2025"): esos datos ya no cambian | Reporte |
 | Para enviar, descargar o presentar | Reporte |
 | Datos de la web consultados ahora | Reporte |
+| Fijar algo cuyos datos vienen de Google Sheets, una API u otra fuente que no es Query | Dashboard fijable sin queries |
 | Duda | Reporte |
 
 No preguntes antes de elegir. Si entregas un reporte de algo que parece
@@ -495,20 +496,38 @@ dia, lo convierto en dashboard en vivo."
 **Reporte:** genera el HTML con los datos dentro y publicalo con
 `query_attachment_send`.
 
-**Dashboard en vivo:** `query_dashboard_publish`. El HTML no lleva datos; los
-pide por nombre al abrirse y Query los consulta con los permisos del autor.
+**Dashboard en vivo:** `query_dashboard_publish` con `queries`. El HTML no
+lleva datos; los pide por nombre al abrirse y Query los consulta con los
+permisos del autor.
+
+**Dashboard fijable sin queries:** `query_dashboard_publish` sin `queries`. El
+HTML trae sus datos o los pide desde el navegador a una fuente publica por
+HTTPS (Google Sheets publicado como CSV, una API con CORS). No usa
+`QueryDashboard`; muestra su propio estado de carga y de error. Se fija y se
+comparte igual que uno en vivo.
 
 1. Descubre modulos y campos, y prueba cada consulta con
    `query_records_aggregate` o `query_records_search` antes de publicar.
 2. Declara las consultas con nombre. Usa fechas relativas (`{{start_of_month}}`,
    `{{today}}`, `{{days_ago_30}}`...) para "este mes", "ultimos 30 dias", etc.
-3. Escribe el HTML con las clases `qd-*` y lee los datos con `QueryDashboard`.
+3. Escribe el HTML con las clases `qd-*` y lee los datos con
+   `QueryDashboard.render`, que corre al abrir y en cada Actualizar.
    No pongas titulo principal, boton de actualizar ni CSS propio de pagina:
    Query ya los pone con el tema de la app.
-4. Si Query responde `dashboard_invalid`, lee `errors` (consulta que falla,
-   consulta sin usar, valores copiados en el HTML) y corrige todo de una vez.
-5. Si la persona pidio fijarlo o compartirlo, llama `query_dashboard_share` en
+4. Separa siempre tres estados: cargando, error y vacio.
+   `QueryDashboard.rows(r)` devuelve `[]` tambien cuando la consulta fallo, asi
+   que antes pregunta `QueryDashboard.state(r)`: `"error"` (muestra `qd-error`
+   con `r.detail`), `"empty"` (`qd-empty`) u `"ok"`. Un error nunca se pinta
+   como "no hay datos".
+5. Si Query responde `dashboard_invalid`, lee `errors` (consulta que falla,
+   consulta sin usar, error y vacio sin distinguir, valores copiados en el HTML)
+   y corrige todo de una vez.
+6. Si la persona pidio fijarlo o compartirlo, llama `query_dashboard_share` en
    el mismo turno. Su instruccion es la autorizacion; no pidas otra.
+7. Que Query responda `ok` no prueba lo que la persona ve. No digas
+   "corregido" ni "ya esta en tu menu" como hecho comprobado: di que quedo
+   publicado o fijado y pidele que lo abra desde el menu Dashboards o el
+   adjunto y te confirme que ve los datos.
 
 ```json
 [
@@ -535,9 +554,17 @@ pide por nombre al abrirse y Query los consulta con los permisos del autor.
 </div>
 <script>
 QueryDashboard.render(function (data) {
-  var filas = QueryDashboard.rows(data.ventas_mes);
-  var total = filas.reduce(function (s, f) { return s + (f.total || 0); }, 0);
-  document.getElementById("total").textContent = QueryDashboard.format.currency(total);
+  var ventas = data.ventas_mes;
+  var estado = QueryDashboard.state(ventas);
+  var total = document.getElementById("total");
+  if (estado === "error") {
+    total.innerHTML = '<span class="qd-error">No se pudo consultar: ' + (ventas.detail || "error") + "</span>";
+  } else if (estado === "empty") {
+    total.innerHTML = '<span class="qd-empty">Sin ventas este mes</span>';
+  } else {
+    var suma = QueryDashboard.rows(ventas).reduce(function (s, f) { return s + (f.total || 0); }, 0);
+    total.textContent = QueryDashboard.format.currency(suma);
+  }
   document.getElementById("meta").textContent = QueryDashboard.format.currency(data.meta_mes.value);
 });
 </script>
@@ -554,8 +581,12 @@ Quien ve un dashboard:
 - Al confirmar, di quien lo ve (campo `audience`) y que lo ven con los permisos
   del autor, aunque no tengan acceso a esos modulos.
 - Para cambiar un dashboard existente, busca su id con `query_dashboards_list`
-  y publica una version nueva con `dashboard_id`: conserva nombre, fijado y
-  audiencia.
+  y publica una version nueva con `dashboard_id`: conserva id, nombre, fijado y
+  audiencia. No crees otro dashboard para corregir uno que ya existe.
+- Para quitar uno que ya no sirve: `query_dashboard_share` con `pinned: false`
+  lo saca del menu; con `active: false` lo archiva (nadie mas lo ve, se puede
+  reactivar); `query_dashboard_delete` lo borra del todo y solo si la persona
+  pide borrarlo.
 
 ## Cuando la persona confirma escribiendo
 

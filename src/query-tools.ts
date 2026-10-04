@@ -342,7 +342,7 @@ export async function publishQueryDashboardForThread(params: {
   html?: string;
   name?: string;
   description?: string;
-  queries: unknown;
+  queries?: unknown;
   controls?: unknown;
   dashboardId?: number;
   log: QueryToolLog;
@@ -379,7 +379,7 @@ export async function publishQueryDashboardForThread(params: {
     `threads/${encodeURIComponent(threadId)}/dashboards/publish/`,
     {
       html,
-      queries: params.queries,
+      ...(params.queries !== undefined ? { queries: params.queries } : {}),
       ...(params.name ? { name: params.name } : {}),
       ...(params.description ? { description: params.description } : {}),
       ...(params.controls !== undefined ? { controls: params.controls } : {}),
@@ -401,6 +401,7 @@ export async function shareQueryDashboardForThread(params: {
   threadId: string;
   dashboardId: number;
   pinned?: boolean;
+  active?: boolean;
   name?: string;
   users?: Array<string | number>;
   groups?: Array<string | number>;
@@ -412,12 +413,27 @@ export async function shareQueryDashboardForThread(params: {
     `threads/${encodeURIComponent(params.threadId)}/dashboards/${params.dashboardId}/share/`,
     {
       ...(params.pinned !== undefined ? { pinned: params.pinned } : {}),
+      ...(params.active !== undefined ? { active: params.active } : {}),
       ...(params.name ? { name: params.name } : {}),
       ...(params.users !== undefined ? { users: params.users } : {}),
       ...(params.groups !== undefined ? { groups: params.groups } : {}),
       ...(params.mode ? { mode: params.mode } : {}),
     },
     "query_dashboard_share",
+    params.log,
+  );
+}
+
+export async function deleteQueryDashboardForThread(params: {
+  threadId: string;
+  dashboardId: number;
+  log: QueryToolLog;
+}): Promise<unknown> {
+  return postQuery(
+    params.threadId,
+    `threads/${encodeURIComponent(params.threadId)}/dashboards/${params.dashboardId}/delete/`,
+    {},
+    "query_dashboard_delete",
     params.log,
   );
 }
@@ -826,7 +842,7 @@ export default defineToolPlugin({
       description:
         "Sube un archivo generado o modificado al sistema nativo de attachments de Query para dejarlo visible y descargable en el chat. Usa esta herramienta para HTML, PDF, Word, Excel, CSV, imagenes, audio, video, ZIP y presentaciones. " +
         "Un HTML con datos enviado aqui es un REPORTE: una foto de los datos del momento, con los datos escritos dentro. Es la opcion por defecto para analisis, informes, comparaciones, periodos cerrados, datos de la web y todo lo que se va a enviar o descargar. " +
-        "Si la persona pide fijarlo en el menu, compartirlo con usuarios o roles, hacerle seguimiento o tenerlo siempre al dia, usa query_dashboard_publish. " +
+        "Si la persona pide fijarlo en el menu, compartirlo con usuarios o roles, hacerle seguimiento o tenerlo siempre al dia, usa query_dashboard_publish (con queries si los datos son de Query; sin queries si vienen de Google Sheets, una API u otra fuente). " +
         "Si un reporte parece de seguimiento recurrente, al final ofrece en una linea convertirlo en dashboard en vivo; no lo conviertas sin que lo pida. " +
         "Nunca muestres file_path al usuario ni uses registros de negocio para entregar archivos.",
       parameters: Type.Object({
@@ -860,26 +876,31 @@ export default defineToolPlugin({
     }),
     tool({
       name: "query_dashboard_publish",
-      label: "Query: publicar dashboard en vivo",
+      label: "Query: publicar dashboard fijable",
       description:
-        "Publica un DASHBOARD EN VIVO: un HTML sin datos que Query llena cada vez que alguien lo abre, consultando con los permisos del autor. " +
+        "Publica un dashboard que se puede fijar en el menu Dashboards y compartir. Dos tipos: " +
+        "CON queries es EN VIVO: un HTML sin datos que Query llena cada vez que alguien lo abre, consultando con los permisos del autor. " +
+        "SIN queries es FIJABLE sin datos de Query: el HTML trae sus datos o los pide desde el navegador a una fuente publica por HTTPS (Google Sheets publicado como CSV, una API con CORS); no puede usar QueryDashboard ni datos de Query. " +
         "Usala SOLO si la persona pide fijarlo en el menu, compartirlo con usuarios o roles, hacerle seguimiento, tenerlo siempre al dia, o convertir un reporte. " +
-        "En cualquier otro caso (analisis, informe, comparacion, periodo cerrado, datos de la web, algo para enviar) entrega un reporte con query_attachment_send. En la duda, reporte. " +
+        "En cualquier otro caso (analisis, informe, comparacion, periodo cerrado, algo para enviar) entrega un reporte con query_attachment_send, como siempre. En la duda, reporte. " +
         "Antes descubre modulos y campos (query_module_describe) y prueba las consultas con query_records_search/query_records_aggregate. " +
         "queries: lista de consultas con name en snake_case y source: " +
         "records_aggregate {module, metrics, group_by, filters, date_filters, time_granularity}; " +
         "records_query {module, filters, columns, sort, limit<=200} (mismos parametros que query_records_aggregate y query_records_search); " +
         "static {value} solo para metas o umbrales fijos. " +
         "Fechas relativas en cualquier valor, resueltas al abrir: {{today}}, {{yesterday}}, {{start_of_week}}, {{start_of_month}}, {{end_of_month}}, {{start_of_last_month}}, {{end_of_last_month}}, {{start_of_year}}, {{end_of_year}}, {{days_ago_N}}, {{start_of_months_ago_N}}. Nunca escribas fechas fijas para 'este mes' o 'este anio'. " +
-        "El HTML no puede contener datos: leelos con QueryDashboard.render(function (data) { var filas = QueryDashboard.rows(data.nombre); ... }) o await QueryDashboard.query('nombre'). " +
-        "Cada resultado trae ok y rows (o value si es static); usa QueryDashboard.ok(r), QueryDashboard.format.currency/number/percent/compact/date y QueryDashboard.theme.palette para colores de graficas. " +
-        "Query rechaza la publicacion si una consulta falla, si una consulta declarada no se usa en el HTML o si encuentra valores del resultado copiados en el HTML; lee errors y corrige todo en un intento. " +
+        "El HTML en vivo no puede contener datos: prefiere QueryDashboard.render(function (data) { var r = data.nombre; ... }), que corre al abrir y en cada Actualizar; QueryDashboard.query('nombre') solo para pedir una consulta suelta. " +
+        "Tres estados distintos, nunca mezclados: cargando (antes de que llegue el resultado), error (QueryDashboard.state(r) === 'error': muestra qd-error con r.detail) y vacio (state 'empty': qd-empty). " +
+        "QueryDashboard.rows(r) devuelve [] tambien cuando la consulta fallo: comprueba state u ok antes, o mostraras 'no hay datos' ante un error. " +
+        "Cada resultado trae ok y rows (o value si es static); usa QueryDashboard.format.currency/number/percent/compact/date y QueryDashboard.theme.palette para colores de graficas. " +
+        "Query rechaza la publicacion si una consulta falla, si una consulta declarada no se usa, si el HTML no distingue error de vacio o si encuentra valores del resultado copiados en el HTML; lee errors y corrige todo en un intento. " +
         "Estilo: Query ya pone el tema de la app, la fuente, el titulo y el boton Actualizar. No agregues titulo principal, boton de actualizar ni CSS de pagina; usa estas clases: " +
         "qd-page, qd-grid (con qd-cols-2/3/4, qd-span-2, qd-span-full), qd-card (qd-card-header, qd-card-title, qd-card-subtitle), qd-kpi (qd-kpi-label, qd-kpi-value, qd-kpi-delta is-up/is-down, qd-kpi-icon), " +
         "qd-table-wrap + qd-table (td.is-number), qd-badge (is-primary/success/warning/danger/info), qd-progress, qd-list, qd-chart, qd-empty, qd-error, qd-muted. " +
-        "Graficas con Chart.js o ECharts desde cdnjs.cloudflare.com o cdn.jsdelivr.net; no hay otro acceso a red. " +
-        "Para una version nueva del mismo dashboard envia dashboard_id: conserva nombre, fijado y audiencia. " +
+        "Graficas con Chart.js o ECharts desde cdnjs.cloudflare.com o cdn.jsdelivr.net. El en vivo no tiene otro acceso a red; el fijable sin queries puede pedir datos por HTTPS y debe mostrar su propio estado de carga y error. " +
+        "Para una version nueva del mismo dashboard envia dashboard_id: conserva id, nombre, fijado y audiencia; no crees otro dashboard para corregir uno existente. " +
         "Recien publicado solo lo ve su autor y no esta fijado: si la persona pidio fijarlo o compartirlo, llama query_dashboard_share en el mismo turno. " +
+        "Que el servidor responda ok no prueba que se vea bien: no digas 'corregido' ni 'ya esta en tu menu' como hecho verificado; di que quedo publicado y pide a la persona que lo abra desde el menu o el adjunto y te confirme que ve los datos. " +
         "El dashboard aparece como adjunto en el chat; no muestres la ruta local.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
@@ -888,11 +909,14 @@ export default defineToolPlugin({
         }),
         name: Type.Optional(Type.String({ description: "Nombre visible del dashboard." })),
         description: Type.Optional(Type.String({ description: "Una frase sobre que muestra." })),
-        queries: Type.Array(Type.Record(Type.String(), Type.Unknown()), {
-          minItems: 1,
-          maxItems: 20,
-          description: "Consultas con nombre que el HTML lee con QueryDashboard.",
-        }),
+        queries: Type.Optional(
+          Type.Array(Type.Record(Type.String(), Type.Unknown()), {
+            minItems: 1,
+            maxItems: 20,
+            description:
+              "Consultas con nombre que el HTML lee con QueryDashboard. Omitelas solo si los datos no vienen de Query.",
+          }),
+        ),
         controls: Type.Optional(
           Type.Array(Type.Record(Type.String(), Type.Unknown()), {
             description:
@@ -921,9 +945,10 @@ export default defineToolPlugin({
     }),
     tool({
       name: "query_dashboard_share",
-      label: "Query: fijar y compartir dashboard",
+      label: "Query: fijar, compartir o archivar dashboard",
       description:
-        "Fija o quita del menu Dashboards, renombra y define quien ve un dashboard en vivo. " +
+        "Fija o quita del menu Dashboards, renombra, archiva y define quien ve un dashboard. " +
+        "Para quitar un dashboard que ya no sirve: pinned=false lo saca del menu; active=false lo archiva (sale del menu y nadie mas lo ve, se puede reactivar con active=true); para borrarlo del todo usa query_dashboard_delete. " +
         "La instruccion explicita de la persona en el chat es la autorizacion: aplica sin pedir otra confirmacion. Solo el autor o un administrador pueden hacerlo. " +
         "users y groups aceptan nombre, usuario, correo o id. mode=add (por defecto) suma a la audiencia, remove quita y replace deja exactamente la lista enviada (replace sin listas = solo el autor). " +
         "Sin audiencia explicita solo lo ve el autor: si la persona dice 'fijalo' sin decir para quien, fijalo para ella sola y ofrece compartirlo. " +
@@ -933,6 +958,9 @@ export default defineToolPlugin({
         thread_id: THREAD_PARAM,
         dashboard_id: Type.Integer({ minimum: 1 }),
         pinned: Type.Optional(Type.Boolean({ description: "true lo fija en el menu Dashboards; false lo quita." })),
+        active: Type.Optional(
+          Type.Boolean({ description: "false lo archiva (sale del menu y de la audiencia); true lo reactiva." }),
+        ),
         name: Type.Optional(Type.String({ description: "Nuevo nombre visible en el menu." })),
         users: Type.Optional(Type.Array(Type.Union([Type.String(), Type.Integer()]))),
         groups: Type.Optional(
@@ -942,11 +970,12 @@ export default defineToolPlugin({
           Type.Union([Type.Literal("add"), Type.Literal("remove"), Type.Literal("replace")]),
         ),
       }, { additionalProperties: false }),
-      execute: async ({ thread_id, dashboard_id, pinned, name, users, groups, mode }, _config, context) =>
+      execute: async ({ thread_id, dashboard_id, pinned, active, name, users, groups, mode }, _config, context) =>
         shareQueryDashboardForThread({
           threadId: thread_id,
           dashboardId: dashboard_id,
           pinned,
+          active,
           name,
           users,
           groups,
@@ -955,11 +984,29 @@ export default defineToolPlugin({
         }),
     }),
     tool({
+      name: "query_dashboard_delete",
+      label: "Query: borrar dashboard",
+      description:
+        "Borra un dashboard que ya no sirve: sale del menu de todos y se borran sus versiones; no se puede deshacer. " +
+        "Usala solo si la persona pide borrarlo o eliminarlo. Si solo quiere quitarlo del menu, usa query_dashboard_share con pinned=false; si quiere guardarlo sin que nadie lo vea, active=false. " +
+        "La instruccion explicita de la persona en el chat es la autorizacion. Solo el autor o un administrador pueden borrarlo. Busca el id con query_dashboards_list; no lo adivines.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        dashboard_id: Type.Integer({ minimum: 1 }),
+      }, { additionalProperties: false }),
+      execute: async ({ thread_id, dashboard_id }, _config, context) =>
+        deleteQueryDashboardForThread({
+          threadId: thread_id,
+          dashboardId: dashboard_id,
+          log: context.api.logger,
+        }),
+    }),
+    tool({
       name: "query_dashboards_list",
       label: "Query: listar dashboards en vivo",
       description:
-        "Lista los dashboards en vivo que la persona puede abrir: id, nombre, si esta fijado, quien lo ve y si puede administrarlo (can_manage). " +
-        "Usala para encontrar dashboard_id antes de publicar una version nueva, fijarlo o compartirlo; no adivines ids.",
+        "Lista los dashboards que la persona puede abrir: id, nombre, tipo (runtime live o standalone), si esta fijado o archivado (is_active), quien lo ve y si puede administrarlo (can_manage). " +
+        "Usala para encontrar dashboard_id antes de publicar una version nueva, fijarlo, compartirlo, archivarlo o borrarlo; no adivines ids.",
       parameters: Type.Object({ thread_id: THREAD_PARAM }),
       execute: async ({ thread_id }, _config, context) =>
         callQuery(

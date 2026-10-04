@@ -5,6 +5,7 @@ import { join } from "node:path";
 
 import { forgetDelegatedAuth, rememberDelegatedAuth } from "./delegated-store.js";
 import {
+  deleteQueryDashboardForThread,
   publishQueryDashboardForThread,
   shareQueryDashboardForThread,
 } from "./query-tools.js";
@@ -119,5 +120,23 @@ describe("query_dashboard_share", () => {
     const [url, init] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(url).toBe("https://query.test/api/v4/openclaw-agent/threads/thread-dash/dashboards/3/share/");
     expect(JSON.parse(String(init.body))).toEqual({ pinned: true, groups: ["Cobranza"] });
+  });
+});
+
+describe("archivar y borrar dashboards", () => {
+  it("archiva con active=false y borra por su propio endpoint", async () => {
+    const fetchMock = vi.fn(async () => ({
+      ok: true,
+      status: 200,
+      json: async () => ({ ok: true }),
+    }));
+    vi.stubGlobal("fetch", fetchMock);
+    await shareQueryDashboardForThread({ threadId: "thread-dash", dashboardId: 3, active: false, log });
+    const [, archiveInit] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(archiveInit.body))).toEqual({ active: false });
+
+    await deleteQueryDashboardForThread({ threadId: "thread-dash", dashboardId: 3, log });
+    const [deleteUrl] = fetchMock.mock.calls[1] as unknown as [string, RequestInit];
+    expect(deleteUrl).toBe("https://query.test/api/v4/openclaw-agent/threads/thread-dash/dashboards/3/delete/");
   });
 });

@@ -244,6 +244,7 @@
       "query_attachment_send",
       "query_dashboard_publish",
       "query_dashboard_share",
+      "query_dashboard_delete",
       "query_dashboards_list",
       "query_modules_list",
       "query_module_describe",
