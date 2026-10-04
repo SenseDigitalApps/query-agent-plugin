@@ -493,6 +493,11 @@ No preguntes antes de elegir. Si entregas un reporte de algo que parece
 recurrente, cierra con una linea: "Si quieres tenerlo en tu menu con datos al
 dia, lo convierto en dashboard en vivo."
 
+Si la persona pide comparar las dos formas, entrega ambas con la misma
+informacion y el mismo diseno: el reporte con `query_attachment_send` y el
+dashboard en vivo con `query_dashboard_publish`. Senala en una linea que el
+reporte es una foto del momento y el dashboard consulta al abrirse.
+
 **Reporte:** genera el HTML con los datos dentro y publicalo con
 `query_attachment_send`.
 
@@ -510,10 +515,13 @@ comparte igual que uno en vivo.
    `query_records_aggregate` o `query_records_search` antes de publicar.
 2. Declara las consultas con nombre. Usa fechas relativas (`{{start_of_month}}`,
    `{{today}}`, `{{days_ago_30}}`...) para "este mes", "ultimos 30 dias", etc.
-3. Escribe el HTML con las clases `qd-*` y lee los datos con
-   `QueryDashboard.render`, que corre al abrir y en cada Actualizar.
-   No pongas titulo principal, boton de actualizar ni CSS propio de pagina:
-   Query ya los pone con el tema de la app.
+3. Disena con la misma libertad que un reporte: tu propio CSS, layout,
+   graficas (Chart.js, ECharts), pestanas, filtros y calculos en JavaScript.
+   Debe verse tan completo como el reporte equivalente, no solo una tabla. Lo
+   unico distinto es que los datos se leen con `QueryDashboard.render`, que
+   corre al abrir y en cada Actualizar. Query pone encima el titulo y el boton
+   Actualizar: no los repitas. Las clases `qd-*` son un atajo opcional que ya
+   combina con el tema de la app.
 4. Separa siempre tres estados: cargando, error y vacio.
    `QueryDashboard.rows(r)` devuelve `[]` tambien cuando la consulta fallo, asi
    que antes pregunta `QueryDashboard.state(r)`: `"error"` (muestra `qd-error`

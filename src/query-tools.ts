@@ -894,9 +894,11 @@ export default defineToolPlugin({
         "QueryDashboard.rows(r) devuelve [] tambien cuando la consulta fallo: comprueba state u ok antes, o mostraras 'no hay datos' ante un error. " +
         "Cada resultado trae ok y rows (o value si es static); usa QueryDashboard.format.currency/number/percent/compact/date y QueryDashboard.theme.palette para colores de graficas. " +
         "Query rechaza la publicacion si una consulta falla, si una consulta declarada no se usa, si el HTML no distingue error de vacio o si encuentra valores del resultado copiados en el HTML; lee errors y corrige todo en un intento. " +
-        "Estilo: Query ya pone el tema de la app, la fuente, el titulo y el boton Actualizar. No agregues titulo principal, boton de actualizar ni CSS de pagina; usa estas clases: " +
-        "qd-page, qd-grid (con qd-cols-2/3/4, qd-span-2, qd-span-full), qd-card (qd-card-header, qd-card-title, qd-card-subtitle), qd-kpi (qd-kpi-label, qd-kpi-value, qd-kpi-delta is-up/is-down, qd-kpi-icon), " +
-        "qd-table-wrap + qd-table (td.is-number), qd-badge (is-primary/success/warning/danger/info), qd-progress, qd-list, qd-chart, qd-empty, qd-error, qd-muted. " +
+        "Diseno: la MISMA libertad que un reporte HTML. Escribe tu propio CSS, layout, graficas, pestanas, filtros y calculos en JavaScript; un dashboard en vivo debe verse tan completo como el reporte equivalente (KPIs, graficas, tablas, comparaciones), no solo una tabla. " +
+        "Lo unico que cambia es de donde salen los datos. Query solo pone encima el titulo y el boton Actualizar: no los repitas. " +
+        "Atajo opcional que ya combina con el tema de Query: qd-page, qd-grid (qd-cols-2/3/4, qd-span-2, qd-span-full), qd-card (qd-card-header, qd-card-title, qd-card-subtitle), qd-kpi (qd-kpi-label, qd-kpi-value, qd-kpi-delta is-up/is-down, qd-kpi-icon), " +
+        "qd-table-wrap + qd-table (td.is-number), qd-badge (is-primary/success/warning/danger/info), qd-progress, qd-list, qd-chart, qd-empty, qd-error, qd-muted; variables CSS --qd-primary, --qd-success, --qd-danger, --qd-gray-500... " +
+        "Si la persona pide comparar, entrega ambas versiones de la misma informacion: el reporte con query_attachment_send y el dashboard con esta herramienta, con el mismo diseno. " +
         "Graficas con Chart.js o ECharts desde cdnjs.cloudflare.com o cdn.jsdelivr.net. El en vivo no tiene otro acceso a red; el fijable sin queries puede pedir datos por HTTPS y debe mostrar su propio estado de carga y error. " +
         "Para una version nueva del mismo dashboard envia dashboard_id: conserva id, nombre, fijado y audiencia; no crees otro dashboard para corregir uno existente. " +
         "Recien publicado solo lo ve su autor y no esta fijado: si la persona pidio fijarlo o compartirlo, llama query_dashboard_share en el mismo turno. " +
