@@ -56,3 +56,13 @@ describe("queryAttachmentForMediaUrl", () => {
     expect(attachment.url).not.toContain("/.openclaw/media/outbound/");
   });
 });
+
+describe("nombre visible de un adjunto por URL", () => {
+  it("decodifica el nombre escapado de la URL", () => {
+    const attachment = queryAttachmentForMediaUrl(
+      "https://apius.itsquery.com/assets/3f2b1c4d-5e6f-4a7b-8c9d-0e1f2a3b4c5d/Horas%20mensual%20%E2%80%94%20est%C3%A1tico.html",
+    );
+    expect(attachment.name).toBe("Horas mensual — estático.html");
+    expect(attachment.mime_type).toBe("text/html");
+  });
+});

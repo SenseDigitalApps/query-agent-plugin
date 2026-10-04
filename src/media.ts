@@ -7,6 +7,17 @@ const IMAGE_EXTENSIONS = new Set(["gif", "jpeg", "jpg", "png", "webp"]);
 const VIDEO_EXTENSIONS = new Set(["m4v", "mov", "mp4", "webm"]);
 const MAX_INLINE_MEDIA_BYTES = 2 * 1024 * 1024;
 
+// Una URL trae el nombre escapado ("Horas%20mensual.html"); el chat lo
+// muestra tal cual si no se decodifica.
+function decodeUriSafely(value: string): string {
+  if (!/%[0-9a-f]{2}/i.test(value)) return value;
+  try {
+    return decodeURIComponent(value);
+  } catch {
+    return value;
+  }
+}
+
 function extensionForMediaUrl(mediaUrl: string): string {
   const clean = (mediaUrl.split(/[?#]/, 1)[0] ?? mediaUrl).replace(/\\/g, "/");
   const filename = clean.split("/").pop() ?? "";
@@ -15,7 +26,7 @@ function extensionForMediaUrl(mediaUrl: string): string {
 }
 
 function filenameForMediaUrl(mediaUrl: string): string {
-  const clean = (mediaUrl.split(/[?#]/, 1)[0] ?? mediaUrl).replace(/\\/g, "/");
+  const clean = decodeUriSafely(mediaUrl.split(/[?#]/, 1)[0] ?? mediaUrl).replace(/\\/g, "/");
   return clean.split("/").pop() || "attachment";
 }
 
