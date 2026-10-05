@@ -102,3 +102,48 @@ it("revalidation must be a replay of the same run and keeps the actor", async ()
   registry.unregisterCall(scopeA.call_id);
   expect(registry.hasActiveCall("s-a")).toBe(false);
 });
+
+it("provides only Core-validated speaker names for current hyphenated Talk runs", async () => {
+  const registry = new VoiceRunRegistry();
+  const claim = vi.fn(async () => {
+    const result = delegation(scopeA);
+    result.delegated_auth.identity!.display_name = 'Julián Vargas';
+    return result;
+  });
+  registry.registerCall(call(scopeA, 's-a', claim));
+  const ctx = {runId:'talk-realtime-consult-current-uuid',sessionKey:'s-a'};
+  const context = await registry.speakerContext(ctx, '¿Cómo me llamo?');
+  expect(context).toContain('Julián Vargas');
+  expect(context).not.toContain('tok-');
+  await registry.beforeToolCall({...ctx,toolCallId:'name-tool'},'query_records_search');
+  expect(claim).toHaveBeenCalledTimes(1);
+  expect(await registry.speakerContext({...ctx,sessionKey:'other'},'hola')).toBeUndefined();
+  expect(await registry.speakerContext({runId:'text',sessionKey:'s-a'},'hola')).toBeUndefined();
+});
+
+it("rejects another actor's name and does not invent a missing name", async () => {
+  const registry = new VoiceRunRegistry();
+  registry.registerCall(call(scopeA, 's-a', vi.fn(async () => delegation(scopeA,false,99))));
+  await expect(registry.speakerContext({runId:'talk-realtime-consult-bad',sessionKey:'s-a'},'hola'))
+    .rejects.toThrow('voice_delegation_identity_mismatch');
+  const neutral = new VoiceRunRegistry();
+  neutral.registerCall(call(scopeA,'s-a'));
+  expect(await neutral.speakerContext({runId:'talk-realtime-consult-neutral',sessionKey:'s-a'},'hola'))
+    .toContain('no suministró el nombre');
+});
+
+it("does not present a username fallback as a person's real name", async () => {
+  const registry = new VoiceRunRegistry();
+  registry.registerCall(call(scopeA,'s-a',vi.fn(async()=>{
+    const r=delegation(scopeA);r.delegated_auth.identity={id:7,username:'JCVARGAS',display_name:'JCVARGAS'};return r;
+  })));
+  expect(await registry.speakerContext({runId:'talk-realtime-consult-username',sessionKey:'s-a'},'mi nombre'))
+    .toContain('no suministró el nombre');
+  const actual = new VoiceRunRegistry();
+  actual.registerCall(call(scopeA,'s-a',vi.fn(async()=>{
+    const r=delegation(scopeA);r.delegated_auth.identity={id:7,username:'JCVARGAS',display_name:'JCVARGAS',full_name:'Julián'};return r;
+  })));
+  const context=await actual.speakerContext({runId:'talk-realtime-consult-realname',sessionKey:'s-a'},'mi nombre');
+  expect(context).toContain('"name":"Julián"');
+  expect(context).toContain('"username":"JCVARGAS"');
+});

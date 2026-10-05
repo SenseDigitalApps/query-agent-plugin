@@ -1,5 +1,6 @@
 {
   "id": "query",
+  "doctorContract": { "stateMigrations": [] },
   "name": "Query",
   "description": "Consulta modulos, campos y registros de Query en nombre de la persona con la que conversas.",
   "channels": [

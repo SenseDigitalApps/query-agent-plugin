@@ -129,6 +129,7 @@ export type QueryThreadType = "general" | "topic" | "private";
  */
 export type QueryDelegatedIdentity = {
   id?: number;
+  full_name?: string;
   username?: string;
   email?: string;
   display_name?: string;

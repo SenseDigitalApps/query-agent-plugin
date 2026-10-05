@@ -62,6 +62,15 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
   // Question digest for the consult: the run's first model input.
   api.on("llm_input", (event: {runId?: string; prompt?: string}) => { voiceRuns.recordPrompt(event?.runId, event?.prompt); });
   api.on("before_agent_run", (event: {prompt?: string}, ctx: {runId?: string}) => { voiceRuns.recordPrompt(ctx?.runId, event?.prompt); });
+  api.on("before_prompt_build", async (event: {prompt?: string}, ctx: {runId?: string; sessionKey?: string}) => {
+    try {
+      const context = await voiceRuns.speakerContext(ctx, event.prompt);
+      return context ? {prependContext: context} : undefined;
+    } catch {
+      api.logger.warn("query_voice_speaker_identity_unavailable");
+      return {prependContext: "No fue posible verificar el nombre del interlocutor de esta llamada con Query. No adivines su identidad."};
+    }
+  });
   api.on("before_tool_call", async (event: {toolName: string; runId?: string}, ctx: {runId?: string; sessionKey?: string; toolCallId?: string}) => {
     const runId = ctx?.runId ?? event.runId;
     const refusal = await voiceRuns.beforeToolCall({...ctx, runId}, event.toolName);
@@ -72,6 +81,9 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
   const cfg = api.config as QueryConfig;
   const voice = (cfg.channels?.query as {voice?: QueryVoiceConfig} | undefined)?.voice;
   if (!voice?.enabled) return;
+  // Candidate rehearsals disable channels: retain authorization hooks, but do not
+  // create a live voice device, connect to production, or require bootstrap auth.
+  if (process.env.OPENCLAW_SKIP_CHANNELS === "1") return;
   const bridgeToken = process.env.QUERY_AGENT_VOICE_BRIDGE_TOKEN?.trim() ?? "";
   const gatewayUrl = voice.gatewayUrl?.trim() || "ws://127.0.0.1:18789";
   const gatewayHttpBase = voice.gatewayHttpUrl?.trim() || gatewayUrl.replace(/^ws/, "http");
@@ -79,70 +91,83 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
     api.logger.warn("query_voice_disabled reason=missing_bridge_token");
     return;
   }
-  const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || join(homedir(), ".openclaw");
-  const device = new VoiceOperatorDevice(voice.deviceDir?.trim() || join(stateDir, "query-voice-device"));
-  const {identity, deps} = device.hostDeps();
-  api.logger.info(`query_voice_device device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`);
+  // Registration is also run by Doctor in an isolated, credential-free context.
+  // Only the Gateway service lifecycle may create a device or initialize voice.
+  let client: GatewayClient | undefined;
+  let driver: GatewayTalkDriver | undefined;
+  let handler: ReturnType<typeof voiceBridgeHandler> | undefined;
+  let deviceLabel = "";
+  const initialize = () => {
+    if (client) return;
+    const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || join(homedir(), ".openclaw");
+    const device = new VoiceOperatorDevice(voice.deviceDir?.trim() || join(stateDir, "query-voice-device"));
+    const {identity, deps} = device.hostDeps();
+    api.logger.info(`query_voice_device device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`);
 
-  const bootstrap = voiceGatewayBootstrap(gatewayUrl, (getRuntimeConfigSnapshot() ?? cfg).gateway?.auth,
-    Boolean(deps.loadDeviceAuthToken({deviceId: identity.deviceId, role: VOICE_OPERATOR_ROLE})));
-  let driver: GatewayTalkDriver;
-  const client = new GatewayClient({
-    url: gatewayUrl,
-    ...bootstrap,
-    role: VOICE_OPERATOR_ROLE,
-    scopes: [...VOICE_OPERATOR_SCOPES],
-    deviceIdentity: identity,
-    hostDeps: deps,
-    clientDisplayName: "Query voice bridge",
-    // Default backend mode exempts local gateway-client from device pairing.
-    // This app control connection must obtain its own scoped device token.
-    clientName: "gateway-client",
-    mode: "ui",
-    onEvent: frame => driver?.handleGatewayEvent(frame as {event: string; payload?: unknown}),
-    onHelloOk: () => api.logger.info(`query_voice_gateway_connected device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`),
-    onClose: () => driver?.handleGatewayClosed(),
-    // Pending approval shows up here; never log the error body (it may carry tokens).
-    onConnectError: () => api.logger.warn(`query_voice_gateway_connect_pending device=${identity.deviceId.slice(0, 12)}`),
-  });
-  driver = new GatewayTalkDriver({
-    verified: voice.verified === true,
-    gateway: client,
-    gatewayHttpBase,
-    fetch,
-    registry: voiceRuns,
-    maxConcurrentCalls: voice.maxConcurrentCalls,
-    resolveTarget: (scope, coreHost) => resolveVoiceTarget(cfg, scope, params =>
-      getQueryRuntime().channel.routing.resolveAgentRoute(params as never) as {sessionKey: string; agentId: string},
-      coreHost),
-    oauthOnly: target => {
-      // Same agent store the Talk session will resolve credentials from.
-      const agentDir = resolveAgentDir(cfg, target.agentId);
-      return checkVoiceOAuthOnly(cfg as Record<string, any>, {
-        env: process.env,
-        agentDir,
-        isProfileConfigured: params => isProviderAuthProfileConfigured(params as never),
-      });
-    },
-    claimDelegation: (scope, target, claim) => claimDelegation(scope, target, claim, bridgeToken),
-  });
-  const journal = voice.journalDir?.trim() || join(stateDir, "query-voice-journal");
-  const bridge = new QueryVoiceBridge(journal, driver);
-  const handler = voiceBridgeHandler(bridge, bridgeToken);
+    const bootstrap = voiceGatewayBootstrap(gatewayUrl, (getRuntimeConfigSnapshot() ?? cfg).gateway?.auth,
+      Boolean(deps.loadDeviceAuthToken({deviceId: identity.deviceId, role: VOICE_OPERATOR_ROLE})));
+    client = new GatewayClient({
+      url: gatewayUrl,
+      ...bootstrap,
+      role: VOICE_OPERATOR_ROLE,
+      scopes: [...VOICE_OPERATOR_SCOPES],
+      deviceIdentity: identity,
+      hostDeps: deps,
+      clientDisplayName: "Query voice bridge",
+      // Default backend mode exempts local gateway-client from device pairing.
+      // This app control connection must obtain its own scoped device token.
+      clientName: "gateway-client",
+      mode: "ui",
+      onEvent: frame => driver?.handleGatewayEvent(frame as {event: string; payload?: unknown}),
+      onHelloOk: () => api.logger.info(`query_voice_gateway_connected device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`),
+      onClose: () => driver?.handleGatewayClosed(),
+      // Pending approval shows up here; never log the error body (it may carry tokens).
+      onConnectError: () => api.logger.warn(`query_voice_gateway_connect_pending device=${identity.deviceId.slice(0, 12)}`),
+    });
+    driver = new GatewayTalkDriver({
+      verified: voice.verified === true,
+      gateway: client,
+      gatewayHttpBase,
+      fetch,
+      registry: voiceRuns,
+      maxConcurrentCalls: voice.maxConcurrentCalls,
+      resolveTarget: (scope, coreHost) => resolveVoiceTarget(cfg, scope, params =>
+        getQueryRuntime().channel.routing.resolveAgentRoute(params as never) as {sessionKey: string; agentId: string},
+        coreHost),
+      oauthOnly: target => {
+        // Same agent store the Talk session will resolve credentials from.
+        const agentDir = resolveAgentDir(cfg, target.agentId);
+        return checkVoiceOAuthOnly(cfg as Record<string, any>, {
+          env: process.env,
+          agentDir,
+          isProfileConfigured: params => isProviderAuthProfileConfigured(params as never),
+        });
+      },
+      claimDelegation: (scope, target, claim) => claimDelegation(scope, target, claim, bridgeToken),
+    });
+    const journal = voice.journalDir?.trim() || join(stateDir, "query-voice-journal");
+    const bridge = new QueryVoiceBridge(journal, driver);
+    handler = voiceBridgeHandler(bridge, bridgeToken);
+    deviceLabel = identity.deviceId.slice(0, 12);
+  };
   api.registerHttpRoute({
     path: "/plugins/query/voice",
     match: "prefix",
     auth: "plugin",
-    handler: async (req, res) => { await handler(req, res); return true; },
+    handler: async (req, res) => {
+      if (!handler) { res.statusCode = 503; res.end("Query voice is not started"); return true; }
+      await handler(req, res); return true;
+    },
   });
   let started = false;
   const start = () => {
     if (started) return;
+    initialize();
+    api.logger.info(`query_voice_gateway_start device=${deviceLabel}`);
+    client!.start();
     started = true;
-    api.logger.info(`query_voice_gateway_start device=${identity.deviceId.slice(0, 12)}`);
-    client.start();
   };
-  const stop = () => { started = false; client.stop(); driver.handleGatewayClosed(); };
+  const stop = () => { started = false; client?.stop(); driver?.handleGatewayClosed(); };
   // A full channel runtime can be hydrated after the one-shot gateway_start hook.
   // Services participate in runtime activation/replacement as well as initial boot.
   api.registerService({id: "query-voice-gateway", start, stop});
