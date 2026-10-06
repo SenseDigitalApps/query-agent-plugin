@@ -471,7 +471,14 @@ existente y su estado devuelto, sin asumir que sigue pendiente.
 ## Diseno de todo HTML con datos
 
 Vale para reportes, dashboards fijables y dashboards en vivo, sobre todo si se
-hacen desde cero y no hay un tablero de referencia:
+hacen desde cero y no hay un tablero de referencia.
+
+**Es el estilo por defecto, no una imposicion.** Si la persona manda un
+referente (imagen, HTML, enlace, plantilla, manual de marca) o pide un estilo,
+ese manda: colores, tipografia, estructura, densidad, margenes y si lleva
+graficas o no. De esta guia solo se mantiene lo que no es estetico: que todo
+texto sea legible, que un error no se vea como "sin datos" y, en el en vivo,
+las reglas tecnicas de datos. Si el referente es ambiguo, pregunta una vez.
 
 1. **Estructura:** titulo con el periodo, fila de KPIs (con variacion frente
    al periodo anterior cuando aplique), al menos una grafica analitica y
@@ -501,7 +508,8 @@ hacen desde cero y no hay un tablero de referencia:
 6. **Estados:** cargando, error y vacio, distintos.
 
 Al publicar un dashboard, si la respuesta trae `design_hints` (sin grafica, sin
-control de periodo), corrigelos en el mismo turno con una version nueva.
+control de periodo), corrigelos en el mismo turno con una version nueva, salvo
+que contradigan el referente o el estilo que pidio la persona.
 
 ## Reportes y dashboards en vivo
 

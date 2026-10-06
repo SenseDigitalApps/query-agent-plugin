@@ -333,7 +333,8 @@ export async function uploadQueryAttachmentForThread(params: {
  * que un tablero hecho desde cero, sin referente, salga igual de cuidado.
  */
 const HTML_DESIGN_GUIDE =
-  "GUIA DE DISENO de todo HTML con datos (reporte, fijable o en vivo): " +
+  "GUIA DE DISENO de todo HTML con datos (reporte, fijable o en vivo). Es el estilo POR DEFECTO: si la persona da un referente (imagen, HTML, enlace, plantilla, manual de marca) o pide un estilo, ese manda en colores, tipografia, estructura, densidad, margenes y si lleva graficas o no; " +
+  "de esta guia solo se mantiene lo que no es estetico: que todo texto sea legible, que un error no se vea como 'sin datos' y, en el en vivo, las reglas tecnicas de datos. Ante un referente ambiguo, preguntalo una vez. " +
   "1) Estructura: titulo con el periodo; fila de KPIs, con variacion frente al periodo anterior cuando aplique; al menos UNA grafica analitica; despues el detalle en tabla. " +
   "2) Grafica obligatoria, nunca solo tablas: elige la que revele algo que la tabla no muestra. Tiempo -> linea o area (tendencia); ranking -> barras horizontales ordenadas; proporcion con pocas categorias -> dona; dos dimensiones (persona x semana) -> barras apiladas o mapa de calor; meta contra real -> barras con linea de meta. " +
   "Acompanala de una frase de hallazgo: que crece o cae, quien concentra, que cambio frente al periodo anterior. Chart.js o ECharts desde cdnjs.cloudflare.com o cdn.jsdelivr.net, con colores de la misma paleta. " +
@@ -917,7 +918,7 @@ export default defineToolPlugin({
         "Atajo opcional que ya combina con el tema de Query: qd-page, qd-grid (qd-cols-2/3/4, qd-span-2, qd-span-full), qd-card (qd-card-header, qd-card-title, qd-card-subtitle), qd-kpi (qd-kpi-label, qd-kpi-value, qd-kpi-delta is-up/is-down, qd-kpi-icon), " +
         "qd-table-wrap + qd-table (td.is-number), qd-badge (is-primary/success/warning/danger/info), qd-progress, qd-list, qd-chart, qd-empty, qd-error, qd-muted; variables CSS --qd-primary, --qd-success, --qd-danger, --qd-gray-500... " +
         HTML_DESIGN_GUIDE +
-        "Si la respuesta trae design_hints (sin grafica, sin control de periodo), corrigelos en el mismo turno publicando una version nueva con dashboard_id. " +
+        "Si la respuesta trae design_hints (sin grafica, sin control de periodo), corrigelos en el mismo turno publicando una version nueva con dashboard_id, salvo que contradigan el referente o el estilo que pidio la persona: entonces ignoralos. " +
         "Query muestra el cargador mientras llegan datos y corrige el texto ilegible, pero disena bien de entrada: no construyas cargador propio. " +
         "Controles: si los datos tienen fecha, agrega siempre un periodo con QueryDashboard.dateRange('#periodo', {from: 'desde', to: 'hasta'}) (Hoy, ultimos 7 dias, este mes, mes anterior, ultimos 30 dias, este trimestre, este ano, ano anterior y personalizado), " +
         "declara controls [{slug: 'desde', type: 'date', default: '{{start_of_month}}'}, {slug: 'hasta', type: 'date', default: '{{end_of_month}}'}] y usa {{desde}} y {{hasta}} en date_filters. " +
