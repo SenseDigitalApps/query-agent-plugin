@@ -1,3 +1,4 @@
+import { registerRadarExecContext } from "./src/radar-exec-context.js";
 import { registerQueryProvision } from "./src/agent-provision.js";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
 import { queryPlugin } from "./src/channel.js";
@@ -19,6 +20,7 @@ export default defineChannelPluginEntry({
       registerQueryCronSync(api);
       registerQueryGoogleGuard(api);
       registerQueryVoice(api);
+      registerRadarExecContext(api);
     }
     queryToolsEntry.register(api);
     registerBrightDataXTool(api);
