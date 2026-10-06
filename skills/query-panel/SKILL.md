@@ -468,6 +468,41 @@ Antes de proponer, mira si ya propusiste eso mismo en este canal. Si la
 respuesta trae `duplicate: true`, no se creo una segunda propuesta: menciona la
 existente y su estado devuelto, sin asumir que sigue pendiente.
 
+## Diseno de todo HTML con datos
+
+Vale para reportes, dashboards fijables y dashboards en vivo, sobre todo si se
+hacen desde cero y no hay un tablero de referencia:
+
+1. **Estructura:** titulo con el periodo, fila de KPIs (con variacion frente
+   al periodo anterior cuando aplique), al menos una grafica analitica y
+   despues el detalle en tabla.
+2. **Grafica obligatoria, nunca solo tablas.** Elige la que muestre algo que la
+   tabla no muestra:
+   - tiempo: linea o area (tendencia);
+   - ranking: barras horizontales ordenadas;
+   - proporcion con pocas categorias: dona;
+   - dos dimensiones (persona x semana): barras apiladas o mapa de calor;
+   - meta contra real: barras con linea de meta.
+
+   Acompanala de una frase de hallazgo: que crece o cae, quien concentra, que
+   cambio frente al periodo anterior. Chart.js o ECharts desde
+   cdnjs.cloudflare.com o cdn.jsdelivr.net.
+3. **Contraste:** fondo oscuro, texto claro; fondo claro, texto oscuro,
+   tambien en titulos, etiquetas, leyendas y ejes. Una paleta coherente con el
+   fondo.
+4. **Controles:** si hay fecha, selector de periodo (este mes por defecto, mes
+   anterior, ultimos 7 y 30 dias, trimestre, ano, personalizado); filtros con
+   desplegables estilizados para persona, estado o categoria, con opciones de
+   los datos. Nunca el estilo por defecto del navegador. En un reporte, los
+   filtros trabajan sobre los datos que el HTML ya trae; en el en vivo, con
+   `QueryDashboard.dateRange` y `QueryDashboard.select`.
+5. **Margenes:** nada pegado a los bordes (padding de 24px, contenido centrado
+   con ancho maximo cerca de 1400px) y aire entre tarjetas.
+6. **Estados:** cargando, error y vacio, distintos.
+
+Al publicar un dashboard, si la respuesta trae `design_hints` (sin grafica, sin
+control de periodo), corrigelos en el mismo turno con una version nueva.
+
 ## Reportes y dashboards en vivo
 
 Un HTML con datos se entrega de una de dos formas. Elegir bien evita trabajo:
@@ -532,7 +567,21 @@ comparte igual que uno en vivo.
    y corrige todo de una vez.
 6. Si la persona pidio fijarlo o compartirlo, llama `query_dashboard_share` en
    el mismo turno. Su instruccion es la autorizacion; no pidas otra.
-7. Que Query responda `ok` no prueba lo que la persona ve. No digas
+7. Reglas visuales: contraste siempre (fondo oscuro, texto claro; fondo
+   claro, texto oscuro), tambien en titulos y etiquetas; una paleta coherente
+   con el fondo; ningun control con el estilo por defecto del navegador.
+   Query muestra el cargador y corrige texto ilegible, pero no confies en eso.
+8. Controles: si hay fecha, siempre un periodo con
+   `QueryDashboard.dateRange('#periodo', {from: 'desde', to: 'hasta'})` y
+   controls `desde`/`hasta` de tipo `date` con default `{{start_of_month}}` y
+   `{{end_of_month}}`; las consultas usan `{{desde}}` y `{{hasta}}`. Para
+   persona, estado o categoria, `QueryDashboard.select(...)` con las opciones
+   reales de los datos. Todos juntos en un `div.qd-controls` arriba.
+9. Rendimiento: filtra por el periodo, prefiere agregados, `limit` chico en
+   listas. Si la respuesta dice que una consulta tarda mas de 2000 ms
+   (`elapsed_ms`) o recorre miles de registros (`records_scanned`), agregale
+   filtros o dividela.
+10. Que Query responda `ok` no prueba lo que la persona ve. No digas
    "corregido" ni "ya esta en tu menu" como hecho comprobado: di que quedo
    publicado o fijado y pidele que lo abra desde el menu Dashboards o el
    adjunto y te confirme que ve los datos.
@@ -542,13 +591,23 @@ comparte igual que uno en vivo.
   {"name": "ventas_mes", "source": "records_aggregate", "module": "ventas",
    "metrics": [{"operation": "sum", "field": "valor", "alias": "total"}],
    "group_by": ["fecha"], "time_granularity": {"fecha": "day"},
-   "date_filters": [{"field": "fecha", "from": "{{start_of_month}}", "to": "{{today}}"}]},
+   "date_filters": [{"field": "fecha", "from": "{{desde}}", "to": "{{hasta}}"}]},
   {"name": "meta_mes", "source": "static", "value": 120000000}
+]
+```
+
+Controls de ese ejemplo:
+
+```json
+[
+  {"slug": "desde", "label": "Desde", "type": "date", "default": "{{start_of_month}}"},
+  {"slug": "hasta", "label": "Hasta", "type": "date", "default": "{{end_of_month}}"}
 ]
 ```
 
 ```html
 <div class="qd-page">
+  <div class="qd-controls"><div id="periodo"></div></div>
   <div class="qd-grid qd-cols-2">
     <div class="qd-card qd-kpi">
       <span class="qd-kpi-label">Ventas del mes</span>
@@ -561,6 +620,7 @@ comparte igual que uno en vivo.
   </div>
 </div>
 <script>
+QueryDashboard.dateRange("#periodo", { from: "desde", to: "hasta" });
 QueryDashboard.render(function (data) {
   var ventas = data.ventas_mes;
   var estado = QueryDashboard.state(ventas);

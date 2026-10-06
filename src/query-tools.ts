@@ -327,6 +327,21 @@ export async function uploadQueryAttachmentForThread(params: {
   }
 }
 
+/**
+ * Guia de diseno de todo HTML con datos: reporte (query_attachment_send),
+ * dashboard fijable sin datos de Query y dashboard en vivo. Una sola guia para
+ * que un tablero hecho desde cero, sin referente, salga igual de cuidado.
+ */
+const HTML_DESIGN_GUIDE =
+  "GUIA DE DISENO de todo HTML con datos (reporte, fijable o en vivo): " +
+  "1) Estructura: titulo con el periodo; fila de KPIs, con variacion frente al periodo anterior cuando aplique; al menos UNA grafica analitica; despues el detalle en tabla. " +
+  "2) Grafica obligatoria, nunca solo tablas: elige la que revele algo que la tabla no muestra. Tiempo -> linea o area (tendencia); ranking -> barras horizontales ordenadas; proporcion con pocas categorias -> dona; dos dimensiones (persona x semana) -> barras apiladas o mapa de calor; meta contra real -> barras con linea de meta. " +
+  "Acompanala de una frase de hallazgo: que crece o cae, quien concentra, que cambio frente al periodo anterior. Chart.js o ECharts desde cdnjs.cloudflare.com o cdn.jsdelivr.net, con colores de la misma paleta. " +
+  "3) Contraste siempre: fondo oscuro -> texto claro; fondo claro -> texto oscuro, tambien en titulos, etiquetas, leyendas y ejes de las graficas. Una sola paleta coherente con el fondo. " +
+  "4) Controles: si los datos tienen fecha, selector de periodo (este mes por defecto, mes anterior, ultimos 7 y 30 dias, trimestre, ano, personalizado); filtros con desplegables estilizados para campos de pocos valores (persona, estado, categoria), con opciones sacadas de los datos. Nunca controles con el estilo por defecto del navegador. " +
+  "5) Margenes: nada pegado a los bordes (padding de 24px, contenido centrado con ancho maximo cerca de 1400px) y aire entre tarjetas. " +
+  "6) Estados distintos para cargando, error y vacio. ";
+
 const MAX_DASHBOARD_HTML_BYTES = 1_500_000;
 
 /**
@@ -844,6 +859,9 @@ export default defineToolPlugin({
         "Un HTML con datos enviado aqui es un REPORTE: una foto de los datos del momento, con los datos escritos dentro. Es la opcion por defecto para analisis, informes, comparaciones, periodos cerrados, datos de la web y todo lo que se va a enviar o descargar. " +
         "Si la persona pide fijarlo en el menu, compartirlo con usuarios o roles, hacerle seguimiento o tenerlo siempre al dia, usa query_dashboard_publish (con queries si los datos son de Query; sin queries si vienen de Google Sheets, una API u otra fuente). " +
         "Si un reporte parece de seguimiento recurrente, al final ofrece en una linea convertirlo en dashboard en vivo; no lo conviertas sin que lo pida. " +
+        "Si es un HTML con datos (reporte o tablero), sigue la guia: " +
+        HTML_DESIGN_GUIDE +
+        "En un reporte los filtros y el periodo trabajan sobre los datos que el HTML ya trae. " +
         "Nunca muestres file_path al usuario ni uses registros de negocio para entregar archivos.",
       parameters: Type.Object({
         file_path: Type.String({
@@ -898,6 +916,13 @@ export default defineToolPlugin({
         "Lo unico que cambia es de donde salen los datos. Query solo pone encima el titulo y el boton Actualizar: no los repitas. " +
         "Atajo opcional que ya combina con el tema de Query: qd-page, qd-grid (qd-cols-2/3/4, qd-span-2, qd-span-full), qd-card (qd-card-header, qd-card-title, qd-card-subtitle), qd-kpi (qd-kpi-label, qd-kpi-value, qd-kpi-delta is-up/is-down, qd-kpi-icon), " +
         "qd-table-wrap + qd-table (td.is-number), qd-badge (is-primary/success/warning/danger/info), qd-progress, qd-list, qd-chart, qd-empty, qd-error, qd-muted; variables CSS --qd-primary, --qd-success, --qd-danger, --qd-gray-500... " +
+        HTML_DESIGN_GUIDE +
+        "Si la respuesta trae design_hints (sin grafica, sin control de periodo), corrigelos en el mismo turno publicando una version nueva con dashboard_id. " +
+        "Query muestra el cargador mientras llegan datos y corrige el texto ilegible, pero disena bien de entrada: no construyas cargador propio. " +
+        "Controles: si los datos tienen fecha, agrega siempre un periodo con QueryDashboard.dateRange('#periodo', {from: 'desde', to: 'hasta'}) (Hoy, ultimos 7 dias, este mes, mes anterior, ultimos 30 dias, este trimestre, este ano, ano anterior y personalizado), " +
+        "declara controls [{slug: 'desde', type: 'date', default: '{{start_of_month}}'}, {slug: 'hasta', type: 'date', default: '{{end_of_month}}'}] y usa {{desde}} y {{hasta}} en date_filters. " +
+        "Para campos con pocos valores (persona, estado, categoria) usa QueryDashboard.select('#persona', {label: 'Responsable', control: 'responsable'}) o con onChange para filtrar en el navegador; cargale opciones con .setOptions(valores reales de los datos). Pon los controles juntos en un div.qd-controls arriba. " +
+        "Rendimiento: filtra siempre por el periodo; prefiere records_aggregate a traer filas; records_query con limit chico. La respuesta trae elapsed_ms y records_scanned por consulta: si una tarda mas de 2000 ms o recorre miles de registros, agregale filtros o dividela. " +
         "Si la persona pide comparar, entrega ambas versiones de la misma informacion: el reporte con query_attachment_send y el dashboard con esta herramienta, con el mismo diseno. " +
         "Graficas con Chart.js o ECharts desde cdnjs.cloudflare.com o cdn.jsdelivr.net. El en vivo no tiene otro acceso a red; el fijable sin queries puede pedir datos por HTTPS y debe mostrar su propio estado de carga y error. " +
         "Para una version nueva del mismo dashboard envia dashboard_id: conserva id, nombre, fijado y audiencia; no crees otro dashboard para corregir uno existente. " +
@@ -922,7 +947,7 @@ export default defineToolPlugin({
         controls: Type.Optional(
           Type.Array(Type.Record(Type.String(), Type.Unknown()), {
             description:
-              "Filtros opcionales del visor: {slug, label, type: text|number|date|datetime|boolean|select, default, options}. Se usan en las consultas como {{slug}} y se cambian con QueryDashboard.setControls.",
+              "Filtros del visor: {slug, label, type: text|number|date|datetime|boolean|select, default, options}. Se usan en las consultas como {{slug}} y se cambian con QueryDashboard.dateRange, QueryDashboard.select o QueryDashboard.setControls. default acepta fechas relativas como {{start_of_month}}.",
           }),
         ),
         dashboard_id: Type.Optional(
