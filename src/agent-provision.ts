@@ -150,7 +150,11 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
     // rather than silently authenticating a new account with another identity.
     const envToken = process.env.QUERY_OPENCLAW_TOKEN?.trim();
     if (envToken && envToken !== new URL(manifest.connection.url).searchParams.get("token")) fail("global_query_token_conflict");
-    newAccount = { enabled: true, url: manifest.connection.url, effortMode: manifest.agent.effort_mode };
+    // Django AllowedHostsOriginValidator rejects a missing Origin before bot auth.
+    // Use the WebSocket endpoint's own HTTP(S) origin, not a guessed frontend host.
+    const socketOrigin = new URL(manifest.connection.url);
+    socketOrigin.protocol = socketOrigin.protocol === "wss:" ? "https:" : "http:";
+    newAccount = { enabled: true, url: manifest.connection.url, origin: socketOrigin.origin, effortMode: manifest.agent.effort_mode };
     newBinding = { type: "route", agentId, match: { channel: "query", accountId } };
     const inspect = (current: QueryConfig) => {
       const agents = provisionAgents(current);
@@ -160,14 +164,23 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
       const bindings = current.bindings ?? [];
       const bound = bindings.filter(item => item.type === "route" && item.match.channel === "query" && normalizeAccountId(item.match.accountId) === accountId);
       if (agent || matchingId || bound.length) {
-        if (equal(agent, newAgent) && matchingId === accountId && equal(accounts[accountId], newAccount) && bound.length === 1 && equal(bound[0], newBinding)) return "present";
+        // Identity fields are owned by this manifest; operational settings (Origin,
+        // model, heartbeat, etc.) may have been added by an administrator later.
+        // Preserve legacy accounts without Origin; readiness still proves activation.
+        const existingAccount = accounts[accountId];
+        const sameAgent = agent && ["id", "name", "workspace"].every(key => equal(agent[key], newAgent[key]));
+        const sameAccount = existingAccount && ["enabled", "url", "effortMode"].every(key =>
+          equal((existingAccount as Record<string, unknown>)[key], newAccount[key]));
+        if (sameAgent && matchingId === accountId && sameAccount && bound.length === 1 && equal(bound[0], newBinding)) return "present";
         fail("agent_account_or_binding_collision");
       }
       if (agents.some(item => resolveAgentWorkspaceDir(current, item.id) === workspace)) fail("workspace_collision");
       if (listQueryAccountIds(current).some(id => resolveQueryAccount(current, id).url === manifest.connection.url)) fail("connection_already_assigned");
       return "absent";
     };
-    const state = inspect(cfg);
+    // Runtime config can contain injected defaults that are not authored fields.
+    // Idempotency compares the same source representation used by the transaction.
+    const state = inspect(source);
     let existingMarker: string | undefined;
     try { existingMarker = await readFile(join(workspace, MARKER), "utf8"); }
     catch (error) { if ((error as NodeJS.ErrnoException).code !== "ENOENT") fail("workspace_collision"); }

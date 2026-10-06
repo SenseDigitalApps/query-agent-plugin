@@ -58,6 +58,38 @@ describe.each(["legacy", "entries"])("native Query provisioning (%s)", schema =>
    expect(mutate).toHaveBeenCalledTimes(1); expect(await readFile(join(root,"sales","SOUL.md"),"utf8")).toBe("human content");
    expect((await provisionQueryAgent({...manifest(), idempotency_key:"different"}, false, deps)).error).toBe("manifest_collision");
  });
+ it.each([
+   ["wss://query.example/ws/1/?token=secret", "https://query.example"],
+   ["ws://localhost:8123/ws/1/?token=secret", "http://localhost:8123"],
+ ])("provisions an Origin for %s without leaking credentials", async (url, origin) => {
+   const value = manifest(); value.connection.url = url;
+   expect((await provisionQueryAgent(value, false, deps)).status).toBe("created");
+   expect(cfg.channels.query.accounts.sales.origin).toBe(origin);
+   expect(cfg.channels.query.accounts.sales.origin).not.toContain("secret");
+ });
+ it("repeats successfully when runtime injects agent/account defaults", async () => {
+   expect((await provisionQueryAgent(manifest(), false, deps)).status).toBe("created");
+   deps.config.current = () => {
+     const runtime = structuredClone(cfg);
+     const agent = schema === "entries" ? runtime.agents.entries.sales : runtime.agents.list.find((a:any) => a.id === "sales");
+     agent.model = "inherited/model";
+     runtime.channels.query.accounts.sales.heartbeatMs = 25000;
+     return runtime;
+   };
+   expect((await provisionQueryAgent(manifest(), false, deps)).status).toBe("already_present");
+   expect(mutate).toHaveBeenCalledTimes(1);
+ });
+ it("preserves legacy and administrator-added operational settings on repeat", async () => {
+   expect((await provisionQueryAgent(manifest(), false, deps)).status).toBe("created");
+   delete cfg.channels.query.accounts.sales.origin;
+   cfg.channels.query.accounts.sales.heartbeatMs = 30000;
+   expect((await provisionQueryAgent(manifest(), false, deps)).status).toBe("already_present");
+   cfg.channels.query.accounts.sales.origin = "https://frontend.example";
+   expect((await provisionQueryAgent(manifest(), false, deps)).status).toBe("already_present");
+   expect(mutate).toHaveBeenCalledTimes(1);
+   cfg.channels.query.accounts.sales.url = "wss://other.example/?token=changed";
+   expect((await provisionQueryAgent(manifest(), false, deps)).error).toBe("agent_account_or_binding_collision");
+ });
  it.each(["agent", "account", "workspace"])("blocks %s collisions", async kind => {
    if(kind==="agent") { if(schema==="entries") cfg.agents.entries.sales={}; else cfg.agents.list.push({ id: "sales" }); }
    if(kind==="account") cfg.channels.query.accounts={sales:{url:"wss://other/?token=other"}};
