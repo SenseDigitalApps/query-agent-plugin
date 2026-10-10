@@ -761,3 +761,14 @@ a la solicitud, sin retirar autorizaciones ajenas.
 El backend requiere `bot_gateway.0016_linkedin_automation_destinations` y el
 puente de facturacion desplegados. No afirmar funcionamiento extremo a extremo
 solo porque las herramientas figuren en OpenClaw; informar errores reales de Core.
+
+
+## X: publicar y medir con Manuela
+
+`query_x` es exclusiva de `manuela-villegas-marketing`. No usa el bearer de lectura pública. `accounts` descubre las cuentas de cuatro campos OAuth1 ya cifradas; `connect` vincula la elegida y valida identidad sin pedir ni copiar valores. Ante varias cuentas, selecciona la indicada por el usuario; si es ambiguo, aclara.
+
+`prepare` usa account_id, texto de hasta280 caracteres e idempotency_key estable. Devuelve operation_id, expected_digest, contenido y destino. Si el usuario pidió publicar ese texto, llama `publish` con operation_id y expected_digest; configurar acceso o redactar no autoriza publicar. `status` verifica resultado. Conserva IDs/clave: nunca repitas completed, uncertain o rejected con otra clave. Solo completed con post_id confirma publicación.
+
+`metrics` toma cuenta y hasta20 post_ids propios; private_metrics=true solicita métricas privadas/orgánicas según acceso y antigüedad admitidos por X. Reporta los campos ausentes como no disponibles, no como cero. El permiso de escritura real se verifica al publicar; validar identidad no lo demuestra.
+
+El plugin aplica el mismo presupuesto/calendario de X público. No sortees un bloqueo de presupuesto mediante HTTP, otro token, cuenta o MCP. No hay imágenes, cron, DM ni administración en esta primera versión. Una autorización o calendario de Instagram/Facebook no se modifica ni extiende a X. Un 404 requiere desplegar Core con el consumidor X; no significa que deban reenviar claves.

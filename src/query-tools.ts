@@ -1,3 +1,4 @@
+import { executeX } from "./x-tools.js";
 import { AsyncLocalStorage } from "node:async_hooks";
 import { voiceContextForTool, withVoiceExecution } from "./voice-execution-context.js";
 import { voiceRuns } from "./voice-run-binding.js";
@@ -803,6 +804,18 @@ export default defineToolPlugin({
       execute: async ({thread_id, ...params}, _config, context) => postPrivate(thread_id, params, "query_private_operation", context.api.logger),
     }),
     tool({
+      name: "query_x", label: "Query: publicar y medir X",
+      description: "Solo Manuela: usa las cuatro credenciales OAuth1 ya cifradas en Query, nunca tokens en parámetros. accounts descubre cuentas; connect vincula la cuenta guardada y verifica identidad sin volver a pedir secretos. prepare prepara texto (máximo280 caracteres) con account_id e idempotency_key estable, devuelve operation_id y expected_digest. Si el usuario pidió publicar ese contenido, publish usa esos dos valores sin otra confirmación. Si solo pidió borrador/configuración, no publiques. status consulta; nunca repitas completed/uncertain/rejected con nueva clave. metrics recibe cuenta y hasta20 post_ids propios; private_metrics=true solicita estadísticas privadas/ orgánicas disponibles según permisos y antigüedad, ausencia no significa cero. Presupuesto compartido con X público; sin cron, imágenes, DM ni administración en esta versión. No usar HTTP directo ni extraer credenciales.",
+      parameters: Type.Object({thread_id: THREAD_PARAM,
+        action: Type.Union([Type.Literal("accounts"),Type.Literal("connect"),Type.Literal("prepare"),Type.Literal("publish"),Type.Literal("status"),Type.Literal("metrics")]),
+        account_id: Type.Optional(Type.String()), operation_id: Type.Optional(Type.String()),
+        expected_digest: Type.Optional(Type.String({pattern:"^[a-f0-9]{64}$"})),
+        idempotency_key: Type.Optional(Type.String({minLength:1,maxLength:100})), text: Type.Optional(Type.String({minLength:1,maxLength:280})),
+        post_ids: Type.Optional(Type.Array(Type.String({pattern:"^[0-9]{1,20}$"}),{minItems:1,maxItems:20})), private_metrics: Type.Optional(Type.Boolean()),
+      }, {additionalProperties:false}),
+      execute: async (params, _config, context) => executeX(params, body => postQuery(body.thread_id,"x/",body,"query_x",context.api.logger)),
+    }),
+    tool({
       name: "query_linkedin", label: "Query: automatización LinkedIn",
       description: "Usa cuentas LinkedIn ya guardadas en Query sin recibir sus tokens. accounts muestra destinos, capacidades y autorizaciones. Cuando el usuario solicita una automatización, registra el cron con query_cron_manage y desde ese mismo chat llama authorize con account_id, schedule_external_id real, destination (URN de organización o de perfil personal) y actions: text, image y/o first_comment (text obligatorio). Esa instrucción autoriza una vez; no pidas aprobación por publicación ni envíes al usuario a la web. Sólo autoriza las acciones y el destino solicitados. Puedes autorizar varios destinos de una misma cuenta y cron llamando authorize por cada destino; se conservan autorizaciones independientes, sin reemplazar las anteriores. El autor guardado es el destino predeterminado, no un limite para el cron. El cron usa publish con cuenta, destino, texto, idempotency_key estable por ocurrencia y publicación; image_attachment_id toma una imagen del hilo, alt_text es opcional y first_comment agrega un comentario a la publicación creada. No toma tokens, URLs de imágenes ni destinos arbitrarios. waiting_image permite resume con operation_id después de retry_after_seconds; status sólo consulta. Nunca repitas completed/partial/uncertain/rejected con otra clave. partial indica que el post existe pero el comentario no se completó; informa ambos resultados sin volver a publicar. revoke_authorization con destination revoca solo ese destino; sin destination revoca todos los destinos de esa cuenta y cron. Puedes usar la misma idempotency_key de una ocurrencia para destinos distintos: Core separa las operaciones y devuelve destination en cada resultado. La credencial programada determina qué cron ejecuta; no puedes elegir otro. Query renueva el token si LinkedIn concedió un refresh token válido; permisos faltantes o reconexión se informan en el chat. No uses query_private_operation para automatizar LinkedIn ni bloquees FTP/SMTP por una limitación del proveedor.",
       parameters: Type.Object({thread_id: THREAD_PARAM,
@@ -1524,6 +1537,7 @@ export default defineToolPlugin({
     },
     execute: undefined,
     factory: ({ api, config, toolContext }) => {
+      if (definition.name === "query_x" && toolContext.agentId !== "manuela-villegas-marketing") return null;
       const sessionKey = toolContext.sessionKey;
       return {
         name: definition.name, label: definition.label,
