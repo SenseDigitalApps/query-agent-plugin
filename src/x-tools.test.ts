@@ -28,3 +28,20 @@ it('connection preflight refusal spends nothing',async()=>{
  await executeX({action:'connect',account_id:'a'},post,reserve);
  expect(reserve).not.toHaveBeenCalled();
 });
+
+it('resumes an upload using the same cost reservation key',async()=>{
+ const post=vi.fn().mockResolvedValueOnce({status:'uploading_media',expected_digest:'digest',retry_after_seconds:0}).mockResolvedValueOnce({status:'waiting_media'});
+ const reserve=vi.fn().mockResolvedValue({ok:true});
+ expect((await executeX({action:'resume',operation_id:'op',expected_digest:'digest',thread_id:'42'},post,reserve)).status).toBe('waiting_media');
+ expect(reserve).toHaveBeenCalledTimes(1);expect(post.mock.calls[1][0].action).toBe('resume');
+});
+it('does not poll the provider before retry_after_seconds',async()=>{
+ const post=vi.fn().mockResolvedValue({status:'waiting_media',expected_digest:'digest',retry_after_seconds:5});const reserve=vi.fn();
+ expect((await executeX({action:'resume',operation_id:'op',expected_digest:'digest'},post,reserve)).status).toBe('waiting_media');
+ expect(post).toHaveBeenCalledTimes(1);expect(reserve).not.toHaveBeenCalled();
+});
+it('a repeated publish returns progress rather than starting again',async()=>{
+ const post=vi.fn().mockResolvedValue({status:'uploading_media',expected_digest:'digest'});const reserve=vi.fn();
+ expect((await executeX({action:'publish',operation_id:'op',expected_digest:'digest'},post,reserve)).status).toBe('uploading_media');
+ expect(post).toHaveBeenCalledTimes(1);expect(reserve).not.toHaveBeenCalled();
+});

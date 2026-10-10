@@ -17,17 +17,19 @@ export function reserveXBudget(key: string, cents: number): Promise<any> {
   });
 }
 
-/** Core owns all credentials. This gate reserves from the SAME public-reader ledger. */
+/** Core owns credentials; Manuela has a separate unlimited, metered policy. */
 export async function executeX(params: Params, post: Post, reserve = reserveXBudget): Promise<any> {
   const {action, thread_id} = params;
   let cents = 0; let key = randomUUID() as string;
-  if (action === 'publish') {
+  if (action === 'publish' || action === 'resume') {
     const state = await post({action:'status',thread_id,operation_id:params.operation_id});
     if (state.error || state.ok === false) return state;
     if (state.expected_digest !== params.expected_digest) return {ok:false,error:'x_draft_changed'};
     if (['completed','uncertain','rejected','cancelled'].includes(state.status)) return state;
-    if (state.status !== 'pending') return {ok:false,error:'x_draft_not_pending'};
-    // Reserve the expensive URL rate for every post; no heuristic can undercharge.
+    const allowed = action === 'resume' ? ['uploading_media','waiting_media'] : ['pending'];
+    if (!allowed.includes(state.status) || state.retry_after_seconds > 0) return state;
+    // Meter the post estimate once across every upload/resume checkpoint.
+    // This is not a media price guarantee or a local spending ceiling.
     cents = 20; key = `publish:${params.operation_id}`;
   } else if (action === 'connect') {
     const state = await post({action:'accounts',thread_id});

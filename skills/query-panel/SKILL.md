@@ -789,10 +789,29 @@ solo porque las herramientas figuren en OpenClaw; informar errores reales de Cor
 
 ## X: publicar y medir con Manuela
 
-`query_x` es exclusiva de `manuela-villegas-marketing`. No usa el bearer de lectura pública. `accounts` descubre las cuentas de cuatro campos OAuth1 ya cifradas; `connect` vincula la elegida y valida identidad sin pedir ni copiar valores. Ante varias cuentas, selecciona la indicada por el usuario; si es ambiguo, aclara.
+`query_x` es exclusiva de `manuela-villegas-marketing` y reutiliza las cuatro
+credenciales OAuth1 cifradas. `accounts` descubre capacidades y `media_limits`;
+`connect` verifica identidad. No copiar ni reenviar secretos.
 
-`prepare` usa account_id, texto de hasta280 caracteres e idempotency_key estable. Devuelve operation_id, expected_digest, contenido y destino. Si el usuario pidió publicar ese texto, llama `publish` con operation_id y expected_digest; configurar acceso o redactar no autoriza publicar. `status` verifica resultado. Conserva IDs/clave: nunca repitas completed, uncertain o rejected con otra clave. Solo completed con post_id confirma publicación.
+`prepare` recibe account_id, idempotency_key estable, text de hasta280 caracteres
+y opcionalmente `media_attachment_ids`: hasta4 imagenes JPEG/PNG/WEBP, o un solo
+GIF/video MP4; no mezclar video/GIF con otros medios. El texto puede omitirse si
+hay medios. Los IDs deben ser adjuntos del mismo hilo. Para archivos locales usa
+primero `query_attachment_send`. No aceptes URLs ni rutas en query_x. Respeta
+limites de bytes devueltos por accounts y del proveedor; X valida codec/duracion.
 
-`metrics` toma cuenta y hasta20 post_ids propios; private_metrics=true solicita métricas privadas/orgánicas según acceso y antigüedad admitidos por X. Reporta los campos ausentes como no disponibles, no como cero. El permiso de escritura real se verifica al publicar; validar identidad no lo demuestra.
+El borrador devuelve archivos, destino, operation_id y expected_digest. Solo
+cuando el usuario pidio publicar ese contenido, llama `publish`. Si devuelve
+`uploading_media`, continua con `resume` y los mismos IDs/digest. Si devuelve
+`waiting_media`, espera `retry_after_seconds` antes de `resume`. Un paso carga o
+procesa medios, NO significa publicacion: solo `completed` con post_id confirma.
+`status` consulta sin publicar. Nunca repetir completed/uncertain/rejected con una
+clave nueva. Una publicacion anterior solo de texto no recibe adjuntos retroactivos:
+no dupliques/republiques para agregarle medios sin autorizacion del usuario.
 
-El plugin aplica el mismo presupuesto/calendario de X público. No sortees un bloqueo de presupuesto mediante HTTP, otro token, cuenta o MCP. No hay imágenes, cron, DM ni administración en esta primera versión. Una autorización o calendario de Instagram/Facebook no se modifica ni extiende a X. Un 404 requiere desplegar Core con el consumidor X; no significa que deban reenviar claves.
+`metrics` consulta hasta20 post_ids propios. private_metrics=true pide metricas
+privadas/organicas disponibles; ausencia no significa cero. Manuela tiene autorizacion
+de Juli sin tope local de gasto, con medicion separada; siguen aplicando limites
+propios de X. No habilita calendario/cron, DM ni administracion. Instagram/Facebook
+siguen independientes. No hay que regenerar credenciales por agregar soporte de
+medios; informa el error real del proveedor si rechaza una subida.
