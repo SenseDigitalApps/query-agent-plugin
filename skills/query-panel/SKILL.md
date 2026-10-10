@@ -171,7 +171,7 @@ aunque sigue sujeta a borrado explicito y las politicas de respaldo del sistema.
 Se respetan permisos de modulo/campo; no se aceptan adjuntos de otro hilo.
 Si el contenido cambio, caduco o falta antes de aprobar, corrige la fuente y
 propone de nuevo; no afirmes que quedo archivado. Despues de aprobar verifica
-`query_record_get` y la URL permanente, o `result.record_assets` de la ejecucion.
+`query_record_get` y la URL permanente, o `api_response.record_assets` de la ejecucion.
 Las URLs temporales guardadas anteriormente NO se migran automaticamente:
 requieren una propuesta nueva con el adjunto disponible.
 
