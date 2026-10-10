@@ -848,3 +848,16 @@ Solo completed con post_id confirma publicación. Cambiar credenciales o revocar
 la autorización bloquea también operaciones preparadas. revoke_authorization
 revoca la cuenta/tarea indicada; no toca otras. No publicar salidas atrasadas
 en masa ni cambiar Instagram/Facebook como efecto secundario.
+
+
+## Generic authenticated HTTP (staged capability)
+
+`query_api_request` can discover authorized HTTP connections, request operations
+and query status when Core enables the capability. It is a first-class alternative
+to dedicated tools, not a permission bypass and not contingent on another tool
+failing. Use only discovered connection IDs and relative documented paths. Never
+supply provider credentials, owner/tenant identities or full URLs. Preserve the
+same idempotency key; running/uncertain results require reconciliation, not a new
+write. v1 supports private owner turns only (no cron/group), JSON/text/form bodies,
+and does not acquire or refresh OAuth2 tokens or accept file uploads. If disabled,
+report that state; do not use direct HTTP or extract credentials as a workaround.
