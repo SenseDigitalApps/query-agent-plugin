@@ -1305,7 +1305,7 @@ export function registerQueryCronSync(
             job_id: jobId,
             session_target: "isolated",
             creator_user_id: mutation.creatorUserId,
-            run_as_user_id: mutation.runAsUserId,
+            run_as_user_id: authorization.run_as_user_id,
             origin_thread_id: actor.threadId,
             delivery: {
               channel: "query",

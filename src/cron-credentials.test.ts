@@ -224,6 +224,7 @@ describe("registro de la tarea", () => {
 
     expect(result.details).toMatchObject({ ok: true, action: "updated", job_id: job.id });
     expect(result.details.authorization).toMatchObject({ authorized: true, run_as_user_id: 38 });
+    expect(result.details.run_as_user_id).toBe(38);
   });
 
   it.each(["add", "update", "run"])("%s espera el acuse y falla sin autorización, sin iniciar el agente", async (action) => {

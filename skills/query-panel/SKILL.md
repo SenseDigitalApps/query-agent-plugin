@@ -825,6 +825,15 @@ text, image, video y/o metrics. No pedir otra confirmación ni credenciales.
 accounts devuelve scheduled=true (capacidad), y automations (autorización por
 tarea); la capacidad no concede permiso automáticamente a todas las tareas.
 
+El dueño de la cuenta X puede autorizar una tarea del mismo hilo de origen que
+ejecuta otro usuario: authorize vincula el permiso al ejecutor confirmado por
+Core y devuelve run_as_user_id. No cambies el ejecutor del cron para igualarlo
+al dueño de X. La cuenta sólo queda disponible dentro de esa tarea, no para
+el uso interactivo del otro usuario. Si cambia el ejecutor, hace falta renovar
+el permiso desde un turno autorizado del dueño. Un administrador que edita
+un cron no se convierte en su ejecutor; compara la identidad confirmada, no
+la del editor. No repitas sincronizaciones si la autorización ya está sana.
+
 Si la tarea usará medios ya adjuntos, llamar retain_media desde el turno humano
 con cuenta, ID de tarea, media_attachment_ids del mismo hilo y retain_until ISO
 posterior a su ejecución (hasta 90 días). Extiende la retención sin publicar ni
