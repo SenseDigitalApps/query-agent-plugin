@@ -151,6 +151,28 @@ Flujo:
    Ante un error, informa el fallo; no repitas automaticamente una creacion si
    no sabes si se ejecuto.
 
+### Archivar archivos e imagenes como assets permanentes
+
+Si la persona pide guardar un archivo en un campo `file` o `image` (`img`) de
+un registro real, no es una mera entrega en el chat. Descubre modulo, campo y
+registro. Usa `query_record_propose` (o lote) con
+`fields: {"slug_real": {"attachment_id": 123}}`. El ID debe ser de un adjunto
+del mismo hilo; nunca lo inventes. Para archivos locales, subelos primero con
+`query_attachment_send` y usa el ID de su respuesta. No incluyas rutas locales
+ni URLs temporales `/assets/` o `agent_chat` como valor del campo.
+
+La propuesta muestra el nombre y que sera un asset permanente. Solo al
+aprobar (o bajo la politica administrativa de altas ya autorizada) Core copia
+los bytes a `register_files`/`register_images` y guarda la URL normal del asset.
+La copia es independiente del adjunto: no caduca por la retencion del chat,
+aunque sigue sujeta a borrado explicito y las politicas de respaldo del sistema.
+Se respetan permisos de modulo/campo; no se aceptan adjuntos de otro hilo.
+Si el contenido cambio, caduco o falta antes de aprobar, corrige la fuente y
+propone de nuevo; no afirmes que quedo archivado. Despues de aprobar verifica
+`query_record_get` y la URL permanente, o `result.record_assets` de la ejecucion.
+Las URLs temporales guardadas anteriormente NO se migran automaticamente:
+requieren una propuesta nueva con el adjunto disponible.
+
 ### Maestros y comprobacion de una propuesta aprobada
 
 Las herramientas de registros reciben el modulo descubierto con

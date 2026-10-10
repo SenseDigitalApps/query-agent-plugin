@@ -562,3 +562,12 @@ describe("consultas estructuradas de registros", () => {
     expect(options.method).toBeUndefined();
   });
 });
+
+
+describe("persistent record asset references", () => {
+  it("keeps an attachment reference in a real record proposal without treating it as local artifact delivery", () => {
+    const fields = { reporte: { attachment_id: 123 }, imagen: { attachment_id: 456 } };
+    expect(containsGeneratedArtifactReference({ fields })).toBe(false);
+    expect(recordProposalRequestBody({ fields }).fields).toEqual(fields);
+  });
+});
