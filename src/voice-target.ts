@@ -12,6 +12,7 @@ import type { VoiceScope } from "./voice-bridge.js";
 export type VoiceRouteConfig = { tenant: string; agentId: number; accountId: string };
 
 export type VoiceCallTarget = {
+  realtimeVoice?: string;
   sessionKey: string;
   /** OpenClaw agent that owns sessionKey; its auth store decides the credential. */
   agentId: string;
@@ -71,5 +72,6 @@ export function resolveVoiceTarget(cfg: QueryConfig, scope: VoiceScope, resolveR
     peer: {kind: "direct", id: String(scope.thread_id)}});
   if (!route?.sessionKey || !route.agentId) return undefined;
   return {sessionKey: route.sessionKey, agentId: route.agentId, accountId: account.accountId, socketUrl: account.url,
+    ...(account.realtimeVoice ? {realtimeVoice: account.realtimeVoice} : {}),
     agentToken: account.token, coreApiBase: coreApiBaseFromSocket(account.url)};
 }

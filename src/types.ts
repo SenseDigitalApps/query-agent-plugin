@@ -19,6 +19,8 @@ export type QueryChannelConfig = {
   reconnectMaxMs?: number;
   responseTimeoutMs?: number;
   stateFile?: string;
+  /** Realtime call voice only; independent from voice-note TTS. */
+  realtimeVoice?: string;
   ttsVoice?: string;
   ttsLang?: string;
   ttsRate?: string;
@@ -45,6 +47,8 @@ export type ResolvedQueryAccount = {
   reconnectMaxMs: number;
   responseTimeoutMs: number;
   stateFile?: string;
+  /** Realtime call voice only; independent from voice-note TTS. */
+  realtimeVoice?: string;
   ttsVoice?: string;
   ttsLang?: string;
   ttsRate?: string;

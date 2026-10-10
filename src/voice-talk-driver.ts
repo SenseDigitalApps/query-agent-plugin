@@ -115,6 +115,7 @@ export class GatewayTalkDriver implements QueryTalkDriver {
     try {
       session = await this.deps.gateway.request<Payload>("talk.client.create", {
         sessionKey: target.sessionKey,
+        ...(target.realtimeVoice ? {voice: target.realtimeVoice} : {}),
         provider: VOICE_OAUTH_ROUTE.provider,
         model: VOICE_OAUTH_ROUTE.model,
         mode: "realtime",

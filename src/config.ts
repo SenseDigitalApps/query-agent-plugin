@@ -57,6 +57,7 @@ export function resolveQueryAccount(
     reconnectMaxMs,
     responseTimeoutMs: integerInRange(accountSection?.responseTimeoutMs, 0, 0, 3_600_000),
     stateFile: accountSection?.stateFile?.trim() || undefined,
+    realtimeVoice: accountSection?.realtimeVoice?.trim() || undefined,
     ttsVoice: accountSection?.ttsVoice?.trim() || undefined,
     ttsLang: accountSection?.ttsLang?.trim() || undefined,
     ttsRate: accountSection?.ttsRate?.trim() || undefined,

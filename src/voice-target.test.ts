@@ -48,3 +48,12 @@ it("reads host and bot id only from Query agent sockets", () => {
   expect(agentSocketIdentity("wss://apius.itsquery.com/ws/other/3/")).toBeUndefined();
   expect(agentSocketIdentity("not a url")).toBeUndefined();
 });
+
+
+it("keeps realtime voice scoped to the matched account and separate from TTS", () => {
+  const config = cfg();
+  config.channels!.query!.accounts!.query.realtimeVoice = "juniper";
+  config.channels!.query!.accounts!.query.ttsVoice = "es-MX-DaliaNeural";
+  expect(resolveVoiceTarget(config, scope(3), route, "apius.itsquery.com")?.realtimeVoice).toBe("juniper");
+  expect(resolveVoiceTarget(config, scope(5), route, "apius.itsquery.com")?.realtimeVoice).toBeUndefined();
+});

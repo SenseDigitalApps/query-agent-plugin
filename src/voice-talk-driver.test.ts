@@ -158,3 +158,10 @@ it("passes Core's tenant host to the account resolver", async () => {
   await driver.start(scope, {...payload, core_host: "apius.itsquery.com"}, emit);
   expect(resolveTarget).toHaveBeenCalledWith(scope, "apius.itsquery.com");
 });
+
+
+it("passes an account-scoped realtime voice without accepting a caller override", async () => {
+  const {driver, request, emit} = setup({resolveTarget: () => ({...target, realtimeVoice: "juniper"})});
+  await driver.start(scope, {...payload, voice: "cove"}, emit);
+  expect(request).toHaveBeenCalledWith("talk.client.create", expect.objectContaining({voice: "juniper"}));
+});
