@@ -14,3 +14,12 @@ it('instantiates only for trusted Manuela agent context',()=>{
  for(const agentId of ['main','comunicaciones','query',undefined]) expect(factory({agentId,sessionKey:'agent:manuela-villegas-marketing:query:channel:24'})).toBeNull();
  expect(factory({agentId:'manuela-villegas-marketing',sessionKey:'test'}).name).toBe('query_x');
 });
+it('exposes scheduled authorization and bounded media retention',()=>{
+ const schema=getToolPluginMetadata(entry)!.tools.find(t=>t.name==='query_x')!.parameters;
+ const props=schema.properties!;
+ expect(JSON.stringify(props.action)).toContain('authorize');
+ expect(JSON.stringify(props.action)).toContain('retain_media');
+ expect(props).toHaveProperty('schedule_external_id');
+ expect(props).toHaveProperty('retain_until');
+ expect(JSON.stringify(props.actions)).toContain('video');
+});

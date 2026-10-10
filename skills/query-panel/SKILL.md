@@ -812,6 +812,30 @@ no dupliques/republiques para agregarle medios sin autorizacion del usuario.
 `metrics` consulta hasta20 post_ids propios. private_metrics=true pide metricas
 privadas/organicas disponibles; ausencia no significa cero. Manuela tiene autorizacion
 de Juli sin tope local de gasto, con medicion separada; siguen aplicando limites
-propios de X. No habilita calendario/cron, DM ni administracion. Instagram/Facebook
+propios de X. Habilita cron autorizado por cuenta y tarea; no DM ni administracion. Instagram/Facebook
 siguen independientes. No hay que regenerar credenciales por agregar soporte de
 medios; informa el error real del proveedor si rechaza una subida.
+
+### X programado: autorización y retención
+
+Cuando el usuario pide programar X, mantener los IDs y horarios existentes de
+query_cron_manage (descubrir primero). Desde ese turno humano usar query_x
+authorize con account_id, schedule_external_id real y actions autorizadas:
+text, image, video y/o metrics. No pedir otra confirmación ni credenciales.
+accounts devuelve scheduled=true (capacidad), y automations (autorización por
+tarea); la capacidad no concede permiso automáticamente a todas las tareas.
+
+Si la tarea usará medios ya adjuntos, llamar retain_media desde el turno humano
+con cuenta, ID de tarea, media_attachment_ids del mismo hilo y retain_until ISO
+posterior a su ejecución (hasta 90 días). Extiende la retención sin publicar ni
+cambiar horarios; no revive adjuntos vencidos, que deben subirse de nuevo.
+Los medios generados al ejecutar se suben en el hilo autorizado de la tarea.
+
+En ejecución usar prepare, publish y resume igual que en chat, con clave estable
+por ocurrencia/post. No pasar schedule_external_id en prepare/publish: Core lo
+obtiene de la credencial programada. Mantener operation_id/expected_digest al
+reanudar, esperar retry_after_seconds y no repetir uncertain/completed/rejected.
+Solo completed con post_id confirma publicación. Cambiar credenciales o revocar
+la autorización bloquea también operaciones preparadas. revoke_authorization
+revoca la cuenta/tarea indicada; no toca otras. No publicar salidas atrasadas
+en masa ni cambiar Instagram/Facebook como efecto secundario.

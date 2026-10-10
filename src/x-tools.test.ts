@@ -45,3 +45,9 @@ it('a repeated publish returns progress rather than starting again',async()=>{
  expect((await executeX({action:'publish',operation_id:'op',expected_digest:'digest'},post,reserve)).status).toBe('uploading_media');
  expect(post).toHaveBeenCalledTimes(1);expect(reserve).not.toHaveBeenCalled();
 });
+it.each(['authorize','revoke_authorization','retain_media'])('forwards %s without spending or publishing',async(action)=>{
+ const post=vi.fn().mockResolvedValue({status:'authorized'});const reserve=vi.fn();
+ const params={action,account_id:'account',schedule_external_id:'cron-one',actions:['text','image']};
+ await executeX(params,post,reserve);
+ expect(post).toHaveBeenCalledExactlyOnceWith(params);expect(reserve).not.toHaveBeenCalled();
+});
