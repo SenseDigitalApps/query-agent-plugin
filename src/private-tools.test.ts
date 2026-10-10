@@ -40,6 +40,21 @@ describe('private delivery registration and transport',()=>{
     await tool.execute('call2',{thread_id:'42',integration:'openai',label:'My account',api_key:'do-not-forward'});
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('routes generic requests through the same delegated Query identity',async()=>{
+    const metadata=getToolPluginMetadata(entry)!;
+    const schema=metadata.tools.find(t=>t.name==='query_api_request')!.parameters;
+    expect(schema.additionalProperties).toBe(false);
+    for(const key of ['values','password','access_token','owner_id','tenant','url','policy'])expect(schema.properties).not.toHaveProperty(key);
+    const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({operation_id:'opaque',status:'completed'})}));
+    vi.stubGlobal('fetch',fetchMock);
+    const tool=registered().find(c=>c[1]?.name==='query_api_request')![0]({sessionKey:'test-api'});
+    await tool.execute('call',{thread_id:'42',action:'request',connection_id:'account',idempotency_key:'unique',request:{method:'POST',path:'/v2/email/outbound-bulk-emails',body:{BulkEmailEntries:[]}}});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url,options]=fetchMock.mock.calls[0] as unknown as [string,RequestInit];
+    expect(url).toContain('/api/v4/openclaw-agent/authenticated-api/');
+    expect(options.headers).toMatchObject({'X-Query-Delegated-Token':'delegated-test'});
+    expect(JSON.parse(String(options.body))).toMatchObject({connection_id:'account',idempotency_key:'unique'});
+  });
   it('registers FTP operations with no secret fields and injects the runtime key internally',async()=>{
     const directory=mkdtempSync(join(tmpdir(),'query-ftp-tools-'));
     const old=process.env.OPENCLAW_STATE_DIR;process.env.OPENCLAW_STATE_DIR=directory;
