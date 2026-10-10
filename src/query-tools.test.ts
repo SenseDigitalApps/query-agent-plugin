@@ -22,6 +22,7 @@ import {
   queryDeliveryTargetsForThread,
   queryRecordsForThread,
   recordProposalRequestBody,
+  postQuery,
   uploadQueryAttachmentForThread,
   proposeQueryImportForThread,
   queryImportStatusForThread,
@@ -569,5 +570,35 @@ describe("persistent record asset references", () => {
     const fields = { reporte: { attachment_id: 123 }, imagen: { attachment_id: 456 } };
     expect(containsGeneratedArtifactReference({ fields })).toBe(false);
     expect(recordProposalRequestBody({ fields }).fields).toEqual(fields);
+  });
+});
+
+
+describe("record asset backend compatibility", () => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  beforeEach(() => rememberDelegatedAuth("thread-asset", { token: "test-only", expires_in: 900 }, "wss://query.test/ws/openclaw-agent/8/", "message-asset"));
+  afterEach(() => { vi.unstubAllGlobals(); forgetDelegatedAuth("thread-asset"); });
+  it("does not post references to an old backend", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ name: "reports" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await postQuery("thread-asset", "modules/reports/records/9/propose/", { fields: { report: { attachment_id: 42 } } }, "query_record_propose", log);
+    expect(result).toMatchObject({ error: "record_assets_backend_update_required" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1]).not.toHaveProperty("method", "POST");
+  });
+  it("checks support then submits the unmodified attachment reference", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => ({ record_asset_references: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ requires_confirmation: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const fields = { report: { attachment_id: 42 } };
+    expect(await postQuery("thread-asset", "modules/reports/records/9/propose/", { fields }, "query_record_propose", log)).toMatchObject({ requires_confirmation: true });
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ fields });
+  });
+  it("does not add an extra call for ordinary proposals", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ requires_confirmation: true }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    await postQuery("thread-asset", "modules/reports/records/9/propose/", { fields: { title: "Updated" } }, "query_record_propose", log);
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
 });

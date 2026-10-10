@@ -126,7 +126,7 @@ export function clearQueryMetadataCache(): void {
   metadataCache.clear();
 }
 
-async function postQuery(
+export async function postQuery(
   threadId: string,
   path: string,
   body: Record<string, unknown>,
@@ -135,6 +135,20 @@ async function postQuery(
 ): Promise<unknown> {
   const stored = await delegatedAuthForTool(threadId, toolName, log);
   if (!stored) return noCredential();
+  if (["query_record_propose", "query_records_propose_batch"].includes(toolName) &&
+      containsRecordAssetReference(body)) {
+    const modulePath = path.match(/^(modules\/[^/]+\/)/)?.[1];
+    if (!modulePath) return { ok: false, error: "record_assets_invalid_module" };
+    const discovery = await fetch(queryApiUrl(stored.socketUrl, modulePath), {
+      headers: { "X-Query-Delegated-Token": stored.auth.token },
+    });
+    const capabilities = await discovery.json().catch(() => undefined) as
+      { record_asset_references?: boolean; error?: string } | undefined;
+    if (!discovery.ok || capabilities?.record_asset_references !== true) {
+      return { ok: false, error: capabilities?.error ?? "record_assets_backend_update_required",
+        detail: "El backend aun no confirma soporte de assets permanentes; no se envio la propuesta." };
+    }
+  }
   const response = await fetch(queryApiUrl(stored.socketUrl, path), {
     method: "POST",
     headers: {
@@ -209,9 +223,17 @@ function noCredential() {
   };
 }
 
+export function containsRecordAssetReference(value: unknown): boolean {
+  if (!value || typeof value !== "object") return false;
+  if (Array.isArray(value)) return value.some(containsRecordAssetReference);
+  const record = value as Record<string, unknown>;
+  return Object.hasOwn(record, "attachment_id") || Object.values(record).some(containsRecordAssetReference);
+}
+
 export const RECORD_ASSET_GUIDANCE =
   " Si la persona pide archivar un archivo en un campo file/image/img de un registro real, " +
   "usa fields: {slug: {attachment_id: ID}} con un adjunto del mismo hilo. " +
+  "query_module_describe debe confirmar record_asset_references=true; si falta, el backend requiere actualizarse. " +
   "Para un archivo local, subelo primero con query_attachment_send y usa su attachment_id. " +
   "Query copia los bytes al almacenamiento permanente del registro al aprobar, sin caducidad automatica; " +
   "no guardes URLs /assets/ ni agent_chat en esos campos. La mera entrega de un archivo sigue siendo query_attachment_send. " +

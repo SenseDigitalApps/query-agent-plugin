@@ -155,7 +155,9 @@ Flujo:
 
 Si la persona pide guardar un archivo en un campo `file` o `image` (`img`) de
 un registro real, no es una mera entrega en el chat. Descubre modulo, campo y
-registro. Usa `query_record_propose` (o lote) con
+registro. `query_module_describe` debe devolver `record_asset_references=true`;
+si falta, el backend requiere actualizarse y no debes enviar la referencia.
+Usa `query_record_propose` (o lote) con
 `fields: {"slug_real": {"attachment_id": 123}}`. El ID debe ser de un adjunto
 del mismo hilo; nunca lo inventes. Para archivos locales, subelos primero con
 `query_attachment_send` y usa el ID de su respuesta. No incluyas rutas locales
