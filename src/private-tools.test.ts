@@ -44,7 +44,7 @@ describe('private delivery registration and transport',()=>{
     const metadata=getToolPluginMetadata(entry)!;
     const schema=metadata.tools.find(t=>t.name==='query_api_request')!.parameters;
     expect(schema.additionalProperties).toBe(false);
-    for(const key of ['values','password','access_token','owner_id','tenant','url','policy'])expect(schema.properties).not.toHaveProperty(key);
+    for(const key of ['values','password','access_token','owner_id','tenant','url'])expect(schema.properties).not.toHaveProperty(key);
     const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({operation_id:'opaque',status:'completed'})}));
     vi.stubGlobal('fetch',fetchMock);
     const tool=registered().find(c=>c[1]?.name==='query_api_request')![0]({sessionKey:'test-api'});
@@ -54,6 +54,17 @@ describe('private delivery registration and transport',()=>{
     expect(url).toContain('/api/v4/openclaw-agent/authenticated-api/');
     expect(options.headers).toMatchObject({'X-Query-Delegated-Token':'delegated-test'});
     expect(JSON.parse(String(options.body))).toMatchObject({connection_id:'account',idempotency_key:'unique'});
+  });
+  it('requests authorization through the private form without forwarding secret values',async()=>{
+    const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({delivery_id:'form',status:'pending'})}));
+    vi.stubGlobal('fetch',fetchMock);
+    const tool=registered().find(c=>c[1]?.name==='query_api_request')![0]({sessionKey:'test-api'});
+    const policy={origin:'https://api.example.test',auth:'custom_keys',secret_headers:{'X-Key':'key'},rules:[{method:'GET',path_prefix:'/v1'}]};
+    await tool.execute('connect',{thread_id:'42',action:'connect',label:'Example',policy});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({action:'connect',label:'Example',policy});
+    await tool.execute('invalid',{thread_id:'42',action:'connect',label:'Example',policy,values:{key:'never-forward'}});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
   });
   it('registers FTP operations with no secret fields and injects the runtime key internally',async()=>{
     const directory=mkdtempSync(join(tmpdir(),'query-ftp-tools-'));

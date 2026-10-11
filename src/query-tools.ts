@@ -811,16 +811,21 @@ export default defineToolPlugin({
     })),
     tool({
       name: "query_api_request", label: "Query: API autenticada",
-      description: "Cliente HTTP genérico de Query. connections lista conexiones autorizadas; request usa connection_id, idempotency_key y request (method/path/query/headers/body/body_type). Query incorpora credenciales: nunca enviarlas ni elegir URLs completas. Las reglas de la conexión limitan métodos y rutas. status consulta operation_id. No repetir running/uncertain con otra clave. Solo turnos privados del dueño en v1; no tareas programadas. Convive con herramientas específicas, no evade sus permisos. Disponible solo si Core habilitó authenticated-api.",
+      description: "Cliente HTTP genérico de Query. connect prepara el formulario privado existente: policy no secreta y label para nueva conexión, o connection_id para reutilizar secretos guardados. Nunca pasar valores secretos; el dueño los introduce directamente en Query. connections lista conexiones autorizadas; request usa connection_id, idempotency_key y request (method/path/query/headers/body/body_type). Query incorpora credenciales: nunca enviarlas ni elegir URLs completas. Las reglas de la conexión limitan métodos y rutas. status consulta operation_id. No repetir running/uncertain con otra clave. Solo turnos privados del dueño en v1; no tareas programadas. Convive con herramientas específicas, no evade sus permisos. Disponible solo si Core habilitó authenticated-api.",
       parameters: Type.Object({thread_id: THREAD_PARAM,
-        action: Type.Union([Type.Literal("connections"),Type.Literal("request"),Type.Literal("status")]),
+        action: Type.Union([Type.Literal("connections"),Type.Literal("connect"),Type.Literal("request"),Type.Literal("status")]),
+        label: Type.Optional(Type.String({maxLength:100})), policy: Type.Optional(Type.Record(Type.String(),Type.Unknown())),
         connection_id: Type.Optional(Type.String()), operation_id: Type.Optional(Type.String()),
         idempotency_key: Type.Optional(Type.String({maxLength:100})),
         request: Type.Optional(Type.Object({method:Type.Union([Type.Literal("GET"),Type.Literal("POST"),Type.Literal("PUT"),Type.Literal("PATCH"),Type.Literal("DELETE"),Type.Literal("HEAD")]),path:Type.String(),
           query:Type.Optional(Type.Record(Type.String(),Type.Unknown())),headers:Type.Optional(Type.Record(Type.String(),Type.String())),
           body:Type.Optional(Type.Unknown()),body_type:Type.Optional(Type.Union([Type.Literal("json"),Type.Literal("text"),Type.Literal("form")]))},{additionalProperties:false})),
       },{additionalProperties:false}),
-      execute: async ({thread_id,...params},_config,context) => postQuery(thread_id,"authenticated-api/",{...params,thread_id},"query_api_request",context.api.logger),
+      execute: async ({thread_id,...params},_config,context) => {
+        const allowed = new Set(["action","label","policy","connection_id","operation_id","idempotency_key","request"]);
+        if (Object.keys(params).some(key => !allowed.has(key))) return {ok:false,error:"private_form_required"};
+        return postQuery(thread_id,"authenticated-api/",{...params,thread_id},"query_api_request",context.api.logger);
+      },
     }),
     tool({
       name: "query_private_accounts", label: "Query: cuentas privadas",

@@ -861,3 +861,12 @@ same idempotency key; running/uncertain results require reconciliation, not a ne
 write. v1 supports private owner turns only (no cron/group), JSON/text/form bodies,
 and does not acquire or refresh OAuth2 tokens or accept file uploads. If disabled,
 report that state; do not use direct HTTP or extract credentials as a workaround.
+
+Use `query_api_request action=connect` to publish the existing private credential
+form: pass a non-secret policy plus either label (new) or connection_id (reuse).
+The owner enters credentials privately and approves origin/method/path scope.
+Never put values in policy or request. Existing field names can be mapped through
+field_map; custom_keys supports multiple secret header/query fields. Saving does
+not execute a provider call. After consent, discover the authorized connection
+and use request/status. OAuth acquisition and browser login are outside this
+milestone; do not request them for a key-based connection.
