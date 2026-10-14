@@ -66,6 +66,22 @@ describe('private delivery registration and transport',()=>{
     await tool.execute('invalid',{thread_id:'42',action:'connect',label:'Example',policy,values:{key:'never-forward'}});
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('shares HTTP through delegated context without accepting actor, agent or secrets',async()=>{
+    const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({grant_id:'grant-test'})}));
+    vi.stubGlobal('fetch',fetchMock);
+    const tool=registered().find(c=>c[1]?.name==='query_api_request')![0]({sessionKey:'test-sharing'});
+    const grant={user_id:7,capabilities:['discover','consult','execute'],contexts:['private'],rules:[{method:'GET',path_prefix:'/v2/email/account'}]};
+    await tool.execute('grant',{thread_id:'42',action:'grant',connection_id:'account',grant});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({action:'grant',grant});
+    expect(fetchMock.mock.calls[0][1].headers).toMatchObject({'X-Query-Delegated-Token':'delegated-test'});
+    for (const field of ['owner_id','actor_id','agent_id','tenant','values']) {
+      await tool.execute('injection',{thread_id:'42',action:'grant',connection_id:'account',grant,[field]:'forged'});
+    }
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    await tool.execute('revoke',{thread_id:'42',action:'revoke_grant',connection_id:'account',grant_id:'grant-test'});
+    expect(JSON.parse(String(fetchMock.mock.calls[1][1].body))).toMatchObject({action:'revoke_grant',grant_id:'grant-test'});
+  });
   it('registers FTP operations with no secret fields and injects the runtime key internally',async()=>{
     const directory=mkdtempSync(join(tmpdir(),'query-ftp-tools-'));
     const old=process.env.OPENCLAW_STATE_DIR;process.env.OPENCLAW_STATE_DIR=directory;

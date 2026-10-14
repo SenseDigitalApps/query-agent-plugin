@@ -811,9 +811,13 @@ export default defineToolPlugin({
     })),
     tool({
       name: "query_api_request", label: "Query: API autenticada",
-      description: "Cliente HTTP genérico de Query. connect prepara el formulario privado existente: policy no secreta y label para nueva conexión, o connection_id para reutilizar secretos guardados. Nunca pasar valores secretos; el dueño los introduce directamente en Query. connections lista conexiones autorizadas; request usa connection_id, idempotency_key y request (method/path/query/headers/body/body_type). Query incorpora credenciales: nunca enviarlas ni elegir URLs completas. Las reglas de la conexión limitan métodos y rutas. status consulta operation_id. No repetir running/uncertain con otra clave. Solo turnos privados del dueño en v1; no tareas programadas. Convive con herramientas específicas, no evade sus permisos. Disponible solo si Core habilitó authenticated-api.",
+      description: "Cliente HTTP genérico de Query. connect prepara el formulario privado existente: policy no secreta y label para nueva conexión, o connection_id para reutilizar secretos guardados. Nunca pasar valores secretos; el dueño los introduce directamente en Query. connections lista conexiones autorizadas; request usa connection_id, idempotency_key y request (method/path/query/headers/body/body_type). Query incorpora credenciales: nunca enviarlas ni elegir URLs completas. Las reglas de la conexión limitan métodos y rutas. status consulta operation_id. No repetir running/uncertain con otra clave. Descubre HTTP antes de afirmar que SES no está configurado; SES aws_sigv4 no es SMTP/WorkMail. Privados propios/compartidos y grupos explícitos, sin cron. grants lista, grant_candidates resuelve usuarios/roles/contextos reales, grant concede y revoke_grant revoca, solo dueño en privado. grant contiene user_id o role_id del catálogo, capabilities discover/consult/execute, contexts private o group:ID autorizado y rules method/path_prefix. El agente y actor se resuelven en Core, nunca se elige el dueño como ejecutor. Compartir no requiere nuevas claves ni permite ver resultados de otros actores. Convive con herramientas específicas, no evade sus permisos. Disponible solo si Core habilitó authenticated-api.",
       parameters: Type.Object({thread_id: THREAD_PARAM,
-        action: Type.Union([Type.Literal("connections"),Type.Literal("connect"),Type.Literal("request"),Type.Literal("status")]),
+        action: Type.Union([Type.Literal("connections"),Type.Literal("connect"),Type.Literal("request"),Type.Literal("status"),Type.Literal("grants"),Type.Literal("grant_candidates"),Type.Literal("grant"),Type.Literal("revoke_grant")]),
+        grant_id: Type.Optional(Type.String()), query: Type.Optional(Type.String({maxLength:100})),
+        grant: Type.Optional(Type.Object({user_id:Type.Optional(Type.Integer({minimum:1})),role_id:Type.Optional(Type.Integer({minimum:1})),
+          capabilities:Type.Array(Type.Union([Type.Literal("discover"),Type.Literal("consult"),Type.Literal("execute")])),
+          contexts:Type.Array(Type.String()),rules:Type.Array(Type.Object({method:Type.String(),path_prefix:Type.String()},{additionalProperties:false}))},{additionalProperties:false})),
         label: Type.Optional(Type.String({maxLength:100})), policy: Type.Optional(Type.Record(Type.String(),Type.Unknown())),
         connection_id: Type.Optional(Type.String()), operation_id: Type.Optional(Type.String()),
         idempotency_key: Type.Optional(Type.String({maxLength:100})),
@@ -822,7 +826,7 @@ export default defineToolPlugin({
           body:Type.Optional(Type.Unknown()),body_type:Type.Optional(Type.Union([Type.Literal("json"),Type.Literal("text"),Type.Literal("form")]))},{additionalProperties:false})),
       },{additionalProperties:false}),
       execute: async ({thread_id,...params},_config,context) => {
-        const allowed = new Set(["action","label","policy","connection_id","operation_id","idempotency_key","request"]);
+        const allowed = new Set(["action","label","policy","connection_id","operation_id","idempotency_key","request","grant_id","grant","query"]);
         if (Object.keys(params).some(key => !allowed.has(key))) return {ok:false,error:"private_form_required"};
         return postQuery(thread_id,"authenticated-api/",{...params,thread_id},"query_api_request",context.api.logger);
       },
