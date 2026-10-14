@@ -241,7 +241,7 @@ describe("registro de la tarea", () => {
     rememberQuerySession(SESSION, { threadId: "24", accountId: "sales" });
     rememberExternalContext({ sessionKey: SESSION, senderId: "1", threadId: "24",
       queryAccountId: "sales", socketUrl: SOCKET, agentToken: "agent", clientMsgId: "support-message",
-      auth: { token: "signed-support", expires_in: 900, identity: { id: 1 }, external_account_identity: { id: 2 } } });
+      auth: { token: "signed-support", expires_in: 900, identity: { id: 1, is_tenant_admin: true }, external_account_identity: { id: 2 } } });
     vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ targets: [{ thread_id: "86" }] }) }));
     const tool = tools[0]({ messageChannel: "query", sessionKey: SESSION, requesterSenderId: "1",
       agentAccountId: "sales", agentId: "query" });
@@ -307,7 +307,7 @@ describe("registro de la tarea", () => {
       rememberQuerySession(SESSION, { threadId: "24", accountId: "sales" });
       rememberExternalContext({ sessionKey: SESSION, senderId: "1", threadId: "24",
         queryAccountId: "sales", socketUrl: SOCKET, agentToken: "agent", clientMsgId: "staged-message",
-        auth: { token: "signed-support", expires_in: 900, identity: { id: 1 }, external_account_identity: { id: 2 } } });
+        auth: { token: "signed-support", expires_in: 900, identity: { id: 1, is_tenant_admin: true }, external_account_identity: { id: 2 } } });
       vi.stubGlobal("fetch", vi.fn().mockResolvedValue({ ok: true, json: async () => ({ targets: [{ thread_id: "24" }] }) }));
       confirmQueryScheduleSync.mockImplementation(async (_account, event) => {
         expect(jobs[0].enabled).toBe(false);
