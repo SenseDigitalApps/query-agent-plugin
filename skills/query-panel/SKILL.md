@@ -858,7 +858,7 @@ to dedicated tools, not a permission bypass and not contingent on another tool
 failing. Use only discovered connection IDs and relative documented paths. Never
 supply provider credentials, owner/tenant identities or full URLs. Preserve the
 same idempotency key; running/uncertain results require reconciliation, not a new
-write. v1 supports private owner turns only (no cron/group), JSON/text/form bodies,
+write. Supports private owner/authorized-user turns and explicitly granted groups (no cron), JSON/text/form bodies,
 and does not acquire or refresh OAuth2 tokens or accept file uploads. If disabled,
 report that state; do not use direct HTTP or extract credentials as a workaround.
 
@@ -870,3 +870,28 @@ field_map; custom_keys supports multiple secret header/query fields. Saving does
 not execute a provider call. After consent, discover the authorized connection
 and use request/status. OAuth acquisition and browser login are outside this
 milestone; do not request them for a key-based connection.
+
+
+### Compartir conexiones HTTP desde el chat
+
+Antes de afirmar que SES no está configurado, descubre `query_api_request action=connections`.
+SES con AWS SigV4 es HTTP, no SMTP ni WorkMail. No inventes ni deduzcas permisos de memoria.
+En el privado del dueño, usa `grant_candidates` con connection_id y query para resolver IDs
+reales de usuarios/roles y grupos del agente. Si el nombre es ambiguo, pide elegir;
+no concedas por coincidencia de nombres. `grants` permite revisar autorizaciones existentes.
+Una solicitud explícita en chat autoriza `grant` sin abrir la interfaz ni pedir claves otra vez.
+El grant lleva user_id O role_id, capabilities (discover, consult, execute), contexts
+(["private"] y/o "group:ID" del catálogo) y rules (method/path_prefix) dentro de la
+política descubierta; `scopes.execute` contiene el alcance efectivo para ejecutar (no confundir con discover/consult). Core toma agente, actor y tenant del contexto autenticado.
+No pases owner_id, actor_id, tenant ni agent_id. La gestión es exclusiva del dueño
+(no se delega manage_grants); compartir no cambia dueño, secretos ni política principal.
+`revoke_grant` lleva connection_id y grant_id; no revoca otras conexiones.
+El grupo explícito autoriza publicar allí la respuesta del proveedor; su membresía
+por sí sola no autoriza a ejecutar. No incluyas grupos que el dueño no haya pedido.
+Felipe debe usar su propio chat y su propia identidad. status sólo revela operaciones
+propias en el contexto original y con autorización vigente. No revela historial ajeno.
+Explica connection_not_visible, grant_absent, context_not_authorized,
+operation_outside_grant_scope y rechazo HTTP de AWS como fallos distintos.
+No reintentes running/uncertain ni generes otra clave. No cron, HTTP directo,
+credenciales en OpenClaw ni correos de prueba. Si Core aún no admite estas acciones,
+informa que falta desplegar: un plugin local no prueba capacidad activa.
