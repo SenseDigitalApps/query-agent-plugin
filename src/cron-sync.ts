@@ -122,7 +122,7 @@ type PendingCronMutation = {
   creatorUserId?: number;
   runAsUserId?: number;
   /**
-   * Quien pide la mutacion administra el tenant, segun el contexto firmado
+   * Administrador sin representacion de soporte, segun el contexto firmado
    * que manda Query junto al token.
    *
    * Sin esto se exigia que el editor fuera tambien el ejecutor de la tarea.
@@ -130,6 +130,7 @@ type PendingCronMutation = {
    * que el administrador no podia tocarla: fallaba con ``identity_mismatch``
    * y nadie quedaba en condiciones de arreglarla.
    *
+   * En soporte este flag es false: el ejecutor debe coincidir con el sujeto.
    * No concede nada. Query es quien decide con que identidad corre un cron y
    * solo emite credencial para esa; aqui unicamente se deja de imponer la del
    * editor. Query ni siquiera lee el ``run_as_user_id`` que enviamos.
@@ -926,7 +927,7 @@ export function registerQueryCronSync(
         if (!ack.authorized) throw Object.assign(new Error("query_schedule_authorization_rejected"), {
           authorizationReason: ack.error && /^[a-z_]{1,80}$/.test(ack.error) ? ack.error : undefined,
         });
-        // Un administrador conserva a proposito el ejecutor original.
+        // Only ordinary admin edits preserve the original executor; support must match its subject.
         if (!mutation?.actorIsTenantAdmin && ack.run_as_user_id !== mutation?.runAsUserId) {
           throw new Error("query_schedule_authorization_identity_mismatch");
         }
@@ -1097,7 +1098,9 @@ export function registerQueryCronSync(
               requestedTarget: targetFromDelivery(delivery), delegatedToken: actor.auth.token,
               originClientMsgId: actor.clientMsgId, creatorUserId: actor.auth.identity?.id,
               runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
-              actorIsTenantAdmin: actor.auth.identity?.is_tenant_admin === true,
+              actorIsTenantAdmin: actor.auth.identity?.is_tenant_admin === true
+                && (!actor.auth.external_account_identity
+                  || actor.auth.external_account_identity.id === actor.auth.identity.id),
               capturedAt: Date.now(),
             }, true);
             const publicResult = { ok: true, action: "removed", job_id: jobId, removed: true };
@@ -1129,7 +1132,9 @@ export function registerQueryCronSync(
               originClientMsgId: actor.clientMsgId,
               creatorUserId: actor.auth.identity?.id,
               runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
-              actorIsTenantAdmin: actor.auth.identity?.is_tenant_admin === true,
+              actorIsTenantAdmin: actor.auth.identity?.is_tenant_admin === true
+                && (!actor.auth.external_account_identity
+                  || actor.auth.external_account_identity.id === actor.auth.identity.id),
               capturedAt: Date.now(),
             };
             await syncChanged({ action: "updated", jobId, job: current }, mutation, true);
@@ -1205,7 +1210,9 @@ export function registerQueryCronSync(
                 originClientMsgId: actor.clientMsgId,
                 creatorUserId: actor.auth.identity?.id,
                 runAsUserId: (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
-                actorIsTenantAdmin: actor.auth.identity?.is_tenant_admin === true,
+                actorIsTenantAdmin: actor.auth.identity?.is_tenant_admin === true
+                && (!actor.auth.external_account_identity
+                  || actor.auth.external_account_identity.id === actor.auth.identity.id),
                 capturedAt: Date.now(),
               };
               await syncChanged({ action: "updated", jobId: item.jobId, job: resultingJob }, mutation, true);
@@ -1288,7 +1295,9 @@ export function registerQueryCronSync(
               (actor.auth.external_account_identity ?? actor.auth.identity)?.id,
             // Crear sigue fijando al autor; editar una tarea ajena, no.
             actorIsTenantAdmin:
-              action !== "added" && actor.auth.identity?.is_tenant_admin === true,
+              action !== "added" && actor.auth.identity?.is_tenant_admin === true
+                && (!actor.auth.external_account_identity
+                  || actor.auth.external_account_identity.id === actor.auth.identity.id),
             capturedAt: Date.now(),
           };
           await syncChanged({ action, jobId, job: resultingJob }, mutation, true);
