@@ -70,6 +70,6 @@ export function resolveVoiceTarget(cfg: QueryConfig, scope: VoiceScope, resolveR
   const route = resolveRoute({cfg, channel: "query", accountId: account.accountId,
     peer: {kind: "direct", id: String(scope.thread_id)}});
   if (!route?.sessionKey || !route.agentId) return undefined;
-  return {sessionKey: route.sessionKey, agentId: route.agentId, accountId: account.accountId, socketUrl: account.url,
+  return {sessionKey: `${route.sessionKey}:voice:${scope.call_id}`, agentId: route.agentId, accountId: account.accountId, socketUrl: account.url,
     agentToken: account.token, coreApiBase: coreApiBaseFromSocket(account.url)};
 }
