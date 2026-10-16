@@ -758,6 +758,24 @@ export default defineToolPlugin({
   description:
     "Consulta modulos, campos y registros de Query en nombre de la persona con la que conversas.",
   tools: (tool) => [
+    tool({
+      name: "query_question_ask",
+      label: "Query: preguntar con opciones o texto libre",
+      description: "Muestra una pregunta interactiva en el chat Query cuando necesitas una aclaración real. mode=single permite elegir una opción, multiple varias y text una respuesta abierta; siempre se puede escribir texto libre. Usa 2 a 12 opciones con id estable y label claro, sin preselección. La tarjeta queda guardada y solo la persona consultada puede responderla desde Query. Reutiliza idempotency_key si reintentas la misma pregunta. No bloquea: awaiting_answer significa publicada, NO respondida; confirma brevemente que dejaste la tarjeta sin repetir las opciones y espera el siguiente mensaje humano. No sirve para pedir contraseñas, autorizar pagos ni reemplazar las tarjetas de aprobación de registros. No infieras respuestas por silencio.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        idempotency_key: Type.String({minLength: 1, maxLength: 100}),
+        prompt: Type.String({minLength: 1, maxLength: 4000}),
+        mode: Type.Union([Type.Literal("single"), Type.Literal("multiple"), Type.Literal("text")]),
+        options: Type.Optional(Type.Array(Type.Object({
+          id: Type.String({pattern: "^[a-zA-Z0-9_-]+$", minLength: 1, maxLength: 64}),
+          label: Type.String({minLength: 1, maxLength: 500}),
+        }, {additionalProperties: false}), {maxItems: 12})),
+      }, {additionalProperties: false}),
+      execute: async ({thread_id, ...params}, _config, context) =>
+        postQuery(thread_id, `threads/${encodeURIComponent(thread_id)}/questions/`, params,
+          "query_question_ask", context.api.logger),
+    }),
     ...(["availability", "status", "reconcile", "documents"] as const).map(action => tool({
       name: `query_billing_${action}`,
       label: `Query Matias: ${action}`,

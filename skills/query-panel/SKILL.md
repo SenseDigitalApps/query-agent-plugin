@@ -895,3 +895,16 @@ operation_outside_grant_scope y rechazo HTTP de AWS como fallos distintos.
 No reintentes running/uncertain ni generes otra clave. No cron, HTTP directo,
 credenciales en OpenClaw ni correos de prueba. Si Core aún no admite estas acciones,
 informa que falta desplegar: un plugin local no prueba capacidad activa.
+
+
+## Preguntas interactivas en el chat Query
+
+Cuando falte una decisión o dato real del usuario, usa `query_question_ask` con
+`thread_id`, `idempotency_key` estable, `prompt` y `mode` (`single`, `multiple` o
+`text`). Para selección envía de 2 a 12 opciones `{id, label}` sin preselección.
+El usuario también puede escribir una respuesta libre. La herramienta publica
+una tarjeta persistida, no espera ni inventa la respuesta. Ante `awaiting_answer`
+confirma brevemente que dejaste la tarjeta y retoma cuando llegue la respuesta humana en el mismo chat; no
+repitas la pregunta como una lista de viñetas. Reutiliza la clave tras un timeout.
+No uses estas preguntas para secretos ni en lugar de las aprobaciones de acciones.
+No conviertas automáticamente listas informativas ni mensajes antiguos en preguntas.
