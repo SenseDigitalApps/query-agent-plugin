@@ -65,6 +65,7 @@ type ActiveCall = {
   presence: VoicePresenceGuard;
   speaking: Set<string>;
   heard: Set<string>;
+  transcriptTimes: Map<string, string>;
   ended: boolean;
 };
 
@@ -146,7 +147,7 @@ export class GatewayTalkDriver implements QueryTalkDriver {
     const graceMs = Number(payload.presence_grace_seconds ?? 30) * 1000;
     const call: ActiveCall = {
       scope, target, voiceSessionId: voiceSessionId!, clientSecret, offerExpiresAt: expires,
-      leaseUntil: this.now() + this.leaseMs, emit, speaking: new Set(), heard: new Set(), ended: false,
+      leaseUntil: this.now() + this.leaseMs, emit, speaking: new Set(), heard: new Set(), transcriptTimes: new Map(), ended: false,
       presence: new VoicePresenceGuard({
         inactivityMs, graceMs,
         onPrompt: (challengeId, deadline) => emit({event_id: shortId(`presence:${challengeId}`),
@@ -226,8 +227,10 @@ export class GatewayTalkDriver implements QueryTalkDriver {
         const role = data.role === "user" || data.role === "assistant" ? data.role : undefined;
         if (!text || !role || talk.final === false) return;
         call.presence.activity();
+        const item = str(talk.itemId) ?? id;
+        if (!call.transcriptTimes.has(item)) call.transcriptTimes.set(item, new Date(this.now()).toISOString());
         // One writer: the item id is stable across Gateway replays.
-        emit({type: "transcript.final", item_id: shortId(str(talk.itemId) ?? id), role, text}, `final:${str(talk.itemId) ?? id}`);
+        emit({type: "transcript.final", item_id: shortId(str(talk.itemId) ?? id), role, text, occurred_at: call.transcriptTimes.get(item)}, `final:${str(talk.itemId) ?? id}`);
         return;
       }
       case "tool.progress": {

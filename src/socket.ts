@@ -509,6 +509,16 @@ export class QuerySocketMonitor {
       return;
     }
     if (event.type === "schedule.admin.polled" || event.type === "schedule.admin.error") return;
+    if (event.type === "usage.ack") {
+      // Confirmado tambien cuando ya estaba: Query descarta el duplicado.
+      if (!event.data.error) {
+        const { acknowledgeUsageReport } = await import("./usage-report.js");
+        acknowledgeUsageReport(event.data.report_id);
+      } else {
+        this.options.log?.warn?.(`Query rechazo el reporte de consumo ${event.data.report_id}: ${event.data.error}`);
+      }
+      return;
+    }
     if (event.type === "schedule.synced") {
       const waiting = this.pendingScheduleSync.get(event.client_msg_id);
       if (waiting && waiting.externalId === event.data.external_id) {
@@ -1401,6 +1411,25 @@ export async function requestQueryScheduleAuth(
   const auth = await monitor.requestScheduleAuth(String(threadId), externalId);
   if (!auth?.token) return undefined;
   return { auth, socketUrl: monitor.account.url };
+}
+
+/**
+ * Reporte de consumo por la cuenta indicada o, si no se sabe, la unica activa.
+ * Devuelve false sin lanzar cuando no hay socket abierto: el reporte espera.
+ */
+export function trySendQueryUsage(accountId: string | undefined, event: QueryOutboundEvent): boolean {
+  let monitor = accountId ? activeMonitors.get(accountId) : undefined;
+  if (accountId && !monitor) return false;
+  if (!monitor) {
+    if (activeMonitors.size !== 1) return false;
+    monitor = [...activeMonitors.values()][0];
+  }
+  try {
+    monitor.sendOutboundEvent(event);
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 export function sendQueryOutboundEvent(accountId: string, event: QueryOutboundEvent): void {

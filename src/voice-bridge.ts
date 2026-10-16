@@ -32,6 +32,7 @@ const eventFields: Record<string, string[]> = {
 function safeEvent(input: Payload & {event_id: string; type: string}): Payload & {event_id: string; type: string} {
   if (!Object.hasOwn(eventFields, input.type) || typeof input.event_id !== "string" || !input.event_id || input.event_id.length > 128) throw Error("invalid_voice_event");
   const result: Payload & {event_id: string; type: string} = {event_id: input.event_id, type: input.type};
+  if (input.type === "transcript.final" && typeof input.occurred_at === "string") result.occurred_at = input.occurred_at;
   for (const key of eventFields[input.type]) {
     if (key === "usage") {
       const usage = input.usage as Payload;

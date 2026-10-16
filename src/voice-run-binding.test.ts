@@ -12,6 +12,18 @@ const delegation = (scope: VoiceScope, replayed = false, id = scope.user_id): Vo
     identity: {id} as never, external_account_identity: {id} as never},
 });
 
+it("injects channel context and refreshes proposal status only through Core", async () => {
+  const registry = new VoiceRunRegistry();
+  let status = "pending";
+  const claim = vi.fn(async () => ({...delegation(scopeA, true),
+    conversation_context: {channel: "Ventas", approvals: [{status}]}}));
+  registry.registerCall(call(scopeA, "s-a", claim));
+  const ctx = {runId: run(9), sessionKey: "s-a"};
+  expect(await registry.speakerContext(ctx, "consulta")).toContain('"channel":"Ventas"');
+  status = "executed";
+  expect(await registry.speakerContext(ctx, "consulta")).toContain('"status":"executed"');
+});
+
 function call(scope: VoiceScope, sessionKey: string, claim = vi.fn(async () => delegation(scope))): ActiveVoiceCall {
   return {scope, sessionKey, accountId: `acct-${scope.tenant}`, socketUrl: "wss://synthetic.invalid/ws", agentToken: "bot", claim};
 }

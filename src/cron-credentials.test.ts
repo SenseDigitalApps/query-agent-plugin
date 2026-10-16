@@ -995,6 +995,31 @@ describe("arranque del turno de un cron", () => {
     },
   );
 
+  it("frena el cron sin tokens de IA del mes sin tocar su autorizacion", async () => {
+    const { api, hooks } = fakeApi();
+    registerQueryCronSync(api as never, vi.fn());
+    await hooks.get("cron_changed")?.(cronAdded("limit-cron"));
+    requestQueryScheduleAuth.mockResolvedValue({
+      socketUrl: SOCKET,
+      auth: {
+        source: "schedule",
+        token: "scheduled-beneficiary",
+        expires_in: 900,
+        external_id: "limit-cron",
+        identity: { id: 2 },
+        ai_usage: { blocked: "ai_limit_user", message: "Alcanzaste tu límite mensual de tokens de IA." },
+      },
+    });
+    const sessionKey = "agent:query:cron:limit-cron:run:run-limit";
+
+    const reply = await hooks.get("before_agent_reply")!({ cleanedBody: "Trabajo" }, { sessionKey, trigger: "cron" });
+    const decision = await hooks.get("before_agent_run")!({}, { sessionKey });
+
+    expect(reply).toMatchObject({ handled: true, reason: "query_ai_limit_reached", reply: { isError: true } });
+    expect(decision).toMatchObject({ outcome: "block", reason: "query_ai_limit_reached" });
+    expect(api.logger.warn).toHaveBeenCalledWith(expect.stringContaining("No se inició el modelo"));
+  });
+
   it("adopta en el gate un cron Query creado despues del arranque", async () => {
     const { api, hooks } = fakeApi();
     let jobs: Array<Record<string, unknown>> = [];

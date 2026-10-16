@@ -19,7 +19,7 @@ const route = vi.fn((params: {accountId: string; peer: {id: string}}) =>
 
 it("finds the one account whose socket host and bot id match the call", () => {
   expect(resolveVoiceTarget(cfg(), scope(3), route, "apius.itsquery.com")).toMatchObject({
-    accountId: "query", agentId: "query", sessionKey: "agent:query:query:direct:13",
+    accountId: "query", agentId: "query", sessionKey: `agent:query:query:direct:13:voice:${scope(3).call_id}`,
     coreApiBase: "https://apius.itsquery.com/api/v4/",
   });
   // Same bot id in two tenants: the host decides, never the id alone.
@@ -56,4 +56,10 @@ it("keeps realtime voice scoped to the matched account and separate from TTS", (
   config.channels!.query!.accounts!.query.ttsVoice = "es-MX-DaliaNeural";
   expect(resolveVoiceTarget(config, scope(3), route, "apius.itsquery.com")?.realtimeVoice).toBe("juniper");
   expect(resolveVoiceTarget(config, scope(5), route, "apius.itsquery.com")?.realtimeVoice).toBeUndefined();
+});
+
+it("isolates callers sharing the same channel", () => {
+ const first = resolveVoiceTarget(cfg(), scope(3), route, "apius.itsquery.com");
+ const second = resolveVoiceTarget(cfg(), {...scope(3), user_id: 14, call_id: "another-call"}, route, "apius.itsquery.com");
+ expect(first?.sessionKey).not.toBe(second?.sessionKey);
 });
