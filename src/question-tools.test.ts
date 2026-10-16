@@ -1,0 +1,25 @@
+import {afterEach, expect, it, vi} from 'vitest';
+vi.mock('./cron-sync.js', () => ({primeScheduleCredential: vi.fn()}));
+vi.mock('./scheduled-context.js', () => ({scheduledCredential: vi.fn(), scheduledToolContext: {getStore: () => undefined}}));
+vi.mock('./delegated-store.js', () => ({getDelegatedAuth: () => ({auth: {token: 'delegated-test'}, socketUrl: 'wss://query.test/ws/'}), peekDelegatedAuth: () => undefined, delegatedAuthStoreDiagnostics: () => ({}), rememberDelegatedAuth: vi.fn(), threadsWithDelegatedAuth: () => []}));
+import entry from './query-tools.js';
+import {getToolPluginMetadata} from 'openclaw/plugin-sdk/tool-plugin';
+afterEach(() => vi.unstubAllGlobals());
+it('registers structured questions and forwards them only to the delegated thread', async () => {
+  const schema = getToolPluginMetadata(entry)!.tools.find(t => t.name === 'query_question_ask')!.parameters;
+  expect(schema.required).toEqual(expect.arrayContaining(['prompt', 'mode', 'idempotency_key']));
+  expect(schema.additionalProperties).toBe(false);
+  const fetch = vi.fn(async () => ({ok: true, json: async () => ({ok: true, status: 'awaiting_answer', question_message_id: 9})}));
+  vi.stubGlobal('fetch', fetch);
+  const registerTool = vi.fn();
+  entry.register({registerTool, pluginConfig: {}, logger: {info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn()}} as any);
+  const registration = registerTool.mock.calls.find(c => c[1]?.name === 'query_question_ask')!;
+  const tool = registration[0]({sessionKey: 'question-test'});
+  const params = {prompt: '¿Cuál?', mode: 'single', idempotency_key: 'stable', options: [{id: 'a', label: 'A'}, {id: 'b', label: 'B'}]};
+  const result = await tool.execute('call', {thread_id: '42', ...params});
+  const [url, options] = fetch.mock.calls[0] as unknown as [string, RequestInit];
+  expect(url).toContain('/api/v4/openclaw-agent/threads/42/questions/');
+  expect(options.headers).toMatchObject({'X-Query-Delegated-Token': 'delegated-test'});
+  expect(JSON.parse(String(options.body))).toEqual(params);
+  expect(JSON.stringify(result)).toContain('awaiting_answer');
+});
