@@ -624,6 +624,10 @@ function sameTarget(left: SyncedCron | undefined, right: SyncedCron | undefined)
  * arrancar el turno, para que todo lo de abajo funcione igual que en una
  * conversacion normal y ninguna tool tenga que saber que la origino un cron.
  */
+const AI_LIMIT_REASON = "query_ai_limit_reached";
+const AI_LIMIT_TEXT = "query_ai_limit_reached: la persona que autorizó la tarea o el panel ya usaron sus tokens " +
+  "de IA del mes. No se inició el modelo ni se ejecutó el trabajo; vuelve a correr cuando amplíen el límite.";
+
 export async function primeScheduleCredential(
   api: OpenClawPluginApi,
   context: {
@@ -633,7 +637,7 @@ export async function primeScheduleCredential(
     channelId?: string;
     sessionKey?: string;
   },
-): Promise<"not_query" | "authorized" | "blocked"> {
+): Promise<"not_query" | "authorized" | "blocked" | "ai_limit"> {
   // OpenClaw normalmente entrega ``jobId``. En 2026.9.4 algunas rutas del
   // scheduler solo preservan el id dentro de la sessionKey nativa.
   const externalId = cronJobIdFromHookContext(context);
@@ -716,6 +720,12 @@ export async function primeScheduleCredential(
       api.logger.warn(`query cron ${externalId}: Query devolvió una credencial no programada.`);
       return "blocked";
     }
+    if (granted.auth.ai_usage?.blocked) {
+      // El registro del cron sigue valido; solo esta ejecucion no arranca.
+      api.logger.warn(`query cron ${externalId}: ${granted.auth.ai_usage.message || "Sin tokens de IA del mes."} ` +
+        "No se inició el modelo.");
+      return "ai_limit";
+    }
     rememberDelegatedAuth(authKey, granted.auth, granted.socketUrl);
     rememberQuerySession(context.sessionKey, {
       threadId: granted.auth.thread_id ?? threadId,
@@ -784,6 +794,9 @@ export function registerQueryCronSync(
     if (outcome === "not_query" || outcome === "authorized") return;
     const session = getQuerySession(context?.sessionKey);
     if (session?.authKey) forgetDelegatedAuth(session.authKey);
+    if (outcome === "ai_limit") {
+      return { handled: true, reason: AI_LIMIT_REASON, reply: { isError: true, text: AI_LIMIT_TEXT } };
+    }
     return {
       handled: true,
       reason: "query_schedule_authorization_missing",
@@ -807,6 +820,9 @@ export function registerQueryCronSync(
       return { outcome: "pass" };
     }
     if (session?.authKey) forgetDelegatedAuth(session.authKey);
+    if (outcome === "ai_limit") {
+      return { outcome: "block", reason: AI_LIMIT_REASON, category: AI_LIMIT_REASON, message: AI_LIMIT_TEXT };
+    }
     return {
       outcome: "block",
       reason: "query_schedule_authorization_missing",

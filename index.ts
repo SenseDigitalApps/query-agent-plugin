@@ -8,6 +8,7 @@ import { registerQueryGoogleGuard } from "./src/google-guard.js";
 import queryToolsEntry from "./src/query-tools.js";
 import { registerBrightDataXTool } from "./src/brightdata-x-tool.js";
 import { registerQueryVoice } from "./src/voice-register.js";
+import { registerQueryUsage } from "./src/usage-report.js";
 
 export default defineChannelPluginEntry({
   id: "query",
@@ -21,6 +22,7 @@ export default defineChannelPluginEntry({
       registerQueryGoogleGuard(api);
       registerQueryVoice(api);
       registerRadarExecContext(api);
+      registerQueryUsage(api);
     }
     queryToolsEntry.register(api);
     registerBrightDataXTool(api);

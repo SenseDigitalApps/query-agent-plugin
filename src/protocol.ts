@@ -50,6 +50,9 @@ export function parseQueryEvent(raw: string): QueryInboundEvent | null {
   if (value.type === "auth.granted" && isRecord(value.data)) {
     return value as QueryAuthGrantedEvent;
   }
+  if (value.type === "usage.ack" && isRecord(value.data) && typeof value.data.report_id === "string") {
+    return value as QueryInboundEvent;
+  }
   if (value.type === "agent.profile" && isRecord(value.data)) {
     return value as QueryAgentProfileEvent;
   }

@@ -57,6 +57,13 @@ export function pinExternalRun(runId?: string, session?: string, sender?: string
     try { write(`run:${runId}`, value); } catch { /* Keep legacy delivery available. */ }
   }
 }
+/** Hilo, cuenta y turno de Query de una ejecución, sin renovar credenciales. */
+export function queryRunTurn(runId?: string): { threadId: string; accountId: string; clientMsgId: string } | undefined {
+  if (!runId) return undefined;
+  const value = read(`run:${runId}`);
+  return value ? { threadId: value.threadId, accountId: value.queryAccountId, clientMsgId: value.clientMsgId } : undefined;
+}
+
 export async function externalContextForRun(runId?: string): Promise<ExternalContext | undefined> {
   if (!runId) return undefined;
   const value = read(`run:${runId}`);

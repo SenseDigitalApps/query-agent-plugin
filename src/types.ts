@@ -161,6 +161,11 @@ export type QueryDelegatedAuth = {
   external_account_identity?: QueryDelegatedIdentity;
   /** ``turn`` cuando la pidio una persona; ``schedule`` cuando la pidio un cron. */
   source?: "turn" | "schedule" | string;
+  /**
+   * Solo en credenciales de crones. ``blocked`` dice que la persona o el panel
+   * ya no tienen tokens de IA del mes: la tarea no debe arrancar el modelo.
+   */
+  ai_usage?: { blocked?: string | null; message?: string };
 };
 
 export type QueryTenant = {
@@ -282,6 +287,7 @@ export type QueryInboundEvent =
   | { type: "schedule.admin.received" | "schedule.admin.polled" | "schedule.admin.error";
       client_msg_id: string; data: Record<string, unknown> }
   | { type: "schedule.synced"; client_msg_id: string; data: QueryScheduleSyncAck }
+  | { type: "usage.ack"; data: { report_id: string; key?: string; recorded?: boolean; error?: string } }
   | QuerySessionReadyEvent
   | QueryAgentProfileEvent
   | QueryUserMessageEvent
@@ -323,7 +329,8 @@ export type QueryOutboundEvent = {
     | "schedule.probe.result"
     | "profile.seed"
     | "auth.refresh"
-    | "auth.request";
+    | "auth.request"
+    | "usage.report";
   role: "assistant" | "system";
   content: string;
   client_msg_id: string;
