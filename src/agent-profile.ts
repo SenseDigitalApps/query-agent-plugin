@@ -134,7 +134,7 @@ export function applyConnectionDiscoveryGuidance(existing: string): string {
   const start = existing.indexOf(begin), finish = existing.indexOf(end);
   const section = `${begin}\n${CONNECTION_DISCOVERY_GUIDANCE}\n${end}`;
   if (start >= 0 && finish > start) return existing.slice(0,start) + section + existing.slice(finish+end.length);
-  return existing.trimEnd() + (existing.trim() ? "\n\n" : "") + section + "\n";
+  return section + "\n\n" + existing;
 }
 
 export type ProfileFileResult = {
