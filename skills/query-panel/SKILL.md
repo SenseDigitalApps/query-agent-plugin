@@ -859,7 +859,7 @@ failing. Use only discovered connection IDs and relative documented paths. Never
 supply provider credentials, owner/tenant identities or full URLs. Preserve the
 same idempotency key; running/uncertain results require reconciliation, not a new
 write. Supports private owner/authorized-user turns and explicitly granted groups (no cron), JSON/text/form bodies,
-and does not acquire or refresh OAuth2 tokens or accept file uploads. If disabled,
+and does not accept file uploads. `auth=oauth2` supports automatic refresh of already-authorized OAuth2 credentials; browser consent acquisition is separate. If disabled,
 report that state; do not use direct HTTP or extract credentials as a workaround.
 
 Use `query_api_request action=connect` to publish the existing private credential
@@ -908,3 +908,35 @@ confirma brevemente que dejaste la tarjeta y retoma cuando llegue la respuesta h
 repitas la pregunta como una lista de viñetas. Reutiliza la clave tras un timeout.
 No uses estas preguntas para secretos ni en lugar de las aprobaciones de acciones.
 No conviertas automáticamente listas informativas ni mensajes antiguos en preguntas.
+
+
+### OAuth2 genérico para HTTP
+
+Usa `query_api_request connect` con policy no secreta: `auth: "oauth2"`,
+`oauth2: {token_url: "https://proveedor.example/token", client_auth: "client_secret_post"}`
+y `scope` opcional dentro de oauth2. Otros modos: `client_secret_basic` y `none`
+(cliente público). El dueño introduce client_id, client_secret y refresh_token en
+el formulario protegido; jamás en argumentos del agente. Reutiliza connection_id
+si ya existe una cuenta compatible y autorizada en ese contexto. No copies secretos
+de otros agentes, archivos del servidor ni Google Workspace.
+
+La renovación y la rotación se guardan cifradas automáticamente antes de ejecutar
+la solicitud. Esta modalidad NO abre el login OAuth inicial/PKCE: consume un
+refresh_token ya autorizado por el proveedor. No confundir ese requisito inicial
+con pegar tokens de acceso temporales cada hora.
+
+`secret_headers` permite claves adicionales (p.ej. developer-token de Ads);
+`fixed_headers` fija datos NO secretos (p.ej. login-customer-id verificado) que
+no se pueden cambiar en request. Restringe las rutas a la cuenta y operaciones
+solicitadas: POST de planificación no concede mutaciones de campañas.
+
+Ante `oauth2_reconnect_required`, el dueño usa connect con el mismo connection_id,
+policy y `reconnect: true`; el formulario privado sustituye credenciales y conserva
+la conexión. No repetir solicitudes mientras requiera reconexión.
+`oauth2_refresh_unavailable` es un fallo transitorio distinto. No reintentar una
+operación uncertain/running ni una escritura con otra clave. Un HTTP 401 no se
+reenvía automáticamente. Compartir continúa por grants del dueño y contexto real.
+
+Si Core rechaza `unsupported_auth`, falta desplegar ese soporte; no afirmar que
+OAuth2 está operativo por el catálogo local. No afirmar que Google Ads quedó
+conectado hasta comprobar conexión autorizada y consulta real.
