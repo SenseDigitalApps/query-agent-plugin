@@ -66,6 +66,16 @@ describe('private delivery registration and transport',()=>{
     await tool.execute('invalid',{thread_id:'42',action:'connect',label:'Example',policy,values:{key:'never-forward'}});
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('supports generic OAuth2 reconnect without accepting credentials',async()=>{
+    const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({delivery_id:'form',status:'pending'})}));
+    vi.stubGlobal('fetch',fetchMock);
+    const tool=registered().find(c=>c[1]?.name==='query_api_request')![0]({sessionKey:'test-api'});
+    const policy={origin:'https://api.example.test',auth:'oauth2',oauth2:{token_url:'https://identity.example.test/token'},rules:[{method:'GET',path_prefix:'/v1'}]};
+    await tool.execute('reconnect',{thread_id:'42',action:'connect',connection_id:'account',policy,reconnect:true});
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({action:'connect',connection_id:'account',policy,reconnect:true});
+    await tool.execute('invalid',{thread_id:'42',action:'connect',connection_id:'account',policy,reconnect:true,refresh_token:'never-forward'});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   it('shares HTTP through delegated context without accepting actor, agent or secrets',async()=>{
     const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({grant_id:'grant-test'})}));
     vi.stubGlobal('fetch',fetchMock);
