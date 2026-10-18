@@ -40,6 +40,19 @@ describe('private delivery registration and transport',()=>{
     await tool.execute('call2',{thread_id:'42',integration:'openai',label:'My account',api_key:'do-not-forward'});
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('shares one concrete account through the real delegated context, never secrets',async()=>{
+    const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({mode:'unified',grants:[]})}));
+    vi.stubGlobal('fetch',fetchMock);
+    const tool=registered().find(c=>c[1]?.name==='query_account_access')![0]({sessionKey:'test-sharing'});
+    await tool.execute('share',{thread_id:'42',action:'grant',family:'smtp',account_id:'existing-account',grant:{subject:'channel_members',subject_id:90,agent_id:3,contexts:['group:90']}});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url,options]=fetchMock.mock.calls[0] as unknown as [string,RequestInit];
+    expect(url).toContain('/api/v4/openclaw-agent/account-access/');
+    expect(JSON.parse(String(options.body))).toMatchObject({family:'smtp',account_id:'existing-account',grant:{contexts:['group:90']}});
+    expect(options.headers).toMatchObject({'X-Query-Delegated-Token':'delegated-test'});
+    await tool.execute('bad',{thread_id:'42',action:'grant',family:'smtp',account_id:'existing-account',password:'not-allowed'});
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+  });
   it('advertises shared live protocol discovery without promising mailbox access',()=>{
     const tool=getToolPluginMetadata(entry)!.tools.find(t=>t.name==='query_api_request')!;
     expect(tool.description).toContain('action=connections');

@@ -491,7 +491,7 @@ describe("guard de cuentas de Google en sesiones Query", () => {
     expect(decision).toBeUndefined();
   });
 
-  it("no vuelve a preguntar lo mismo dentro del mismo turno", async () => {
+  it("revalida también los bindings heredados en cada operación del mismo turno", async () => {
     querySession();
     storeAuth();
     fetchMock.mockResolvedValue(
@@ -504,7 +504,7 @@ describe("guard de cuentas de Google en sesiones Query", () => {
     );
     await callGoogle({ accountId: "jcvargas" });
     await callGoogle({ accountId: "jcvargas" }, "google_calendar_list");
-    expect(fetchMock).toHaveBeenCalledTimes(1);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
   });
 
   it("un subagente hereda el canal, y con el la restriccion", async () => {
