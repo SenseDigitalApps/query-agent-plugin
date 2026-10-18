@@ -94,7 +94,7 @@ describe("writeAgentProfileFiles", () => {
     ).resolves.toContain("Ayudar a ventas.");
   });
 
-  it("no crea archivos cuando el perfil llega vacio", async () => {
+  it("no crea personalidad vacia, pero si instala descubrimiento compartido", async () => {
     const workspaceDir = await tempWorkspace();
 
     const results = await writeAgentProfileFiles({
@@ -102,7 +102,8 @@ describe("writeAgentProfileFiles", () => {
       profile: { personality: "", mission: "" },
     });
 
-    expect(results.every((result) => !result.changed)).toBe(true);
+    expect(results.filter(r => r.file !== "AGENTS.md").every((result) => !result.changed)).toBe(true);
+    expect(await readFile(join(workspaceDir,"AGENTS.md"),"utf8")).toContain("query_api_request action=connections");
     expect(existsSync(join(workspaceDir, "SOUL.md"))).toBe(false);
     expect(existsSync(join(workspaceDir, "IDENTITY.md"))).toBe(false);
   });
@@ -255,5 +256,20 @@ describe("siembra desde el workspace", () => {
 
     expect(again.find((r) => r.file === "SOUL.md")?.changed).toBe(false);
     expect(await readFile(join(dir, "SOUL.md"), "utf8")).toBe(once);
+  });
+});
+
+
+describe("shared integration discovery", () => {
+  it("preserves local instructions and installs only one managed section", async () => {
+    const workspaceDir = await tempWorkspace();
+    await writeFile(join(workspaceDir,"AGENTS.md"),"# Local rules\nNever change my role.\n","utf8");
+    await writeAgentProfileFiles({workspaceDir,profile:{}});
+    const once = await readFile(join(workspaceDir,"AGENTS.md"),"utf8");
+    await writeAgentProfileFiles({workspaceDir,profile:{}});
+    expect(await readFile(join(workspaceDir,"AGENTS.md"),"utf8")).toBe(once);
+    expect(once).toContain("Never change my role.");
+    expect(once.split("<!-- query-integrations:begin -->")).toHaveLength(2);
+    expect(once).toContain("permiso ausente");
   });
 });

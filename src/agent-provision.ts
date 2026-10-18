@@ -116,7 +116,7 @@ export async function provisionQueryAgent(raw: unknown, dryRun: boolean, deps: P
     // This directory was exclusively created by this transaction. Never
     // recursively remove files written by a user or by an active agent.
     const names = await readdir(workspace);
-    if (names.some(name => ![MARKER, ACTIVATION, "SOUL.md", "IDENTITY.md"].includes(name))) fail("workspace_cleanup_conflict");
+    if (names.some(name => ![MARKER, ACTIVATION, "SOUL.md", "IDENTITY.md", "AGENTS.md"].includes(name))) fail("workspace_cleanup_conflict");
     for (const name of names) {
       if (!ownedFiles.has(name) || await readFile(join(workspace, name), "utf8") !== ownedFiles.get(name)) fail("workspace_cleanup_conflict");
     }

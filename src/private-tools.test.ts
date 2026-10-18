@@ -40,6 +40,12 @@ describe('private delivery registration and transport',()=>{
     await tool.execute('call2',{thread_id:'42',integration:'openai',label:'My account',api_key:'do-not-forward'});
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('advertises shared live protocol discovery without promising mailbox access',()=>{
+    const tool=getToolPluginMetadata(entry)!.tools.find(t=>t.name==='query_api_request')!;
+    expect(tool.description).toContain('action=connections');
+    expect(tool.description).toContain('capabilities.protocols incluye imap');
+    expect(tool.description).toContain('sin cron');
+  });
   it('routes generic requests through the same delegated Query identity',async()=>{
     const metadata=getToolPluginMetadata(entry)!;
     const schema=metadata.tools.find(t=>t.name==='query_api_request')!.parameters;
