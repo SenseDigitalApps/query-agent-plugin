@@ -24,11 +24,14 @@ it.each([
   {action:'authorize', schedule_external_id:'cron-1', destination:'urn:li:person:w2YPCkcV5w', actions:['text','image','first_comment']},
   {action:'publish', destination:'urn:li:organization:123', idempotency_key:'occurrence-1', text:'Post', image_attachment_id:7, first_comment:'Comment'},
   {action:'publish', destination:'urn:li:person:w2YPCkcV5w', idempotency_key:'occurrence-person-1', text:'Post', image_attachment_id:7, first_comment:'Comment'},
+  {action:'comments', destination:'urn:li:organization:123', post_urn:'urn:li:share:777', count:20},
+  {action:'reply_comment', destination:'urn:li:organization:123', post_urn:'urn:li:share:777', parent_comment:'urn:li:comment:(urn:li:activity:777,888)', idempotency_key:'reply-one', text:'Reply'},
+  {action:'authorize', schedule_external_id:'cron-1', destination:'urn:li:organization:123', actions:['read_comments','reply_comment']},
   {action:'resume', operation_id:'operation-1'},
   {action:'revoke_authorization', schedule_external_id:'cron-1'},
   {action:'revoke_authorization', schedule_external_id:'cron-1', destination:'urn:li:person:Member_Test-1'},
 ])('forwards $action and uses the existing scheduled context when applicable', async params => {
-  const isSchedule = ['publish','resume'].includes(params.action);
+  const isSchedule = ['publish','resume','comments','reply_comment'].includes(params.action);
   if (isSchedule) scheduled.credential = {auth:{token:'cron-test',source:'schedule'},socketUrl:'wss://query.test/ws/'};
   const fetchMock = vi.fn(async () => ({ok:true,json:async()=>({status:'completed'})}));
   vi.stubGlobal('fetch', fetchMock);
@@ -69,4 +72,11 @@ it('accepts generic personal and organizational URNs but rejects other targets',
   const pattern = new RegExp(schema.pattern);
   for (const value of ['urn:li:person:Member_Test-1','urn:li:organization:456']) expect(pattern.test(value)).toBe(true);
   for (const value of ['urn:li:organization:abc','urn:li:person:','https://linkedin.com/in/test','urn:li:company:456']) expect(pattern.test(value)).toBe(false);
+});
+
+it('documents stored account reuse and exposes bounded pagination', () => {
+  const tool = getToolPluginMetadata(entry)!.tools.find(t => t.name === 'query_linkedin')!;
+  expect(tool.description).toContain('no abras una conexión HTTP separada');
+  expect(tool.parameters.properties!.count.maximum).toBe(50);
+  expect(tool.parameters.properties).toHaveProperty('parent_comment');
 });
