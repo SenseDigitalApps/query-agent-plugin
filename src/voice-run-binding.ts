@@ -32,6 +32,8 @@ export const VOICE_ALLOWED_QUERY_TOOLS: ReadonlySet<string> = new Set([
   "query_records_propose_batch",
   "query_api_plan_propose",
   "query_imports_status",
+  // Core restricts voice to existing IMAP connections: discover/read/status only.
+  "query_api_request",
 ]);
 
 /** Every tool this plugin registers (see openclaw.plugin.json contracts.tools). */

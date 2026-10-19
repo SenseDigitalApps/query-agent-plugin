@@ -159,3 +159,17 @@ it("does not present a username fallback as a person's real name", async () => {
   expect(context).toContain('"name":"Julián"');
   expect(context).toContain('"username":"JCVARGAS"');
 });
+
+// The generic API remains identity-bound; Core enforces IMAP-only operations.
+it("binds mailbox reads to the caller and channel, without enabling mail sends or grants", async () => {
+  const registry = new VoiceRunRegistry();
+  registry.registerCall(call(scopeA, "s-a"));
+  registry.recordPrompt(run(20), "Lee mi último correo");
+  expect(await registry.beforeToolCall({runId: run(20), sessionKey: "s-a", toolCallId: "mail"}, "query_api_request")).toBeUndefined();
+  const state = registry.toolCallState("mail", "s-a");
+  expect(state.kind === "voice" && state.binding.context.senderId).toBe("7");
+  expect(state.kind === "voice" && state.binding.context.threadId).toBe("102");
+  for (const tool of ["query_smtp_send", "query_account_access"]) {
+    expect(await registry.beforeToolCall({runId: run(20), sessionKey: "s-a"}, tool)).toBe("voice_tool_not_allowed");
+  }
+});
