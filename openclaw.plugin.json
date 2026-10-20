@@ -362,7 +362,9 @@
       "query_ftp_revoke",
       "query_ftp_accounts",
       "query_ftp_permissions",
-      "query_x"
+      "query_x",
+      "query_silogtrans_catalog",
+      "query_silogtrans_query"
     ]
   }
 }

@@ -1172,6 +1172,44 @@ export default defineToolPlugin({
         ),
     }),
     tool({
+      name: "query_silogtrans_catalog",
+      label: "Query: catalogo Silogtrans",
+      description:
+        "Lista los servicios del ERP Silogtrans que puedes consultar, con su nombre, el servicio real del ERP, los parametros conocidos y si es de lectura. Leelo antes de consultar y no inventes nombres de servicio. Los que tienen read_only=false existen pero no se pueden ejecutar: para crear una remesa, un tercero o un manifiesto hay que dejar una propuesta y que una persona la confirme. La respuesta se cachea, asi que un servicio recien agregado por el negocio puede tardar en aparecer.",
+      parameters: Type.Object({ thread_id: THREAD_PARAM }),
+      execute: async ({ thread_id }, _config, context) =>
+        callQuery(
+          thread_id,
+          "silogtrans/catalog/",
+          {},
+          "query_silogtrans_catalog",
+          context.api.logger,
+          { cacheable: true },
+        ),
+    }),
+    tool({
+      name: "query_silogtrans_query",
+      label: "Query: consultar Silogtrans",
+      description:
+        "Ejecuta un servicio de LECTURA del catalogo de Silogtrans y devuelve las filas del ERP. Usa service con el nombre exacto que devolvio query_silogtrans_catalog y params como objeto con los datos que pide ese servicio: los escalares viajan tal cual, las listas y objetos se envian como JSON y los parametros que el ERP no reconozca los ignora. Los servicios de escritura responden 403 write_service_not_allowed: no insistas ni busques otra via, deja la propuesta para que una persona la confirme. Si no sabes el nombre del servicio, consulta el catalogo primero.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        service: Type.String({
+          description:
+            "Nombre del servicio tal como aparece en query_silogtrans_catalog, por ejemplo remitente_por_documento.",
+        }),
+        params: Type.Optional(Type.Record(Type.String(), Type.Unknown())),
+      }),
+      execute: async ({ thread_id, ...params }, _config, context) =>
+        postQuery(
+          thread_id,
+          "silogtrans/query/",
+          params,
+          "query_silogtrans_query",
+          context.api.logger,
+        ),
+    }),
+    tool({
       name: "query_module_describe",
       label: "Query: describir modulo",
       description:
