@@ -1023,3 +1023,14 @@ ver historiales ajenos, renovar credenciales ajenas ni reactivar cuentas revocad
 Workspace mantiene OAuth/tokens/IDs en su integración original y scopes Google.
 SMTP e IMAP no se unen por coincidir su email. Nunca conceder permisos de una cuenta
 por similitud de etiqueta; resolver IDs reales y ambigüedades primero.
+
+### Alcance de conexiones compartidas
+En `query_account_access grants`, comprobar `supports_scope_mode` antes de enviar
+`grant.scope_mode`. `restricted` es el valor predeterminado: conserva las rutas
+actuales (o las rutas explícitas). `connection` sigue el alcance vigente y futuras
+ampliaciones aprobadas; requiere solicitud explícita del dueño, sin `rules`.
+No convertir permisos existentes a connection automáticamente. El permiso de
+propietario conservado sigue la política vigente, pero su revocación, contextos
+y capacidades siguen aplicando. FTP permissions modifica la audiencia general
+sin borrar permisos específicos; para «solo dueño» revisar y revocar únicamente
+las concesiones incompatibles autorizadas por el usuario.
