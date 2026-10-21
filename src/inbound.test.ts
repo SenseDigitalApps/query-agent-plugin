@@ -9,7 +9,7 @@ import {
   mediaForAgent,
   rawBodyForAgent,
 } from "./inbound.js";
-import type { QueryResolvedAction, QueryUserMessageEvent } from "./types.js";
+import type { QueryReplyTo, QueryResolvedAction, QueryUserMessageEvent } from "./types.js";
 
 describe("Query inbound body", () => {
   it("preserves the current topic unless private delivery is explicit", () => {
@@ -40,6 +40,28 @@ describe("Query inbound body", () => {
     expect(body).toContain(
       "No interpretes la mera existencia de un canal privado como señal",
     );
+  });
+
+  it("tells the agent which message the person is replying to", () => {
+    const event = (reply_to?: QueryReplyTo) =>
+      bodyForAgent({
+        type: "message",
+        role: "user",
+        content: "¿y sin impuestos?",
+        client_msg_id: "reply-1",
+        thread_id: "7",
+        data: { thread_name: "Finanzas", thread_type: "general", reply_to },
+      });
+
+    const ownAnswer = event({ id: 41, role: "assistant", author: "Lía", preview: "Octubre suma $12.400.000." });
+    expect(ownAnswer.startsWith("¿y sin impuestos?")).toBe(true);
+    expect(ownAnswer).toContain(
+      "La persona esta respondiendo a tu propio mensaje (message_id=41): «Octubre suma $12.400.000.»",
+    );
+    expect(event({ id: 40, role: "user", author: "Ana", preview: "Revisa octubre" })).toContain(
+      "respondiendo al mensaje de Ana (message_id=40)",
+    );
+    expect(event(undefined)).not.toContain("respondiendo a");
   });
 
   it("does not invent a private destination when Query did not provide one", () => {

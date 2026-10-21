@@ -229,6 +229,15 @@ export type QueryPendingRecordProposal = {
   tool?: "query_record_propose" | "query_records_propose_batch" | string;
 };
 
+/** Mensaje del hilo al que responde la persona; Query arma autor y extracto. */
+export type QueryReplyTo = {
+  id: number;
+  role: "user" | "assistant" | "system" | string;
+  author?: string;
+  preview?: string;
+  timestamp?: string;
+};
+
 export type QueryUserMessageEvent = {
   type: "message";
   role: "user";
@@ -240,6 +249,7 @@ export type QueryUserMessageEvent = {
     attachments?: QueryAttachment[];
     resolved_action?: QueryResolvedAction;
     pending_record_proposals?: QueryPendingRecordProposal[];
+    reply_to?: QueryReplyTo;
     thread_id?: string | number;
     thread_type?: QueryThreadType;
     thread_name?: string;

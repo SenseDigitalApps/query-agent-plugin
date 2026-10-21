@@ -456,6 +456,24 @@ export function rawBodyForAgent(event: QueryUserMessageEvent): string {
  * Sin esta linea el agente sigue creyendo que su propuesta espera aprobacion y
  * responde pidiendo que pulsen un boton que ya no esta.
  */
+/**
+ * La persona citó un mensaje concreto del hilo. Sin esto el agente ve una
+ * respuesta suelta ("¿y sin impuestos?") y tiene que adivinar a qué se refiere.
+ */
+export function replyToLine(event: QueryUserMessageEvent): string {
+  const reply = event.data?.reply_to;
+  if (!reply || typeof reply !== "object" || !reply.id) return "";
+  const target =
+    reply.role === "assistant"
+      ? "a tu propio mensaje"
+      : `al mensaje de ${reply.author?.trim() || "otra persona"}`;
+  const preview = reply.preview?.trim() ? `: «${reply.preview.trim()}»` : "";
+  return (
+    `La persona esta respondiendo ${target} (message_id=${reply.id})${preview}. ` +
+    "Instruction: interpreta su mensaje como respuesta a ese mensaje citado y resuelve contra el las referencias como eso, ahi o lo anterior"
+  );
+}
+
 function resolvedActionLine(event: QueryUserMessageEvent): string {
   const resolved = event.data?.resolved_action;
   if (!resolved) return "";
@@ -595,6 +613,7 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
         `una tarea programada desde este privado, Query conservara al ` +
         `administrador como creador y la ejecutara en nombre de esa persona`
       : "",
+    replyToLine(event),
     resolvedActionLine(event),
     ...pendingRecordProposalLines(event),
     ...audioLines,
