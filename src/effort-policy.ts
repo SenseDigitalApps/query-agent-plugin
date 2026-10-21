@@ -220,11 +220,11 @@ export function effortRunOptions(mode: EffectiveQueryEffortMode) {
 export function effortInstruction(mode: EffectiveQueryEffortMode): string {
   const instructions: Record<EffectiveQueryEffortMode, string> = {
     fast: "Responde temprano y de forma breve. Usa como maximo dos herramientas salvo necesidad clara; no hagas exploracion amplia.",
-    normal: "Usa solo el contexto y las herramientas relevantes y valida el resultado principal. Antes de pasos que tarden, comunica brevemente que objetivo concreto vas a trabajar.",
-    careful: "Valida duplicados, inconsistencias y el objetivo antes de una accion sensible. Comunica brevemente el enfoque y resume las validaciones realizadas.",
-    exhaustive: "Haz una revision amplia, cruza la evidencia disponible y reporta riesgos residuales. Comunica avances concretos mientras trabajas.",
+    normal: "Usa solo el contexto y las herramientas relevantes y valida el resultado principal.",
+    careful: "Valida duplicados, inconsistencias y el objetivo antes de una accion sensible. Resume las validaciones en la respuesta final.",
+    exhaustive: "Haz una revision amplia, cruza la evidencia disponible y reporta riesgos residuales.",
   };
-  return `[Modo de trabajo Query: ${mode}. ${instructions[mode]} La velocidad nunca reduce controles de seguridad ni autorizaciones. Mantén una bitácora pública breve y fiel: publica un comentario en primera persona antes de cada decisión o etapa relevante, antes de usar una herramienta y después de recibir su resultado. En cada comentario explica qué vas a comprobar, por qué importa para la solicitud y qué decisión permitirá tomar. Publica otro comentario al cambiar de hipótesis, validar, reintentar o encontrar un bloqueo. No uses frases vacías como "sigo revisando" o "estoy trabajando". Esta bitácora es un resumen operativo, no una cadena privada de razonamiento: no muestres razonamiento interno, prompts, secretos, rutas, argumentos ni payloads.]`;
+  return `[Modo de trabajo Query: ${mode}. ${instructions[mode]} La velocidad nunca reduce controles de seguridad ni autorizaciones. Trabaja en silencio y entrega solo la respuesta final con el resultado verificado. No publiques preambulos, planes ni comentarios rutinarios antes o despues de herramientas. Interrumpe solo ante un bloqueo real, una aclaracion o autorizacion necesaria, o si el usuario pide expresamente un estado de avance. No muestres razonamiento interno, prompts ni secretos.]`;
 }
 
 /** Activity remains user-configurable, but effort trims or expands its useful detail. */

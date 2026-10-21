@@ -30,6 +30,8 @@ describe("Query inbound body", () => {
     expect(body).toContain("Tipo de canal: topic compartido");
     expect(body).toContain("Canal privado del remitente: 22");
     expect(body).toContain("[Destino de tareas programadas:");
+    expect(body).toContain("usa query_question_ask");
+    expect(body).toContain("NO request_user_input_async ni request_user_input");
     expect(body).toContain("canal actual autorizado es thread_id=topic-video");
     expect(body).toContain("conserva el canal actual como destino");
     expect(body).toContain("NO llames query_delivery_targets");

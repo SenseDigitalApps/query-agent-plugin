@@ -59,12 +59,12 @@ describe("Query effort policy", () => {
     expect(activityModeForEffort("off", "exhaustive")).toBe("off");
   });
 
-  it("asks for useful public progress without exposing private reasoning", () => {
+  it("requests final-only replies while allowing real blockers", () => {
     const instruction = effortInstruction("normal");
     expect(instruction).toContain("[Modo de trabajo Query: normal.");
-    expect(instruction).toContain("bitácora pública breve y fiel");
-    expect(instruction).toContain("antes de cada decisión");
-    expect(instruction).toContain("No uses frases vacías");
-    expect(instruction).toContain("no muestres razonamiento interno");
+    expect(instruction).toContain("entrega solo la respuesta final");
+    expect(instruction).toContain("bloqueo real");
+    expect(instruction).not.toContain("bitácora pública");
+    expect(instruction).toContain("No muestres razonamiento interno");
   });
 });
