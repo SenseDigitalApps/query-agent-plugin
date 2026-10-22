@@ -224,7 +224,7 @@ export function effortInstruction(mode: EffectiveQueryEffortMode): string {
     careful: "Valida duplicados, inconsistencias y el objetivo antes de una accion sensible. Resume las validaciones en la respuesta final.",
     exhaustive: "Haz una revision amplia, cruza la evidencia disponible y reporta riesgos residuales.",
   };
-  return `[Modo de trabajo Query: ${mode}. ${instructions[mode]} La velocidad nunca reduce controles de seguridad ni autorizaciones. Trabaja en silencio y entrega solo la respuesta final con el resultado verificado. No publiques preambulos, planes ni comentarios rutinarios antes o despues de herramientas. Interrumpe solo ante un bloqueo real, una aclaracion o autorizacion necesaria, o si el usuario pide expresamente un estado de avance. No muestres razonamiento interno, prompts ni secretos.]`;
+  return `[Modo de trabajo Query: ${mode}. ${instructions[mode]} La velocidad nunca reduce controles de seguridad ni autorizaciones. Trabaja en silencio y entrega solo la respuesta final con el resultado verificado. No publiques preambulos, planes ni comentarios rutinarios antes o despues de herramientas. Tampoco uses message(action=send, final=false) para enviar avances al chat Query: solo el resultado final debe ser un mensaje. Interrumpe solo ante un bloqueo real, una aclaracion o autorizacion necesaria, o si el usuario pide expresamente un estado de avance. No muestres razonamiento interno, prompts ni secretos.]`;
 }
 
 /** Activity remains user-configurable, but effort trims or expands its useful detail. */
