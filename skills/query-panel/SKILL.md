@@ -874,6 +874,57 @@ revoca la cuenta/tarea indicada; no toca otras. No publicar salidas atrasadas
 en masa ni cambiar Instagram/Facebook como efecto secundario.
 
 
+## Meta: Facebook e Instagram por la conexión de Query
+
+La app central de Query conecta páginas de Facebook y cuentas de Instagram sin
+tokens en el chat, el workspace ni la configuración del agente. El publicador
+sigue igual (calendario, aprobación, programación, formatos y métricas); solo
+cambia cómo se autentica una tarea que la persona pase a Query.
+
+Conectar: en el turno de la persona, en su privado, `query_meta connect_link`.
+Aparece la tarjeta Conectar con Meta; la persona elige sus páginas en Meta y al
+volver recibes un mensaje "vía conexión con Meta" con cada activo y su
+`connection_id`. Confirma qué quedó conectado. **No reasignes tareas**: cada
+tarea conserva su conexión (manual o `connection_id`). Pasar una tarea a Query,
+o volverla a la manual, es una instrucción explícita de la persona. Al crear una
+tarea nueva con un activo ya conectado, propón la conexión de Query y deja que
+la persona decida.
+
+Publicar y leer: `query_api_request action=request` con el `connection_id` del
+activo y la misma ruta de Graph de siempre, con la versión que muestra la
+política (`action=connections`). No envíes `access_token` ni `appsecret_proof`:
+Query los agrega. Ejemplos: `POST /v26.0/<pagina>/feed` (body_type form),
+`POST /v26.0/<pagina>/photos` con `url`, `POST /v26.0/<ig>/media`,
+`GET /v26.0/<contenedor>` con `fields=status_code`, `POST /v26.0/<ig>/media_publish`,
+`GET /v26.0/<objeto>/insights`. Cada conexión escribe y lee solo su activo y los
+objetos que le pertenecen; `object_outside_asset` significa que el objeto es de
+otro activo, no que falte un permiso. Los medios van por URL pública (para
+archivos locales, súbelos antes al hilo). Las respuestas paginadas traen
+`paging.cursors`; usa `after`, no URLs.
+
+Claves por operación, estables por pieza: `<pieza>:fb:publicar`,
+`<pieza>:ig:crear`, `<pieza>:ig:publicar`. Ante `uncertain` reconcilia antes de
+decidir: un contenedor `PUBLISHED` prueba que salió; `FINISHED` **no** prueba que
+no salió; en Facebook solo cuenta una coincidencia única de texto, enlace o medio
+y hora. Si no es concluyente, deja la pieza `uncertain` y pregunta a la persona;
+nunca reintentes solo. Un contenedor sin publicar se puede volver a crear con
+`<pieza>:ig:crear:2`.
+
+Una tarea asignada a Query **nunca cae sola a la manual**. Si la conexión está
+revocada, eliminada (`query_meta assets` lo dice) o falla por permisos, no
+publica e informa el motivo; la persona decide entre reconectar y volver a la
+manual. Errores de permisos de métricas o video (`instagram_manage_insights`,
+`read_insights`, `publish_video`) significan que la app central aún no tiene ese
+permiso: esa tarea sigue por la manual.
+
+Crones: la conexión permite crones solo si la persona autoriza el permiso de
+origen `schedule` para esa conexión con `query_account_access`. Conectar no lo
+activa. No crees crones de OpenClaw para mover tareas a Query sin pedirlo.
+
+Desconectar: `query_meta disconnect` con `connection_ids` o `client_business_id`,
+solo el dueño en su privado. Si Meta no confirma el retiro del permiso, explica
+que la empresa puede quitar la app desde la configuración de su negocio en Meta.
+
 ## Generic authenticated HTTP (staged capability)
 
 `query_api_request` can discover authorized HTTP connections, request operations
@@ -882,7 +933,7 @@ to dedicated tools, not a permission bypass and not contingent on another tool
 failing. Use only discovered connection IDs and relative documented paths. Never
 supply provider credentials, owner/tenant identities or full URLs. Preserve the
 same idempotency key; running/uncertain results require reconciliation, not a new
-write. Supports private owner/authorized-user turns and explicitly granted groups (no cron), JSON/text/form bodies,
+write. Supports private owner/authorized-user turns and explicitly granted groups, JSON/text/form bodies. Cron only on connections whose policy has `allow_schedules` (today: Meta) plus an owner-granted `schedule` permission;
 and does not accept file uploads. `auth=oauth2` supports automatic refresh of already-authorized OAuth2 credentials; browser consent acquisition is separate. If disabled,
 report that state; do not use direct HTTP or extract credentials as a workaround.
 

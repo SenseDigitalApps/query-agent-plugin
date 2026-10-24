@@ -16,7 +16,15 @@
   },
   "configSchema": {
     "type": "object",
-    "properties": {},
+    "properties": {
+      "metaAgentIds": {
+        "type": "array",
+        "items": {"type": "string", "minLength": 1, "maxLength": 200},
+        "maxItems": 20,
+        "uniqueItems": true,
+        "description": "Agentes de OpenClaw que reciben query_meta. Vacío u omitido: ninguno (también acepta QUERY_META_AGENT_IDS)."
+      }
+    },
     "additionalProperties": false
   },
   "channelConfigs": {
@@ -363,6 +371,7 @@
       "query_ftp_accounts",
       "query_ftp_permissions",
       "query_x",
+      "query_meta",
       "query_silogtrans_catalog",
       "query_silogtrans_query"
     ]
