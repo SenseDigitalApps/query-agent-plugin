@@ -937,8 +937,11 @@ Desconectar: `query_meta disconnect` con `connection_ids` o `client_business_id`
 solo el dueño en su privado. Desconecta en Query esas conexiones y no llama a
 Meta. Retirar la autorización de la app en Meta es otra operación,
 `revoke_app=true`, solo a pedido explícito: afecta a todas las conexiones creadas
-con esa autorización, y si otra persona tiene conexiones con ella responde
-`meta_revoke_app_shared` sin tocar nada. Si Meta no confirma el retiro, explica que
+con esa autorización. Si otra persona tiene conexiones con ella responde
+`meta_revoke_app_shared`, y si está en uso en otra organización,
+`meta_revoke_app_other_organizations`; en ambos casos no toca nada. Explica que se
+puede retirar desde la configuración del negocio en Meta. Si Meta confirma solo
+algunas identidades, el resultado lo dice (`identities_unconfirmed`). Si Meta no confirma el retiro, explica que
 la empresa puede quitar la app desde la configuración de su negocio en Meta.
 
 ## Generic authenticated HTTP (staged capability)
