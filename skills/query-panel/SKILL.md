@@ -881,6 +881,12 @@ tokens en el chat, el workspace ni la configuración del agente. El publicador
 sigue igual (calendario, aprobación, programación, formatos y métricas); solo
 cambia cómo se autentica una tarea que la persona pase a Query.
 
+Conectar no autoriza publicar ni cambia el circuito editorial: se conservan los
+responsables, aprobaciones y crones actuales (por ejemplo, los de Manuela). La
+conexión de Query solo es otra forma de autenticarse. Hoy conviven tres caminos:
+scripts con tokens manuales, conexiones HTTP genéricas ya guardadas en Query y
+conexiones `meta_graph` de esta integración; no migres ninguno sin pedirlo.
+
 Conectar: en el turno de la persona, en su privado, `query_meta connect_link`.
 Aparece la tarjeta Conectar con Meta; la persona elige sus páginas en Meta y al
 volver recibes un mensaje "vía conexión con Meta" con cada activo y su
@@ -898,7 +904,12 @@ Query los agrega. Ejemplos: `POST /v26.0/<pagina>/feed` (body_type form),
 `GET /v26.0/<contenedor>` con `fields=status_code`, `POST /v26.0/<ig>/media_publish`,
 `GET /v26.0/<objeto>/insights`. Cada conexión escribe y lee solo su activo y los
 objetos que le pertenecen; `object_outside_asset` significa que el objeto es de
-otro activo, no que falte un permiso. Los medios van por URL pública (para
+otro activo, no que falte un permiso. `fields` admite campos simples separados por
+comas: sin expansiones `{...}` ni modificadores `.limit()`. Las ramas bajo el activo
+son las del publicador (`meta_edge_not_allowed` si no). Los IDs que se pasan como
+`creation_id`, `children`, `photo_id`, `video_id` o `attached_media` deben venir de
+pedidos hechos con esa misma conexión. Las historias de video de Facebook necesitan
+una subida aparte que esta conexión todavía no cubre. Los medios van por URL pública (para
 archivos locales, súbelos antes al hilo). Las respuestas paginadas traen
 `paging.cursors`; usa `after`, no URLs.
 
@@ -913,17 +924,22 @@ nunca reintentes solo. Un contenedor sin publicar se puede volver a crear con
 Una tarea asignada a Query **nunca cae sola a la manual**. Si la conexión está
 revocada, eliminada (`query_meta assets` lo dice) o falla por permisos, no
 publica e informa el motivo; la persona decide entre reconectar y volver a la
-manual. Errores de permisos de métricas o video (`instagram_manage_insights`,
-`read_insights`, `publish_video`) significan que la app central aún no tiene ese
-permiso: esa tarea sigue por la manual.
+manual. Si una tarea ya era manual, permanece manual. Un error de permisos de
+Meta no prueba por sí solo que a la app central le falte ese permiso: también
+puede ser el consentimiento, el rol de la persona en la página o el activo.
+Informa el código que devolvió Meta y no concluyas la causa.
 
 Crones: la conexión permite crones solo si la persona autoriza el permiso de
 origen `schedule` para esa conexión con `query_account_access`. Conectar no lo
 activa. No crees crones de OpenClaw para mover tareas a Query sin pedirlo.
 
 Desconectar: `query_meta disconnect` con `connection_ids` o `client_business_id`,
-solo el dueño en su privado. Si Meta no confirma el retiro del permiso, explica
-que la empresa puede quitar la app desde la configuración de su negocio en Meta.
+solo el dueño en su privado. Desconecta en Query esas conexiones y no llama a
+Meta. Retirar la autorización de la app en Meta es otra operación,
+`revoke_app=true`, solo a pedido explícito: afecta a todas las conexiones creadas
+con esa autorización, y si otra persona tiene conexiones con ella responde
+`meta_revoke_app_shared` sin tocar nada. Si Meta no confirma el retiro, explica que
+la empresa puede quitar la app desde la configuración de su negocio en Meta.
 
 ## Generic authenticated HTTP (staged capability)
 
@@ -1063,7 +1079,9 @@ En el privado del propietario (Google conserva administración de delegaciones):
    capabilities discover/consult/execute: consultar resultados no es ejecutar una consulta
    al proveedor. Leer correo requiere execute, limitado por la política de la conexión.
    sources `["turn"]` por defecto; añadir schedule no crea tareas ni sustituye su
-   autorización. HTTP/IMAP continúan sin cron. rules solo HTTP/IMAP, dentro de su política.
+   autorización. IMAP sigue sin cron. HTTP también, salvo las conexiones cuya política
+   trae `allow_schedules` con un perfil habilitado (hoy `meta_graph`): ahí el dueño puede
+   conceder el origen schedule. rules solo HTTP/IMAP, dentro de su política.
 4. `revoke` retira únicamente grant_id. Los permisos se suman: para «solo este canal»,
    adoptar/revisar y retirar los permisos amplios incompatibles, no simplemente añadir otro.
 5. Releer grants y comprobar el alcance efectivo. No probar enviando mensajes.
