@@ -1095,3 +1095,26 @@ ver historiales ajenos, renovar credenciales ajenas ni reactivar cuentas revocad
 Workspace mantiene OAuth/tokens/IDs en su integración original y scopes Google.
 SMTP e IMAP no se unen por coincidir su email. Nunca conceder permisos de una cuenta
 por similitud de etiqueta; resolver IDs reales y ambigüedades primero.
+
+
+### LinkedIn: analítica nativa y alternativa HTTP
+
+Preferir `query_linkedin action=analytics`, con account_id descubierto, destination e
+idempotency_key estable. Perfil: post_urn `urn:li:share:...` con recibo de publicación
+confirmado de esa misma cuenta/destino; metric opcional IMPRESSION (también
+MEMBERS_REACHED, REACTION, COMMENT, RESHARE). Página: destination organización,
+sin post_urn ni metric. Es acumulado disponible, no una cohorte a siete días.
+
+Ambas vías usan la cuenta LinkedIn existente. `query_api_request connections`
+expone su mismo ID con perfil linkedin_analytics y las rutas exactas permitidas:
+GET /rest/memberCreatorPostAnalytics y GET /rest/organizationalEntityShareStatistics.
+No crear otra cuenta ni pasar tokens. HTTP no permite rutas arbitrarias, headers
+de autenticación, escrituras, expansión de permisos ni crones. Las lecturas son
+solo para turnos humanos con acceso vigente a la cuenta.
+
+Respuesta común: operation_id, status y result con http_status, provider_error
+depurado, metrics, measured_at y periodo. `status` consulta sin repetir. No cambiar
+clave ante running; no pasar a HTTP para eludir 403/429. Un 403 no prueba por sí
+solo falta de scope. Esta lectura no renueva OAuth ni modifica publicaciones.
+Ausencia de métricas no equivale a cero. Los números devueltos conservan la
+estructura de elements; no se entregan URLs ni texto libre de la respuesta exitosa.

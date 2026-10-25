@@ -80,3 +80,14 @@ it('documents stored account reuse and exposes bounded pagination', () => {
   expect(tool.parameters.properties!.count.maximum).toBe(50);
   expect(tool.parameters.properties).toHaveProperty('parent_comment');
 });
+
+it('exposes analytics without opening arbitrary URLs or credentials', () => {
+  const tool = getToolPluginMetadata(entry)!.tools.find(t => t.name === 'query_linkedin')!;
+  const schema = JSON.stringify(tool.parameters);
+  expect(schema).toContain('analytics');
+  expect(schema).toContain('IMPRESSION');
+  expect(schema).not.toContain('access_token');
+  expect(schema).not.toContain('refresh_token');
+  expect(tool.description).toContain('HTTP');
+  expect(tool.description).toContain('sin cron');
+});
