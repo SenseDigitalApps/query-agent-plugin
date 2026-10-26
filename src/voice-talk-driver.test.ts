@@ -165,3 +165,18 @@ it("passes an account-scoped realtime voice without accepting a caller override"
   await driver.start(scope, {...payload, voice: "cove"}, emit);
   expect(request).toHaveBeenCalledWith("talk.client.create", expect.objectContaining({voice: "juniper"}));
 });
+
+it("publishes a bound consult outcome once and leaves audio open", async () => {
+  const fixture = setup({claimDelegation: async () => ({scope, replayed: false,
+    delegated_auth: {token: 'synthetic', source: 'voice', expires_in: 900,
+      identity: {id: scope.user_id} as never, external_account_identity: {id: scope.user_id} as never}})});
+  await fixture.driver.start(scope, payload, fixture.emit);
+  const runId = 'talk-realtime-consult-outcome';
+  await fixture.registry.speakerContext({runId, sessionKey: target.sessionKey}, 'consulta');
+  fixture.registry.finishRun(runId, false);
+  fixture.registry.finishRun(runId, false);
+  expect(fixture.events.filter(e => e.type === 'task.failed')).toHaveLength(1);
+  expect(fixture.driver.owns(scope)).toBe(true);
+  await fixture.driver.control(scope, {kind: 'close'});
+  expect(fixture.events.at(-1)).toMatchObject({type: 'call.ended', reason: 'client_close'});
+});
