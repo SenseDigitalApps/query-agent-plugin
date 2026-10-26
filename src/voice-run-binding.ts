@@ -61,6 +61,7 @@ export type ActiveVoiceCall = {
   agentToken: string;
   claim: (request: VoiceDelegationClaim) => Promise<VoiceDelegationResult>;
   onAccepted?: (runId: string, consultId: string) => void;
+  onFinished?: (runId: string, consultId: string, success: boolean) => void;
 };
 
 type RunBinding = {
@@ -86,6 +87,7 @@ export class VoiceRunRegistry {
   private calls = new Map<string, ActiveVoiceCall>();
   private prompts = new Map<string, string>();
   private runs = new Map<string, RunBinding>();
+  private finished = new Set<string>();
   private pending = new Map<string, Promise<RunBinding>>();
   private toolCalls = new Map<string, string>();
 
@@ -206,6 +208,15 @@ export class VoiceRunRegistry {
       auth,
       expiresAt,
     };
+  }
+
+  /** Only a bound run can finish; duplicate end hooks never duplicate receipts. */
+  finishRun(runId: string | undefined, success: boolean): void {
+    if (!runId || this.finished.has(runId)) return;
+    const binding = this.runs.get(runId);
+    if (!binding) return;
+    binding.call.onFinished?.(runId, binding.claim.consult_id, success);
+    this.finished.add(runId);
   }
 
   /** Renews THIS run's identity through Core (`replayed:true`); never starts another run. */

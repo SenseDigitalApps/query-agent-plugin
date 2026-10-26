@@ -24,7 +24,7 @@ const eventFields: Record<string, string[]> = {
   "audio.started": ["turn_id"], "audio.stopped": ["turn_id"],
   "speech.activity": [], "audio.activity": [], "task.progress": ["run_id"],
   "transcript.final": ["item_id", "role", "text"],
-  "task.accepted": ["run_id", "consult_id"], "task.completed": ["run_id", "consult_id"], "task.cancelled": ["run_id", "consult_id"],
+  "task.accepted": ["run_id", "consult_id"], "task.completed": ["run_id", "consult_id"], "task.failed": ["run_id", "consult_id"], "task.cancelled": ["run_id", "consult_id"],
   "confirmation.required": ["confirmation_id", "text"],
   "presence.required": ["challenge_id", "deadline"], "presence.confirmed": ["challenge_id"],
   "usage.final": ["run_id", "usage"],
@@ -32,6 +32,7 @@ const eventFields: Record<string, string[]> = {
 function safeEvent(input: Payload & {event_id: string; type: string}): Payload & {event_id: string; type: string} {
   if (!Object.hasOwn(eventFields, input.type) || typeof input.event_id !== "string" || !input.event_id || input.event_id.length > 128) throw Error("invalid_voice_event");
   const result: Payload & {event_id: string; type: string} = {event_id: input.event_id, type: input.type};
+  if (input.type === "call.ended" && ["client_close", "presence_timeout", "lease_expired", "provider_error", "provider_closed", "gateway_connection_lost"].includes(String(input.reason))) result.reason = input.reason;
   if (input.type === "transcript.final" && typeof input.occurred_at === "string") result.occurred_at = input.occurred_at;
   for (const key of eventFields[input.type]) {
     if (key === "usage") {

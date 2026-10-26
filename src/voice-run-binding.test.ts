@@ -173,3 +173,16 @@ it("binds mailbox reads to the caller and channel, without enabling mail sends o
     expect(await registry.beforeToolCall({runId: run(20), sessionKey: "s-a"}, tool)).toBe("voice_tool_not_allowed");
   }
 });
+
+it("finishes only bound runs once without confusing other calls", async () => {
+  const registry = new VoiceRunRegistry();
+  const finished = vi.fn();
+  registry.registerCall({...call(scopeA, "s-a"), onFinished: finished});
+  registry.finishRun(run(1), true);
+  expect(finished).not.toHaveBeenCalled();
+  await registry.speakerContext({runId: run(1), sessionKey: "s-a"}, "consulta");
+  registry.finishRun(run(1), false);
+  registry.finishRun(run(1), true);
+  expect(finished).toHaveBeenCalledTimes(1);
+  expect(finished).toHaveBeenCalledWith(run(1), `consult:${run(1)}`, false);
+});

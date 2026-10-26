@@ -19,7 +19,7 @@ describe("Query voice channel-disabled rehearsal", () => {
     vi.stubEnv("QUERY_AGENT_VOICE_BRIDGE_TOKEN", "x".repeat(32));
     const a=api();
     expect(() => registerQueryVoice(a as never)).not.toThrow();
-    expect(a.on.mock.calls.map(c=>c[0])).toEqual(["llm_input", "before_agent_run", "before_prompt_build", "before_tool_call"]);
+    expect(a.on.mock.calls.map(c=>c[0])).toEqual(["agent_end", "llm_input", "before_agent_run", "before_prompt_build", "before_tool_call"]);
     expect(calls.device).not.toHaveBeenCalled();
     expect(calls.bootstrap).not.toHaveBeenCalled();
     expect(calls.client).not.toHaveBeenCalled();

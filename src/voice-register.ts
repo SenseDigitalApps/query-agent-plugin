@@ -51,6 +51,7 @@ async function claimDelegation(scope: VoiceScope, target: VoiceCallTarget,
     method: "POST",
     headers: {authorization: `Bearer ${bridgeToken}`, "content-type": "application/json"},
     body: JSON.stringify(claim),
+    signal: AbortSignal.timeout(10_000),
   });
   if (!response.ok) throw Error(response.status === 403 ? "voice_delegation_refused" : "voice_delegation_unavailable");
   return await response.json() as VoiceDelegationResult;
@@ -58,6 +59,10 @@ async function claimDelegation(scope: VoiceScope, target: VoiceCallTarget,
 
 export function registerQueryVoice(api: OpenClawPluginApi): void {
   if (!("on" in api) || typeof api.on !== "function") return;
+
+  api.on("agent_end", (event: {runId?: string; success: boolean}, ctx: {runId?: string}) => {
+    voiceRuns.finishRun(event.runId ?? ctx.runId, event.success === true);
+  });
 
   // Question digest for the consult: the run's first model input.
   api.on("llm_input", (event: {runId?: string; prompt?: string}) => { voiceRuns.recordPrompt(event?.runId, event?.prompt); });

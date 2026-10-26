@@ -106,6 +106,12 @@ export class GatewayTalkDriver implements QueryTalkDriver {
       scope, sessionKey: target.sessionKey, accountId: target.accountId,
       socketUrl: target.socketUrl, agentToken: target.agentToken,
       claim: claim => this.deps.claimDelegation(scope, target, claim),
+      onFinished: (runId, consultId, success) => {
+        const call = this.calls.get(scope.call_id);
+        if (!call || call.ended) return;
+        call.emit({event_id: shortId(`finished:${runId}`), type: success ? "task.completed" : "task.failed",
+          run_id: runId, consult_id: consultId});
+      },
       onAccepted: (runId, consultId) => {
         const call = this.calls.get(scope.call_id);
         call?.presence.activity();
@@ -264,6 +270,7 @@ export class GatewayTalkDriver implements QueryTalkDriver {
       method: "POST",
       headers: {authorization: `Bearer ${secret}`, "content-type": "application/sdp"},
       body: sdp,
+      signal: AbortSignal.timeout(20_000),
     });
     const answer = await response.text();
     if (!response.ok || answer.length > 262_144 || !sdpIsAudioOnly(answer)) throw Error("voice_offer_rejected");
@@ -271,7 +278,7 @@ export class GatewayTalkDriver implements QueryTalkDriver {
     return answer;
   }
 
-  private async finish(callId: string, _reason: string, closeRemote = true): Promise<void> {
+  private async finish(callId: string, reason: string, closeRemote = true): Promise<void> {
     const call = this.calls.get(callId);
     if (!call || call.ended) return;
     call.ended = true;
@@ -281,7 +288,7 @@ export class GatewayTalkDriver implements QueryTalkDriver {
     try {
       if (closeRemote) await this.closeTalk(call.target.sessionKey, call.voiceSessionId);
     } finally {
-      call.emit({event_id: shortId(`ended:${callId}`), type: "call.ended"});
+      call.emit({event_id: shortId(`ended:${callId}`), type: "call.ended", reason});
       this.calls.delete(callId);
     }
   }
