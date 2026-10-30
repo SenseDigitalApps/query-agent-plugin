@@ -258,6 +258,12 @@ Crear o modificar **la estructura** del panel no se hace con
 Sigue siendo auditado: no se ejecuta nada hasta que una persona apruebe el
 plan completo. Y quien apruebe tiene que ser **administrador**.
 
+Para **leer** la configuracion (procesos, vistas, usuarios, roles, permisos)
+usa `query_api_read` con la ruta GET: corre al momento, con los permisos de la
+persona, y la respuesta llega sin secretos. Lee siempre antes de proponer un
+cambio sobre algo que ya existe, para no reemplazar a ciegas. Al crear un
+proceso, `process_role_ids` es obligatorio: sin rol explicito el paso falla.
+
 ```json
 {
   "thread_id": "conversation-id",

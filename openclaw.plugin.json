@@ -330,6 +330,7 @@
       "query_record_delete_propose",
       "query_record_get",
       "query_api_plan_propose",
+      "query_api_read",
       "query_account_access",
       "query_api_request",
       "query_records_propose_batch",

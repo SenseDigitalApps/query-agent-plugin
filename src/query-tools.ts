@@ -1473,10 +1473,25 @@ export default defineToolPlugin({
         ),
     }),
     tool({
+      name: "query_api_read",
+      label: "Query: leer la API",
+      description:
+        "Lee cualquier ruta GET de la API de Query del mismo tenant, como la persona del turno y con sus permisos: configuracion de modulos (process_array, vistas, campos), usuarios, roles y permisos, catalogos, etc. Se ejecuta al momento, sin tarjeta ni aprobacion, porque no cambia nada. La respuesta llega sin secretos (llaves, contrasenas y tokens aparecen como \"[oculto]\"). Si es muy grande se recorta (truncated=true): pide menos con filtros o paginacion. Errores: path_not_allowed (ruta cerrada al agente: agentes, credenciales, instalacion, contrasenas o tokens), path_not_found (no existe), permission_denied (la persona no tiene permiso), server_error. Usalo antes de proponer un cambio con query_api_plan_propose para leer el estado real y no reemplazar a ciegas.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        path: Type.String({
+          description:
+            "Ruta GET con su query string, por ejemplo /api/v2/modulos/38/ o /api/users/?page=1.",
+        }),
+      }),
+      execute: async ({ thread_id, path }, _config, context) =>
+        postQuery(thread_id, "api-read/", { path }, "query_api_read", context.api.logger),
+    }),
+    tool({
       name: "query_api_plan_propose",
       label: "Query: proponer cambios de configuracion",
       description:
-        "Para configurar el panel: crear modulos, campos, carpetas, APIs externas, y sumar un modulo a una categoria existente (grupo de modulos). Propone una SECUENCIA de llamadas a la API de Query que una persona aprueba de una vez. No aplica nada por si sola: cada paso se comprueba contra el contrato real de su endpoint al proponer -si el cuerpo ya es incompatible, el plan se rechaza aqui mismo, no al aplicar- salvo que dependa de \"$N.campo\" de un paso anterior, en cuyo caso queda diferido hasta la ejecucion. Cada paso lleva method (POST/PUT/PATCH/DELETE), path y body. Para encadenar pasos usa \"$N.campo\" en el body: por ejemplo module: \"$0.id\" toma el id que devolvio el paso 0, util porque el modulo aun no existe cuando propones. Se ejecuta todo o nada: si un paso falla, ninguno queda aplicado. Las rutas de usuarios, roles, permisos, tokens y agentes estan bloqueadas y el plan se rechaza entero si incluyes una. Para sumar un modulo a una categoria usa POST en /api/v2/modulos-category/<id>/add-module/ con body {\"module\": \"$N.id\"}: es aditivo, no borra los modulos que la categoria ya tenia. Nunca mandes un campo \"group\" en el body de /api/v2/modulos/: no existe: la categoria se asocia despues, con ese paso aparte, y el id real de la categoria sale de query_module_categories_list. Para cambiar datos de registros NO uses esto: usa query_record_propose o query_records_propose_batch.",
+        "Para configurar el panel: crear modulos, campos, carpetas, APIs externas, y sumar un modulo a una categoria existente (grupo de modulos). Propone una SECUENCIA de llamadas a la API de Query que una persona aprueba de una vez. No aplica nada por si sola: cada paso se comprueba contra el contrato real de su endpoint al proponer -si el cuerpo ya es incompatible, el plan se rechaza aqui mismo, no al aplicar- salvo que dependa de \"$N.campo\" de un paso anterior, en cuyo caso queda diferido hasta la ejecucion. Cada paso lleva method (POST/PUT/PATCH/DELETE), path y body. Para encadenar pasos usa \"$N.campo\" en el body: por ejemplo module: \"$0.id\" toma el id que devolvio el paso 0, util porque el modulo aun no existe cuando propones. Se ejecuta todo o nada: si un paso falla, ninguno queda aplicado. Rutas de cuentas: solo se admiten roles (/api/groups/, /api/groups/<id>/update_permissions/) y los roles de un usuario (PATCH /api/update-user/<id>/ con body solo {\"groups\": [...]}); contrasenas, tokens, altas y bajas de usuario, correos de cuenta y las rutas de agentes e instalacion estan bloqueadas y el plan se rechaza entero si incluyes una. Al crear un proceso en un modulo (PATCH /api/v2/modulos/<id>/ con process_array) indica en process_role_ids los roles que lo reciben: sin rol explicito el paso falla, no se asigna a nadie por defecto. Lee antes el estado con query_api_read y conserva los procesos que ya existen. Para sumar un modulo a una categoria usa POST en /api/v2/modulos-category/<id>/add-module/ con body {\"module\": \"$N.id\"}: es aditivo, no borra los modulos que la categoria ya tenia. Nunca mandes un campo \"group\" en el body de /api/v2/modulos/: no existe: la categoria se asocia despues, con ese paso aparte, y el id real de la categoria sale de query_module_categories_list. Para cambiar datos de registros NO uses esto: usa query_record_propose o query_records_propose_batch.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         steps: Type.Array(
