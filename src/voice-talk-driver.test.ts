@@ -180,3 +180,16 @@ it("publishes a bound consult outcome once and leaves audio open", async () => {
   await fixture.driver.control(scope, {kind: 'close'});
   expect(fixture.events.at(-1)).toMatchObject({type: 'call.ended', reason: 'client_close'});
 });
+
+it("passes call-local context only when supplied by the authenticated bridge", async () => {
+  const {driver, request, emit}=setup();
+  await driver.start(scope, {...payload, initial_context: '{"channel":"Pricing","messages":[]}'}, emit);
+  expect(request).toHaveBeenCalledWith('talk.client.create', expect.objectContaining({initialContext:'{"channel":"Pricing","messages":[]}'}));
+});
+it("rejects invalid or oversized context before provider creation", async () => {
+  for (const initial_context of [123, {}, 'x'.repeat(6001)]) {
+    const {driver, request, registry, emit}=setup();
+    await expect(driver.start(scope, {...payload, initial_context}, emit)).rejects.toThrow('voice_initial_context_invalid');
+    expect(request).not.toHaveBeenCalled();expect(registry.hasActiveCall(target.sessionKey)).toBe(false);
+  }
+});

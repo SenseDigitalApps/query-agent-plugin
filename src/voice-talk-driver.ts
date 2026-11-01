@@ -118,10 +118,17 @@ export class GatewayTalkDriver implements QueryTalkDriver {
         call?.emit({event_id: shortId(`accepted:${runId}`), type: "task.accepted", run_id: runId, consult_id: consultId});
       },
     });
+    const initialContext = payload.initial_context;
+    if (initialContext !== undefined &&
+        (typeof initialContext !== "string" || initialContext.length > 6000)) {
+      this.deps.registry.unregisterCall(scope.call_id);
+      throw Error("voice_initial_context_invalid");
+    }
     let session: Payload;
     try {
       session = await this.deps.gateway.request<Payload>("talk.client.create", {
         sessionKey: target.sessionKey,
+        ...(initialContext ? {initialContext} : {}),
         ...(target.realtimeVoice ? {voice: target.realtimeVoice} : {}),
         provider: VOICE_OAUTH_ROUTE.provider,
         model: VOICE_OAUTH_ROUTE.model,
