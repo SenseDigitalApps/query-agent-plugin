@@ -1,3 +1,4 @@
+import { registerQueryFinalOnlyGuard } from "./src/final-only-guard.js";
 import { registerRadarExecContext } from "./src/radar-exec-context.js";
 import { registerQueryProvision } from "./src/agent-provision.js";
 import { defineChannelPluginEntry } from "openclaw/plugin-sdk/channel-core";
@@ -18,6 +19,7 @@ export default defineChannelPluginEntry({
   setRuntime: setQueryRuntime,
   registerFull: (api) => {
     if ("on" in api && typeof api.on === "function") {
+      registerQueryFinalOnlyGuard(api);
       registerQueryCronSync(api);
       registerQueryGoogleGuard(api);
       registerQueryVoice(api);

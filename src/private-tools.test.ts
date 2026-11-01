@@ -53,6 +53,15 @@ describe('private delivery registration and transport',()=>{
     await tool.execute('bad',{thread_id:'42',action:'grant',family:'smtp',account_id:'existing-account',password:'not-allowed'});
     expect(fetchMock).toHaveBeenCalledTimes(1);
   });
+  it('forwards explicitly opted-in connection scope without inventing route permissions',async()=>{
+    const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({mode:'unified',grants:[]})}));
+    vi.stubGlobal('fetch',fetchMock);
+    const tool=registered().find(c=>c[1]?.name==='query_account_access')![0]({sessionKey:'test-sharing'});
+    await tool.execute('share',{thread_id:'42',action:'grant',family:'private',account_id:'existing-account',grant:{subject:'user',subject_id:7,scope_mode:'connection'}});
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({grant:{scope_mode:'connection'}});
+    const schema=getToolPluginMetadata(entry)!.tools.find(t=>t.name==='query_account_access')!.parameters;
+    expect(schema.properties.grant.properties).toHaveProperty('scope_mode');
+  });
   it('advertises shared live protocol discovery without promising mailbox access',()=>{
     const tool=getToolPluginMetadata(entry)!.tools.find(t=>t.name==='query_api_request')!;
     expect(tool.description).toContain('action=connections');

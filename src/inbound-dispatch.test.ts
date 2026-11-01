@@ -119,8 +119,9 @@ describe("Query inbound dispatch recovery", () => {
       thinkingLevelOverride: "low",
       fastModeOverride: true,
       bootstrapContextMode: "lightweight",
-      commentaryProgressEnabled: true,
+      commentaryProgressEnabled: false,
       suppressDefaultToolProgressMessages: true,
+        suppressToolProgressMessages: true,
       allowToolLifecycleWhenProgressHidden: true,
       allowProgressCallbacksWhenSourceDeliverySuppressed: true,
       onPartialReply: expect.any(Function),
@@ -147,11 +148,7 @@ describe("Query inbound dispatch recovery", () => {
         label: "Estoy buscando los registros relacionados con tu solicitud.",
       }),
     );
-    expect(onPartialReply.mock.calls.map(([text]) => text)).toEqual([
-      "Voy a revisar los leads y contrastar sus estados.",
-      "Después organizaré los hallazgos.",
-      "Estoy redactando la respuesta con el dato confirmado.",
-    ]);
+    expect(onPartialReply).not.toHaveBeenCalled();
     expect(result.text).toBe("Respuesta que solo aparecio en el stream.");
   });
 

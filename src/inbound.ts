@@ -651,7 +651,16 @@ export function bodyForAgent(event: QueryUserMessageEvent): string {
   const audioHint = messageRequestsAudio(event)
     ? "\n\n[Respuesta de audio en Query: Query puede convertir tu respuesta final a una nota de voz reproducible. Responde normalmente con el contenido; no digas que no tienes herramienta de audio.]"
     : "";
-  return `${rawBody}\n\n[Contexto de Query: ${context}]${scheduledDeliveryHint}${audioHint}`;
+  const questionHint =
+    "\n\n[Preguntas interactivas Query: para pedir una aclaracion o decision usa query_question_ask, " +
+    "NO request_user_input_async ni request_user_input: esas herramientas nativas se entregan como texto sin controles en este canal. " +
+    "Descubre query_question_ask por nombre si esta diferida. Usa el thread_id autorizado de este turno, " +
+    "idempotency_key estable, prompt y mode=single para alternativas excluyentes o multiple para varias respuestas, " +
+    "con 2 a 12 opciones {id,label}; text para respuesta abierta. No preselecciones. " +
+    "awaiting_answer significa tarjeta publicada, no respondida: espera la respuesta humana antes de actuar sobre esa decision. " +
+    "No repitas las opciones como vinetas ni conviertas listas informativas en preguntas. " +
+    "Si la herramienta falla, informa el bloqueo real sin simular controles; no sustituye aprobaciones ni sirve para secretos.]";
+  return `${rawBody}\n\n[Contexto de Query: ${context}]${scheduledDeliveryHint}${audioHint}${questionHint}`;
 }
 
 export function mediaForAgent(event: QueryUserMessageEvent) {
@@ -779,7 +788,6 @@ export async function dispatchQueryMessage(params: {
 
   let runId: string | undefined;
   let lastAssistantText = "";
-  let lastPartialReply = "";
   let toolCalls = 0;
   let loggedControlAnnotation = false;
   const seenToolStarts = new Set<string>();
@@ -793,14 +801,8 @@ export async function dispatchQueryMessage(params: {
     }
     return sanitized;
   };
-  const emitPublicDraft = (value: unknown) => {
-    const draft = publicText(
-      redactUnsafeArtifactReferences(typeof value === "string" ? value : ""),
-    ).trim();
-    if (!draft || draft === lastPartialReply) return;
-    lastPartialReply = draft;
-    params.onPartialReply?.(draft);
-  };
+  // Final-only chat: progress remains activity metadata, never a chat draft.
+  const emitPublicDraft = (_value: unknown) => {};
   const unsubscribe = onAgentEvent((agentEvent) => {
     if (agentEvent.sessionKey !== route.sessionKey) return;
     if (agentEvent.agentId && agentEvent.agentId !== route.agentId) return;
@@ -889,13 +891,13 @@ export async function dispatchQueryMessage(params: {
         ...effortRunOptions(effort.effectiveMode),
         // Effort controls latency, not authorization. Keep tools available even
         // for greetings/short turns: they may include attachments or follow-ups.
-        // OpenClaw separa el comentario publico del reasoning privado. Solo el
-        // primero se usa como bitacora visible del turno.
-        commentaryProgressEnabled: true,
+        // Do not emit routine commentary as separate chat messages.
+        commentaryProgressEnabled: false,
         // Query presenta estos eventos en su propia linea de actividad. Al
         // suprimir el texto tecnico por defecto, OpenClaw exige habilitar
         // expresamente los callbacks publicos para que no queden bloqueados.
         suppressDefaultToolProgressMessages: true,
+        suppressToolProgressMessages: true,
         allowToolLifecycleWhenProgressHidden: true,
         allowProgressCallbacksWhenSourceDeliverySuppressed: true,
         onPartialReply: (payload) => {

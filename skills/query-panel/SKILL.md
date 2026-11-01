@@ -1,6 +1,6 @@
 ---
 name: query-panel
-description: 'Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Use Query proposal tools, which enforce human approval or an administrator-authorized creation policy. Also use for Matias electronic billing, LinkedIn multi-destination automation, and HTML reports or live dashboards pinned to the Query menu. Also discover shared HTTP/IMAP connection capabilities and mailbox access before declaring an integration unavailable. Discovery-first: never assume module or field names.'
+description: 'Read and change Query panel data on behalf of the person you are chatting with, using their own permissions. Use whenever someone asks what exists in their system, what a module is about, which fields it has, asks to find or open records, or asks to create or modify a record. Prefer Query proposal tools; an authorized API route is also allowed when needed, with valid scoped credentials and effective permissions. Also use for Matias electronic billing, LinkedIn multi-destination automation, and HTML reports or live dashboards pinned to the Query menu. Also discover shared HTTP/IMAP connection capabilities and mailbox access before declaring an integration unavailable. Discovery-first: never assume module or field names.'
 ---
 
 # Query Panel Reader
@@ -127,9 +127,44 @@ archivo generado.
 
 La reparacion de almacenamiento descrita abajo usa su herramienta especifica;
 no es una nueva alta ni un permiso general para escribir por otra API.
-Nunca escribas en Query por otro camino, aunque dispongas de otra herramienta,
-otro token o la API general. Si crees que hace falta escribir de otra forma,
-dilo y detente.
+### Vía preferida y alternativa API — Juli, 2026-10-20
+
+Esta regla es general para los agentes: las herramientas de propuestas/lotes/
+importaciones son la vía preferida cuando cubren la operación y apuntan al tenant
+correcto; no son la única vía autorizable.
+
+Se permite usar la API documentada cuando la tarea lo necesite, la operación
+esté autorizada por el usuario y el agente tenga acceso autorizado a credenciales
+válidas para ese destino. Tener una credencial no concede por sí solo permiso
+para cualquier operación, tenant o identidad. No pedir de nuevo credenciales ni
+autorizaciones que ya estén vigentes para la misma tarea.
+
+Antes de escribir por API:
+- Identificar explícitamente tenant, host, identidad y alcance de la operación;
+  conservar las confirmaciones de tenant exigidas por el perfil aplicable.
+- Usar únicamente el perfil o conexión autorizado para ese agente y destino;
+  no copiar secretos de otros agentes ni reutilizar el token del chat en otro
+  tenant. No mostrar secretos y no seguir redirecciones a otro host.
+- Descubrir en vivo el esquema, IDs y contrato del endpoint. Leer el estado
+  actual, prevenir duplicados y conservar datos ajenos al cambio.
+- Respetar permisos efectivos, aprobaciones obligatorias del servicio y reglas
+  específicas de operaciones sensibles. No cambiar de ruta o identidad para
+  eludir una denegación, una aprobación pendiente o una restricción explícita.
+- Verificar el resultado por lectura y guardar evidencia sin secretos. Ante
+  resultado incierto, reconciliar antes de repetir una escritura.
+
+El tenant del chat y el tenant objetivo pueden ser distintos en una tarea de
+implementación autorizada. Nunca enviar IDs del segundo a las propuestas del
+primero. Si el importador del chat no sirve para el destino, revisar la API
+permitida antes de declarar un bloqueo o exigir cambiar de panel. La falta de
+una conexión del motor genérico no demuestra ausencia de un perfil de API
+externa ya autorizado.
+
+Los límites y pasos de propuestas/importaciones de esta guía describen esas
+herramientas; para la API externa se descubre su contrato real. No dividir una
+operación para esquivar una aprobación obligatoria. Esta alternativa no cambia
+las reglas específicas de facturación, publicaciones, credenciales ni reparación
+de almacenamiento. No inventar datos ambiguos para completar una carga.
 
 Flujo:
 
@@ -222,6 +257,12 @@ Crear o modificar **la estructura** del panel no se hace con
 
 Sigue siendo auditado: no se ejecuta nada hasta que una persona apruebe el
 plan completo. Y quien apruebe tiene que ser **administrador**.
+
+Para **leer** la configuracion (procesos, vistas, usuarios, roles, permisos)
+usa `query_api_read` con la ruta GET: corre al momento, con los permisos de la
+persona, y la respuesta llega sin secretos. Lee siempre antes de proponer un
+cambio sobre algo que ya existe, para no reemplazar a ciegas. Al crear un
+proceso, `process_role_ids` es obligatorio: sin rol explicito el paso falla.
 
 ```json
 {
@@ -1118,3 +1159,13 @@ clave ante running; no pasar a HTTP para eludir 403/429. Un 403 no prueba por s�
 solo falta de scope. Esta lectura no renueva OAuth ni modifica publicaciones.
 Ausencia de métricas no equivale a cero. Los números devueltos conservan la
 estructura de elements; no se entregan URLs ni texto libre de la respuesta exitosa.
+### Alcance de conexiones compartidas
+En `query_account_access grants`, comprobar `supports_scope_mode` antes de enviar
+`grant.scope_mode`. `restricted` es el valor predeterminado: conserva las rutas
+actuales (o las rutas explícitas). `connection` sigue el alcance vigente y futuras
+ampliaciones aprobadas; requiere solicitud explícita del dueño, sin `rules`.
+No convertir permisos existentes a connection automáticamente. El permiso de
+propietario conservado sigue la política vigente, pero su revocación, contextos
+y capacidades siguen aplicando. FTP permissions modifica la audiencia general
+sin borrar permisos específicos; para «solo dueño» revisar y revocar únicamente
+las concesiones incompatibles autorizadas por el usuario.

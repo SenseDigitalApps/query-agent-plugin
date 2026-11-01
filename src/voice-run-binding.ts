@@ -31,6 +31,7 @@ export const VOICE_ALLOWED_QUERY_TOOLS: ReadonlySet<string> = new Set([
   "query_record_delete_propose",
   "query_records_propose_batch",
   "query_api_plan_propose",
+  "query_api_read",
   "query_imports_status",
   // Core restricts voice to existing IMAP connections: discover/read/status only.
   "query_api_request",
