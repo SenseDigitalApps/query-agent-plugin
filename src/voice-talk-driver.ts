@@ -46,7 +46,7 @@ export type GatewayTalkDriverDeps = {
   registry: VoiceRunRegistry;
   /** coreHost: the tenant API host Core reports in the start request. */
   resolveTarget: (scope: VoiceScope, coreHost?: string) => VoiceCallTarget | undefined;
-  /** Live calls allowed on this Gateway at once; GPT-Live caps at 8. */
+  /** Optional local cap on live calls; 0 or absent = no cap (the provider may still refuse). */
   maxConcurrentCalls?: number;
   oauthOnly: (target: VoiceCallTarget) => OAuthOnlyVerdict;
   claimDelegation: (scope: VoiceScope, target: VoiceCallTarget, claim: VoiceDelegationClaim) => Promise<VoiceDelegationResult>;
@@ -96,7 +96,9 @@ export class GatewayTalkDriver implements QueryTalkDriver {
   async start(scope: VoiceScope, payload: Payload, emit: Emit): Promise<VoiceEffectiveRoute> {
     if (!isRequestedOAuthRoute(payload)) throw Error("unsupported_voice_route");
     const live = [...this.calls.values()].filter(call => !call.ended).length;
-    if (live >= (this.deps.maxConcurrentCalls ?? 6)) throw Error("voice_capacity_full");
+    // Sin tope por defecto (Juli, 2026-11-02); 0 o ausente = sin límite local.
+    const max = this.deps.maxConcurrentCalls ?? 0;
+    if (max > 0 && live >= max) throw Error("voice_capacity_full");
     const target = this.deps.resolveTarget(scope, typeof payload.core_host === "string" ? payload.core_host : undefined);
     if (!target) throw Error("voice_account_unmapped");
     const verdict = this.deps.oauthOnly(target);

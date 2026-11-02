@@ -148,10 +148,9 @@
               },
               "maxConcurrentCalls": {
                 "type": "integer",
-                "minimum": 1,
-                "maximum": 8,
-                "default": 6,
-                "description": "Llamadas de voz simultáneas en este Gateway (GPT-Live admite 8)."
+                "minimum": 0,
+                "default": 0,
+                "description": "Tope opcional de llamadas de voz simultáneas en este Gateway; 0 = sin tope."
               },
               "routes": {
                 "type": "array",

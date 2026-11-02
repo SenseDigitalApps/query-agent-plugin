@@ -152,6 +152,14 @@ it("refuses before creating a session when the Gateway's voice lines are full", 
   expect(request.mock.calls.filter(([method]) => method === "talk.client.create")).toHaveLength(1);
 });
 
+it("has no local cap on live calls by default", async () => {
+  const {driver, request, emit} = setup({resolveTarget: (s: VoiceScope) => ({...target, sessionKey: `agent:ventas:query:direct:${s.thread_id}`})});
+  for (let i = 0; i < 9; i++) {
+    await driver.start({...scope, call_id: `5b4bd1f9-4a43-4f7e-8f6a-9c38b7fd7f${i.toString(16).padStart(2, "0")}`, user_id: 100 + i, thread_id: 200 + i}, payload, emit);
+  }
+  expect(request.mock.calls.filter(([method]) => method === "talk.client.create")).toHaveLength(9);
+});
+
 it("passes Core's tenant host to the account resolver", async () => {
   const resolveTarget = vi.fn(() => target);
   const {driver, emit} = setup({resolveTarget});
