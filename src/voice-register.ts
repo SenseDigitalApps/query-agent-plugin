@@ -16,6 +16,7 @@ import { GatewayClient } from "openclaw/plugin-sdk/gateway-runtime";
 import { isProviderAuthProfileConfigured } from "openclaw/plugin-sdk/provider-auth";
 import { resolveAgentDir } from "openclaw/plugin-sdk/agent-runtime";
 import { join } from "node:path";
+import { AsyncLocalStorage } from "node:async_hooks";
 import { homedir } from "node:os";
 import { getQueryRuntime } from "./runtime.js";
 import type { QueryConfig } from "./types.js";
@@ -104,6 +105,10 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
   let driver: GatewayTalkDriver | undefined;
   let handler: ReturnType<typeof voiceBridgeHandler> | undefined;
   let deviceLabel = "";
+  // Async context of this plugin's own Gateway connection. A call can end inside
+  // Core's HTTP close request; once that request finishes, work started from its
+  // context is refused as "draining". The post-call summary runs here instead.
+  let outsideRequest: (<R>(fn: () => R) => R) | undefined;
   const initialize = () => {
     if (client) return;
     const stateDir = process.env.OPENCLAW_STATE_DIR?.trim() || join(homedir(), ".openclaw");
@@ -126,7 +131,7 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
       clientName: "gateway-client",
       mode: "ui",
       onEvent: frame => driver?.handleGatewayEvent(frame as {event: string; payload?: unknown}),
-      onHelloOk: () => api.logger.info(`query_voice_gateway_connected device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`),
+      onHelloOk: () => { outsideRequest = AsyncLocalStorage.snapshot(); api.logger.info(`query_voice_gateway_connected device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`); },
       onClose: () => driver?.handleGatewayClosed(),
       // Pending approval shows up here; never log the error body (it may carry tokens).
       onConnectError: () => api.logger.warn(`query_voice_gateway_connect_pending device=${identity.deviceId.slice(0, 12)}`),
@@ -151,7 +156,8 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
         });
       },
       claimDelegation: (scope, target, claim) => claimDelegation(scope, target, claim, bridgeToken),
-      onCallEnded: info => summarizeEndedCall(info, {
+      log: message => api.logger.info(message),
+      onCallEnded: info => new Promise<void>(resolve => setTimeout(resolve, 1500)).then(() => (outsideRequest ?? (fn => fn()))(() => summarizeEndedCall(info, {
         runAgent: (ended, prompt) => runCallSummaryAgent(cfg, ended, prompt),
         post: async (ended, text) => {
           const { sendOutboundEvent } = await import("./channel.js");
@@ -159,7 +165,7 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
             data: {voice_call_summary: ended.scope.call_id}});
         },
         log: message => api.logger.info(message),
-      }).then(() => undefined, error => api.logger.warn(`query_voice_summary_failed call=${info.scope.call_id} error=${String(error).slice(0, 200)}`)),
+      }))).then(() => undefined, error => api.logger.warn(`query_voice_summary_failed call=${info.scope.call_id} error=${String(error).slice(0, 200)}`)),
     });
     const journal = voice.journalDir?.trim() || join(stateDir, "query-voice-journal");
     const bridge = new QueryVoiceBridge(journal, driver);

@@ -54,6 +54,7 @@ export type GatewayTalkDriverDeps = {
   now?: () => number;
   /** Called once per call after it ends, with its final transcript. Errors are ignored. */
   onCallEnded?: (info: VoiceCallEnded) => void | Promise<void>;
+  log?: (message: string) => void;
 };
 
 type ActiveCall = {
@@ -128,6 +129,7 @@ export class GatewayTalkDriver implements QueryTalkDriver {
       },
     });
     const initialContext = payload.initial_context;
+    this.deps.log?.(`query_voice_call_start call=${scope.call_id} initial_context_chars=${typeof initialContext === "string" ? initialContext.length : 0}`);
     if (initialContext !== undefined &&
         (typeof initialContext !== "string" || initialContext.length > 6000)) {
       this.deps.registry.unregisterCall(scope.call_id);
