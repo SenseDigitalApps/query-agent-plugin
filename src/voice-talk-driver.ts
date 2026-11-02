@@ -52,6 +52,8 @@ export type GatewayTalkDriverDeps = {
   claimDelegation: (scope: VoiceScope, target: VoiceCallTarget, claim: VoiceDelegationClaim) => Promise<VoiceDelegationResult>;
   leaseMs?: number;
   now?: () => number;
+  /** Called once per call after it ends, with its final transcript. Errors are ignored. */
+  onCallEnded?: (info: VoiceCallEnded) => void | Promise<void>;
 };
 
 type ActiveCall = {
@@ -66,8 +68,13 @@ type ActiveCall = {
   speaking: Set<string>;
   heard: Set<string>;
   transcriptTimes: Map<string, string>;
+  /** Final transcript lines, in order, for the post-call summary. */
+  transcript: Map<string, VoiceTranscriptLine>;
   ended: boolean;
 };
+
+export type VoiceTranscriptLine = {role: "user" | "assistant"; text: string};
+export type VoiceCallEnded = {scope: VoiceScope; target: VoiceCallTarget; reason: string; transcript: VoiceTranscriptLine[]};
 
 const OFFER_PATH = "/plugins/openai/realtime/calls";
 const shortId = (value: string) => value.length <= 120 ? value : createHash("sha256").update(value).digest("hex");
@@ -162,7 +169,7 @@ export class GatewayTalkDriver implements QueryTalkDriver {
     const graceMs = Number(payload.presence_grace_seconds ?? 30) * 1000;
     const call: ActiveCall = {
       scope, target, voiceSessionId: voiceSessionId!, clientSecret, offerExpiresAt: expires,
-      leaseUntil: this.now() + this.leaseMs, emit, speaking: new Set(), heard: new Set(), transcriptTimes: new Map(), ended: false,
+      leaseUntil: this.now() + this.leaseMs, emit, speaking: new Set(), heard: new Set(), transcriptTimes: new Map(), transcript: new Map(), ended: false,
       presence: new VoicePresenceGuard({
         inactivityMs, graceMs,
         onPrompt: (challengeId, deadline) => emit({event_id: shortId(`presence:${challengeId}`),
@@ -244,6 +251,7 @@ export class GatewayTalkDriver implements QueryTalkDriver {
         call.presence.activity();
         const item = str(talk.itemId) ?? id;
         if (!call.transcriptTimes.has(item)) call.transcriptTimes.set(item, new Date(this.now()).toISOString());
+        call.transcript.set(item, {role, text});
         // One writer: the item id is stable across Gateway replays.
         emit({type: "transcript.final", item_id: shortId(str(talk.itemId) ?? id), role, text, occurred_at: call.transcriptTimes.get(item)}, `final:${str(talk.itemId) ?? id}`);
         return;
@@ -299,6 +307,11 @@ export class GatewayTalkDriver implements QueryTalkDriver {
     } finally {
       call.emit({event_id: shortId(`ended:${callId}`), type: "call.ended", reason});
       this.calls.delete(callId);
+      const onEnded = this.deps.onCallEnded;
+      if (onEnded) {
+        const info = {scope: call.scope, target: call.target, reason, transcript: [...call.transcript.values()]};
+        Promise.resolve().then(() => onEnded(info)).catch(() => undefined);
+      }
     }
   }
 

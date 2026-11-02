@@ -201,3 +201,19 @@ it("rejects invalid or oversized context before provider creation", async () => 
     expect(request).not.toHaveBeenCalled();expect(registry.hasActiveCall(target.sessionKey)).toBe(false);
   }
 });
+
+it("hands the final transcript to onCallEnded once the call ends", async () => {
+  const ended: unknown[] = [];
+  const {driver, emit} = setup({onCallEnded: info => { ended.push(info); }});
+  await driver.start(scope, payload, emit);
+  const talk = (talkEvent: Record<string, unknown>) =>
+    driver.handleGatewayEvent({event: "talk.event", payload: {voiceSessionId: "vs-1", talkEvent}});
+  talk({id: "t1", type: "transcript.done", itemId: "i1", final: true, seq: 1, payload: {role: "user", text: "agenda la demo el jueves"}});
+  talk({id: "t1b", type: "transcript.done", itemId: "i1", final: true, seq: 2, payload: {role: "user", text: "agenda la demo el jueves"}});
+  talk({id: "t2", type: "transcript.done", itemId: "i2", final: true, seq: 3, payload: {role: "assistant", text: "Listo, queda el jueves"}});
+  await driver.control(scope, {kind: "close"});
+  await new Promise(resolve => setTimeout(resolve, 0));
+  expect(ended).toHaveLength(1);
+  expect(ended[0]).toMatchObject({reason: "client_close", scope: {call_id: scope.call_id},
+    transcript: [{role: "user", text: "agenda la demo el jueves"}, {role: "assistant", text: "Listo, queda el jueves"}]});
+});

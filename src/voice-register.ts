@@ -22,7 +22,9 @@ import type { QueryConfig } from "./types.js";
 import { QueryVoiceBridge, voiceBridgeHandler, type VoiceScope } from "./voice-bridge.js";
 import { checkVoiceOAuthOnly } from "./voice-route.js";
 import { voiceRuns, type VoiceDelegationResult } from "./voice-run-binding.js";
-import { GatewayTalkDriver } from "./voice-talk-driver.js";
+import { GatewayTalkDriver, type VoiceCallEnded } from "./voice-talk-driver.js";
+import { summarizeEndedCall } from "./voice-call-summary.js";
+import { resolveQueryAccount } from "./config.js";
 import { resolveVoiceTarget, type VoiceCallTarget, type VoiceRouteConfig } from "./voice-target.js";
 import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { voiceGatewayBootstrap } from "./voice-gateway-auth.js";
@@ -149,6 +151,15 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
         });
       },
       claimDelegation: (scope, target, claim) => claimDelegation(scope, target, claim, bridgeToken),
+      onCallEnded: info => summarizeEndedCall(info, {
+        runAgent: (ended, prompt) => runCallSummaryAgent(cfg, ended, prompt),
+        post: async (ended, text) => {
+          const { sendOutboundEvent } = await import("./channel.js");
+          await sendOutboundEvent({cfg, accountId: ended.target.accountId, to: String(ended.scope.thread_id), text,
+            data: {voice_call_summary: ended.scope.call_id}});
+        },
+        log: message => api.logger.info(message),
+      }).then(() => undefined, error => api.logger.warn(`query_voice_summary_failed call=${info.scope.call_id} error=${String(error).slice(0, 200)}`)),
     });
     const journal = voice.journalDir?.trim() || join(stateDir, "query-voice-journal");
     const bridge = new QueryVoiceBridge(journal, driver);
@@ -178,4 +189,20 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
   api.registerService({id: "query-voice-gateway", start, stop});
   api.on("gateway_start", start);
   api.on("gateway_stop", stop);
+}
+
+/** Runs the chat's own agent, without tools, over the call transcript. */
+async function runCallSummaryAgent(cfg: QueryConfig, info: VoiceCallEnded, prompt: string): Promise<string | undefined> {
+  const { dispatchQueryMessage } = await import("./inbound.js");
+  const account = resolveQueryAccount(cfg, info.target.accountId);
+  const threadId = String(info.scope.thread_id);
+  const result = await dispatchQueryMessage({
+    cfg, account, threadId, toolsAllow: [],
+    event: {
+      type: "message", role: "user", content: prompt,
+      client_msg_id: `voice-summary-${info.scope.call_id}`, thread_id: threadId,
+      data: {thread_id: threadId, thread_type: "private", sender: {id: info.scope.user_id, type: "member"}},
+    },
+  });
+  return result.text;
 }
