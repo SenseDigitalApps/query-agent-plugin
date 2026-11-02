@@ -24,7 +24,7 @@ import { checkVoiceOAuthOnly } from "./voice-route.js";
 import { voiceRuns, type VoiceDelegationResult } from "./voice-run-binding.js";
 import { GatewayTalkDriver } from "./voice-talk-driver.js";
 import { resolveVoiceTarget, type VoiceCallTarget, type VoiceRouteConfig } from "./voice-target.js";
-import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/config-runtime";
+import { getRuntimeConfigSnapshot } from "openclaw/plugin-sdk/runtime-config-snapshot";
 import { voiceGatewayBootstrap } from "./voice-gateway-auth.js";
 import { VOICE_OPERATOR_ROLE, VOICE_OPERATOR_SCOPES, VoiceOperatorDevice } from "./voice-device.js";
 

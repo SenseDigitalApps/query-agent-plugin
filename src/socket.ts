@@ -313,6 +313,7 @@ export class QuerySocketMonitor {
     this.stopping = true;
     this.socket?.close(1000, "El agente se está deteniendo");
     await this.runTask;
+    this.patchStatus({ running: false, connected: false, lifecycle: "stopped" });
   }
 
   sendOutboundEvent(event: QueryOutboundEvent): void {
@@ -335,7 +336,7 @@ export class QuerySocketMonitor {
         this.options.log?.warn?.(
           `[${this.options.account.accountId}] Query socket disconnected: ${String(error)}; reconnecting in ${delay}ms`,
         );
-        this.patchStatus({ running: false, lastError: String(error) });
+        this.patchStatus({ running: false, connected: false, lifecycle: "recovering", lastError: String(error) });
         await wait(delay, this.options.abortSignal);
       }
     }
@@ -392,6 +393,7 @@ export class QuerySocketMonitor {
       });
       socket.on("pong", () => {
         lastPongAt = Date.now();
+        this.patchStatus({ lastTransportActivityAt: lastPongAt });
       });
       socket.on("message", (data) => {
         void this.handleRawMessage(toText(data)).catch((error) => {
@@ -433,7 +435,11 @@ export class QuerySocketMonitor {
       this.options.log?.info?.(
         `[${this.options.account.accountId}] connected to Query`,
       );
-      this.patchStatus({ running: true, lastError: undefined });
+      this.patchStatus({
+        running: true, connected: true, lifecycle: "ready",
+        lastConnectedAt: Date.now(), lastEventAt: Date.now(),
+        lastTransportActivityAt: Date.now(), lastError: null,
+      });
       this.adminEnabled = (event.data as unknown as Record<string, unknown>).schedule_administration_version === 1;
       this.adminPollAt = 0;
       this.pollAdministration();

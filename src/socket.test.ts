@@ -902,6 +902,7 @@ describe("QuerySocketMonitor", () => {
     await monitor.start();
     await waitFor(() => (status as { running?: boolean }).running === false);
     expect((status as { lastError?: string }).lastError).toContain("4401");
+    expect(status).toMatchObject({ connected: false, lifecycle: "recovering" });
 
     controller.abort();
     await monitor.stop();
@@ -962,15 +963,18 @@ describe("QuerySocketMonitor", () => {
 
     await monitor.start();
     await waitFor(() => (status as { running?: boolean }).running === true);
+    expect(status).toMatchObject({ connected: true, lifecycle: "ready", lastError: null });
     // Daphne cierra con 1000 al reiniciarse: para el plugin es una caida.
     sockets[0].close(1000, "server restart");
 
     await waitFor(() => sockets.length === 2);
     expect(runningStates).toContain(false);
     await waitFor(() => (status as { running?: boolean }).running === true);
+    expect(status).toMatchObject({ connected: true, lifecycle: "ready", lastError: null });
 
     controller.abort();
     await monitor.stop();
+    expect(status).toMatchObject({ connected: false, lifecycle: "stopped" });
   });
 
   it("replays a cached terminal response after the socket drops mid-turn", async () => {
