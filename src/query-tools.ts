@@ -26,6 +26,7 @@ import {
   isLocalArtifactPath,
   QueryUploadError,
   queryUploadUrlFor,
+  setQueryArtifactPinned,
   uploadArtifactToQuery,
 } from "./query-upload.js";
 
@@ -307,6 +308,7 @@ export async function uploadQueryAttachmentForThread(params: {
   name?: string;
   mimeType?: string;
   kind?: string;
+  persistent?: boolean;
   log: QueryToolLog;
 }): Promise<unknown> {
   const threadId = attachmentThreadId(params.threadId);
@@ -339,6 +341,7 @@ export async function uploadQueryAttachmentForThread(params: {
         ...(params.mimeType?.trim() ? { mime_type: params.mimeType.trim() } : {}),
         ...(params.kind?.trim() ? { kind: params.kind.trim() } : {}),
       },
+      ...(params.persistent ? { pinned: true } : {}),
     });
     return {
       ok: true,
@@ -363,6 +366,52 @@ export async function uploadQueryAttachmentForThread(params: {
       ok: false,
       error: error instanceof QueryUploadError ? error.code : "upload_failed",
       detail: "Query no pudo subir el archivo. No compartas la ruta local; informa el fallo en texto.",
+    };
+  }
+}
+
+/** Fija un adjunto del hilo (no vence) o le da una vigencia más larga. */
+export async function retainQueryAttachmentForThread(params: {
+  threadId?: string;
+  attachmentId: number;
+  persistent?: boolean;
+  days?: number;
+  log: QueryToolLog;
+}): Promise<unknown> {
+  const threadId = attachmentThreadId(params.threadId);
+  if (!threadId) {
+    return { ok: false, error: "thread_required", detail: "Indica thread_id." };
+  }
+  const persistent = params.persistent ?? params.days === undefined;
+  if (!persistent && (params.days === undefined || params.days < 1 || params.days > 365)) {
+    return { ok: false, error: "invalid_retain_days", detail: "days debe estar entre 1 y 365, o usa persistent=true." };
+  }
+  const stored = await delegatedAuthForTool(threadId, "query_attachment_retain", params.log);
+  if (!stored) return noCredential();
+  try {
+    const attachment = await setQueryArtifactPinned({
+      uploadUrl: queryUploadUrlFor(stored.socketUrl, threadId),
+      attachmentId: params.attachmentId,
+      token: stored.auth.token,
+      pinned: persistent,
+      ...(persistent ? {} : { retainDays: params.days }),
+    });
+    return {
+      ok: true,
+      thread_id: threadId,
+      attachment_id: params.attachmentId,
+      persistent: Boolean((attachment as { is_pinned?: boolean }).is_pinned),
+      expires_at: (attachment as { expires_at?: string | null }).expires_at ?? null,
+    };
+  } catch (error) {
+    const code = error instanceof QueryUploadError ? error.code : "retain_failed";
+    params.log.warn(`query_attachment_retain_failed thread_id=${JSON.stringify(threadId)} error=${code}`);
+    return {
+      ok: false,
+      error: code,
+      detail: code === "attachment_not_found"
+        ? "Ese adjunto no existe en este hilo o ya venció; no se puede recuperar desde aquí."
+        : "Query no pudo cambiar la vigencia del adjunto.",
     };
   }
 }
@@ -1009,9 +1058,15 @@ export default defineToolPlugin({
         kind: Type.Optional(
           Type.String({ description: "Tipo opcional: file, image, audio o video." }),
         ),
+        persistent: Type.Optional(
+          Type.Boolean({
+            description:
+              "true fija el adjunto en Query: no vence. Úsalo solo si la persona pide conservarlo o es un entregable que debe permanecer; por defecto vence a los 8 días sin uso.",
+          }),
+        ),
       }),
       execute: async (
-        { file_path, thread_id, message, name, mime_type, kind },
+        { file_path, thread_id, message, name, mime_type, kind, persistent },
         _config,
         context,
       ) =>
@@ -1022,6 +1077,30 @@ export default defineToolPlugin({
           name,
           mimeType: mime_type,
           kind,
+          persistent,
+          log: context.api.logger,
+        }),
+    }),
+    tool({
+      name: "query_attachment_retain",
+      label: "Query: conservar adjunto",
+      description:
+        "Cambia la vigencia de un adjunto ya enviado en ESTE hilo de Query. Por defecto los adjuntos del agente vencen a los 8 días sin uso y se borran. " +
+        "persistent=true lo fija y no vence nunca; days=N (1-365) le da N días desde hoy sin fijarlo; persistent=false sin days lo devuelve a la vigencia normal. " +
+        "Usalo cuando la persona pida que un archivo no se borre o dure más. La vigencia vive en Query, no en el servidor del agente: storage_lifecycle no sirve para esto. " +
+        "Un adjunto ya vencido no se puede recuperar con esta herramienta.",
+      parameters: Type.Object({
+        attachment_id: Type.Integer({ minimum: 1, description: "ID del adjunto en Query (attachment.id que devolvió query_attachment_send)." }),
+        persistent: Type.Optional(Type.Boolean({ description: "true: no vence nunca. false: vigencia normal o la de days." })),
+        days: Type.Optional(Type.Integer({ minimum: 1, maximum: 365, description: "Días de vigencia desde hoy, sin fijarlo." })),
+        thread_id: Type.Optional(THREAD_PARAM),
+      }),
+      execute: async ({ attachment_id, persistent, days, thread_id }, _config, context) =>
+        retainQueryAttachmentForThread({
+          threadId: thread_id,
+          attachmentId: attachment_id,
+          persistent,
+          days,
           log: context.api.logger,
         }),
     }),

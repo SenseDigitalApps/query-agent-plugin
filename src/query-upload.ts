@@ -134,6 +134,8 @@ export async function setQueryArtifactPinned(params: {
   attachmentId: string | number;
   token: string;
   pinned: boolean;
+  /** Sin fijar: días de vigencia (1-365) en vez de los 8 por defecto. */
+  retainDays?: number;
   tokenHeader?: string;
   extraFields?: Record<string, string>;
   fetchImpl?: typeof fetch;
@@ -149,7 +151,11 @@ export async function setQueryArtifactPinned(params: {
         "content-type": "application/json",
         [params.tokenHeader ?? "X-Query-Delegated-Token"]: params.token,
       },
-      body: JSON.stringify({ pinned: params.pinned, ...(params.extraFields ?? {}) }),
+      body: JSON.stringify({
+        pinned: params.pinned,
+        ...(params.retainDays !== undefined ? { retain_days: params.retainDays } : {}),
+        ...(params.extraFields ?? {}),
+      }),
     },
   );
   if (!response.ok) {

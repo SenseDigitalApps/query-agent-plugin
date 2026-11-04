@@ -233,6 +233,27 @@ describe("uploadArtifactToQuery", () => {
     expect(attachment.expires_at).toBeNull();
   });
 
+  it("extends retention without pinning when retainDays is given", async () => {
+    const fetchImpl = vi.fn(async () =>
+      new Response(
+        JSON.stringify({ id: 45, kind: "file", name: "c.pdf", mime_type: "application/pdf", size: 1,
+          url: "https://q.test/media/c.pdf", is_pinned: false, expires_at: "2027-02-01T00:00:00Z" }),
+        { status: 200, headers: { "content-type": "application/json" } },
+      ),
+    );
+    const attachment = await setQueryArtifactPinned({
+      uploadUrl: "https://q.test/api/v4/openclaw-agent/threads/5/attachments/",
+      attachmentId: 45,
+      token: "delegado",
+      pinned: false,
+      retainDays: 90,
+      fetchImpl: fetchImpl as unknown as typeof fetch,
+    });
+    const [, init] = fetchImpl.mock.calls[0] as [string, RequestInit];
+    expect(JSON.parse(init.body as string)).toEqual({ pinned: false, retain_days: 90 });
+    expect(attachment.is_pinned).toBe(false);
+  });
+
   it("flags an expired credential so the caller can renew and retry", async () => {
     const path = await writeArtifact("late.html", "<p>tarde</p>");
     const fetchImpl = vi.fn(async () =>

@@ -322,6 +322,7 @@
       "query_cron_manage",
       "query_delivery_targets",
       "query_attachment_send",
+      "query_attachment_retain",
       "query_question_ask",
       "query_dashboard_publish",
       "query_dashboard_share",
