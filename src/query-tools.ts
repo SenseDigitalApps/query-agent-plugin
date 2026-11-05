@@ -370,6 +370,52 @@ export async function uploadQueryAttachmentForThread(params: {
   }
 }
 
+/** Publica un HTML como página persistente (no vence) con enlace público estable. */
+export async function publishQueryPageForThread(params: {
+  threadId?: string;
+  filePath?: string;
+  attachmentId?: number;
+  name: string;
+  slug?: string;
+  pageId?: number;
+  log: QueryToolLog;
+}): Promise<unknown> {
+  const threadId = attachmentThreadId(params.threadId);
+  if (!threadId) return { ok: false, error: "thread_required", detail: "Indica thread_id." };
+  let attachmentId = params.attachmentId;
+  if (!attachmentId) {
+    if (!params.filePath || !isLocalArtifactPath(params.filePath)) {
+      return { ok: false, error: "html_required", detail: "Indica file_path de un HTML local o attachment_id de un HTML del hilo." };
+    }
+    const stored = await delegatedAuthForTool(threadId, "query_page_publish", params.log);
+    if (!stored) return noCredential();
+    try {
+      const uploaded = await uploadArtifactToQuery({
+        uploadUrl: queryUploadUrlFor(stored.socketUrl, threadId),
+        token: stored.auth.token,
+        path: params.filePath,
+        attachment: { ...queryAttachmentForMediaUrl(params.filePath), mime_type: "text/html" },
+      });
+      attachmentId = Number(uploaded.id);
+    } catch (error) {
+      return { ok: false, error: error instanceof QueryUploadError ? error.code : "upload_failed",
+        detail: "Query no pudo recibir el HTML. No compartas la ruta local." };
+    }
+  }
+  return postQuery(
+    threadId,
+    `threads/${encodeURIComponent(threadId)}/pages/`,
+    {
+      attachment_id: attachmentId,
+      name: params.name,
+      ...(params.slug ? { slug: params.slug } : {}),
+      ...(params.pageId ? { page_id: params.pageId } : {}),
+    },
+    "query_page_publish",
+    params.log,
+  );
+}
+
 /** Fija un adjunto del hilo (no vence) o le da una vigencia más larga. */
 export async function retainQueryAttachmentForThread(params: {
   threadId?: string;
@@ -1082,6 +1128,34 @@ export default defineToolPlugin({
         }),
     }),
     tool({
+      name: "query_page_publish",
+      label: "Query: publicar página web",
+      description:
+        "Publica un HTML (formulario, micrositio, página informativa) como PÁGINA WEB PERSISTENTE de Query: no vence nunca, conserva su JavaScript y queda con enlace público estable /p/<slug>/. " +
+        "Úsala cuando la persona pida una página o formulario que deba seguir funcionando en el tiempo o compartirse por enlace (p. ej. reservas). " +
+        "Para un reporte o un archivo para descargar usa query_attachment_send; para un tablero con datos de Query que se actualiza solo usa query_dashboard_publish. " +
+        "Para actualizar una página existente envía page_id (mantiene el mismo enlace). El enlace es público: no publiques datos personales ni secretos. " +
+        "La página aparece en el menú 'Páginas web' del administrador para su autor y los administradores.",
+      parameters: Type.Object({
+        name: Type.String({ description: "Nombre visible de la página." }),
+        file_path: Type.Optional(Type.String({ description: "Ruta local absoluta del HTML generado." })),
+        attachment_id: Type.Optional(Type.Integer({ minimum: 1, description: "O bien el ID de un HTML ya enviado en este hilo." })),
+        slug: Type.Optional(Type.String({ description: "Nombre del enlace (letras, números y guiones). Opcional." })),
+        page_id: Type.Optional(Type.Integer({ minimum: 1, description: "Página existente a actualizar." })),
+        thread_id: Type.Optional(THREAD_PARAM),
+      }),
+      execute: async ({ name, file_path, attachment_id, slug, page_id, thread_id }, _config, context) =>
+        publishQueryPageForThread({
+          threadId: thread_id,
+          filePath: file_path,
+          attachmentId: attachment_id,
+          name,
+          slug,
+          pageId: page_id,
+          log: context.api.logger,
+        }),
+    }),
+    tool({
       name: "query_attachment_retain",
       label: "Query: conservar adjunto",
       description:
@@ -1118,7 +1192,7 @@ export default defineToolPlugin({
         "records_aggregate {module, metrics, group_by, filters, date_filters, time_granularity}; " +
         "records_query {module, filters, columns, sort, limit<=200} (mismos parametros que query_records_aggregate y query_records_search); " +
         "static {value} solo para metas o umbrales fijos. " +
-        "Fechas relativas en cualquier valor, resueltas al abrir: {{today}}, {{yesterday}}, {{start_of_week}}, {{start_of_month}}, {{end_of_month}}, {{start_of_last_month}}, {{end_of_last_month}}, {{start_of_year}}, {{end_of_year}}, {{days_ago_N}}, {{start_of_months_ago_N}}. Nunca escribas fechas fijas para 'este mes' o 'este anio'. " +
+        "Fechas relativas en cualquier valor, resueltas al abrir: {{today}}, {{yesterday}}, {{start_of_week}}, {{start_of_month}}, {{end_of_month}}, {{start_of_last_month}}, {{end_of_last_month}}, {{start_of_year}}, {{end_of_year}}, {{days_ago_N}}, {{start_of_months_ago_N}}. Filtros por quien abre el dashboard (cada persona ve lo suyo): {{me_id}} (id de usuario), {{me_username}}, {{me_email}}, {{me_name}} y {{me_<campo>}} con un campo personalizado de su perfil (p. ej. {{me_equipo}}). Se resuelven en el servidor con el usuario que abre, no son controles; si la persona no tiene el dato, la consulta queda vacía. Nunca escribas fechas fijas para 'este mes' o 'este anio'. " +
         "El HTML en vivo no puede contener datos: prefiere QueryDashboard.render(function (data) { var r = data.nombre; ... }), que corre al abrir y en cada Actualizar; QueryDashboard.query('nombre') solo para pedir una consulta suelta. " +
         "Tres estados distintos, nunca mezclados: cargando (antes de que llegue el resultado), error (QueryDashboard.state(r) === 'error': muestra qd-error con r.detail) y vacio (state 'empty': qd-empty). " +
         "QueryDashboard.rows(r) devuelve [] tambien cuando la consulta fallo: comprueba state u ok antes, o mostraras 'no hay datos' ante un error. " +
