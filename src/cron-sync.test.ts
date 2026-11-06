@@ -181,6 +181,23 @@ describe("Query cron sync", () => {
     expect(remove).toHaveBeenCalledWith("cron-cancel-1");
     hooks.get("gateway_stop")?.();
   });
+
+  it("re-acquires the scheduler on a plugin-only reload without gateway_start", async () => {
+    const { api } = fakeApi();
+    const services: Array<{ id: string; start: Hook }> = [];
+    const remove = vi.fn(async () => undefined);
+    registerQueryCronSync(
+      { ...api, registerService: (service: { id: string; start: Hook }) => services.push(service) } as never,
+      vi.fn(),
+    );
+    const service = services.find((entry) => entry.id === "query-cron-scheduler");
+    expect(service).toBeDefined();
+    await service!.start({ getCron: () => ({ remove, list: async () => [] }) });
+
+    await cancelQuerySchedules(["cron-after-reload"], api.logger);
+
+    expect(remove).toHaveBeenCalledWith("cron-after-reload");
+  });
 });
 
 describe("backfill de crones preexistentes", () => {

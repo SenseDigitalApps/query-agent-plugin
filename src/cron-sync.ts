@@ -771,6 +771,23 @@ export function registerQueryCronSync(
     cronService = context.getCron?.() as QueryCronService | undefined;
     await adoptExistingQueryCrons(api);
   });
+  // A plugin-only hot reload does not replay gateway_start; services do start on
+  // plugin replacement, so re-acquire the scheduler there and after scheduler reloads.
+  api.registerService?.({
+    id: "query-cron-scheduler",
+    start: async (context: { getCron?: () => unknown }) => {
+      const acquired = context?.getCron?.() as QueryCronService | undefined;
+      if (!acquired) return;
+      const hadService = Boolean(cronService);
+      cronService = acquired;
+      if (!hadService) await adoptExistingQueryCrons(api);
+    },
+    stop: () => {},
+  });
+  api.on("cron_reconciled", (_event, context) => {
+    const reconciled = context?.getCron?.() as QueryCronService | undefined;
+    if (reconciled) cronService = reconciled;
+  });
   api.on("gateway_stop", () => {
     cronService = undefined;
     syncedCrons.clear();
