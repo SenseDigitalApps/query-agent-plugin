@@ -1156,6 +1156,36 @@ export default defineToolPlugin({
         }),
     }),
     tool({
+      name: "query_custom_macros",
+      label: "Query: macros personalizadas",
+      description:
+        "Macros personalizadas de Query escritas en Query Script (subconjunto de Python), guardadas en el tenant y sin despliegue de codigo. " +
+        "action=list (macros y referencia del lenguaje/SDK), get (detalle y codigo de cada version), draft (guarda una version NUEVA sin publicarla; crea la macro si no existe con name/module), " +
+        "simulate (corre en simulacion: devuelve mensaje, plan de cambios y bitacora; nunca escribe), compare (corre una macro EXISTENTE en Python sobre el mismo registro dentro de una transaccion que se deshace y la compara campo por campo con la nueva en simulacion). " +
+        "La macro define def run(ctx): y usa solo funciones del SDK (registro_actual, leer_registro, buscar_registros, buscar_todos, agregar_registros, crear_registro(s), actualizar_registro, tabla, reemplazar_tabla, agregar_filas, sumar, hoy, sumar_dias, dias_entre, mensaje, progreso, fail). " +
+        "Lee primero action=list para ver la referencia completa. Antes de proponer publicar: simula con un registro real y, si existe una macro equivalente, usa compare hasta que coincidan. " +
+        "Publicar NO se hace aqui: proponlo con query_api_plan_propose (POST /api/v2/custom-macros/<slug>/publish/ con {version}); un administrador lo aprueba. Para usarla, la accion manual del modulo invoca custom:<slug>. " +
+        "draft, simulate de borradores y compare exigen que la persona del turno sea administrador maestro.",
+      parameters: Type.Object({
+        action: Type.Union([Type.Literal("list"), Type.Literal("get"), Type.Literal("draft"), Type.Literal("simulate"), Type.Literal("compare")]),
+        slug: Type.Optional(Type.String()),
+        name: Type.Optional(Type.String({ description: "Nombre visible al crear la macro (draft)." })),
+        module: Type.Optional(Type.String({ description: "Modulo de la macro al crearla, o del registro." })),
+        description: Type.Optional(Type.String()),
+        source: Type.Optional(Type.String({ description: "Codigo Query Script completo (draft)." })),
+        notes: Type.Optional(Type.String({ description: "Que cambia en esta version (draft)." })),
+        version: Type.Optional(Type.Integer({ minimum: 1, description: "Version a simular/comparar; por defecto la publicada." })),
+        record_id: Type.Optional(Type.Integer({ minimum: 1 })),
+        legacy_macro: Type.Optional(Type.String({ description: "Nombre de la macro existente de referencia (compare)." })),
+        thread_id: Type.Optional(THREAD_PARAM),
+      }),
+      execute: async ({ thread_id, ...body }, _config, context) => {
+        const threadId = attachmentThreadId(thread_id);
+        if (!threadId) return { ok: false, error: "thread_required", detail: "Indica thread_id." };
+        return postQuery(threadId, `threads/${encodeURIComponent(threadId)}/custom-macros/`, body, "query_custom_macros", context.api.logger);
+      },
+    }),
+    tool({
       name: "query_attachment_retain",
       label: "Query: conservar adjunto",
       description:
