@@ -1918,7 +1918,7 @@ export default defineToolPlugin({
       name: "query_meeting_summary_save",
       label: "Query: guardar resumen de reunion",
       description:
-        "Guarda el resumen, las decisiones y las tareas propuestas de una reunion. Solo lo acepta el agente con el que entro el bot a esa reunion, cuando Query se lo pide al terminar. Cita el minuto de cada decision y tarea. Guardar el resumen NO crea tareas: despues proponlas con query_records_propose_batch en el modulo de tareas (y pasa los action_id en proposal_action_ids si vuelves a guardar) para que una persona las apruebe.",
+        "Guarda el resumen, las decisiones y las tareas propuestas de una reunion. Solo lo acepta el agente con el que entro el bot a esa reunion, cuando Query se lo pide al terminar. Cita el minuto de cada decision y tarea. Guardar el resumen NO crea tareas: antes proponlas con query_records_propose_batch en el modulo de tareas y pasa aqui sus action_id en proposal_action_ids, para que una persona las apruebe desde el chat o desde el detalle de la reunion.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         meeting_id: Type.Integer({ description: "Id de la reunion." }),

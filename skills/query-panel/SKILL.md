@@ -560,12 +560,12 @@ ti (ni como cantidad).
 Cuando Query te pide el resumen de una reunion que termino (mensaje
 `[Reuniones]` en el chat privado de la persona organizadora):
 
-- Lee la reunion y la transcripcion por partes; guarda resumen, decisiones y
-  tareas propuestas con `query_meeting_summary_save`, citando minutos.
+- Lee la reunion y la transcripcion por partes.
 - Propon las tareas con `query_records_propose_batch` en el modulo de tareas
   (descubrelo con `query_modules_list` si no te lo indican). No las crees: una
-  persona las aprueba en las tarjetas. Si vuelves a guardar el resumen, pasa los
-  `action_id` en `proposal_action_ids`.
+  persona las aprueba en las tarjetas.
+- Guarda resumen, decisiones y tareas con `query_meeting_summary_save`, citando
+  minutos y pasando los `action_id` de esas propuestas en `proposal_action_ids`.
 - No hay un chat por reunion: las preguntas sobre reuniones llegan por aqui.
 
 ## Diseno de todo HTML con datos
