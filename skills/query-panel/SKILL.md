@@ -421,6 +421,22 @@ Excel/PDF/imagen ni cambies solo su extensión. Consulta datos ambiguos o
 faltantes; no inventes ni omitas información silenciosamente. Explica las
 transformaciones relevantes antes de que la persona apruebe la tarjeta visual.
 
+Para **actualizar 51 o más registros existentes** también usa el importador:
+incluye en el CSV una columna clave que identifique un solo registro (por
+ejemplo documento o código) y pasa su slug en `match_by`. Las filas que
+coinciden actualizan ese registro solo en las celdas con valor (las vacías
+conservan lo guardado); las que no coinciden se crean. Los registros cerrados no
+se actualizan. Sin `match_by` todas las filas se crean. Para 50 o menos
+actualizaciones sigue usando `query_records_propose_batch`.
+
+**Repetidores en el CSV:** una columna por cada columna del repetidor con
+encabezado `repetidor.columna` (slugs) y una línea por cada fila del repetidor.
+Las líneas consecutivas del mismo registro (misma clave, mismos datos del
+registro o datos del registro vacíos) forman un solo registro. Al actualizar,
+las filas del archivo reemplazan las guardadas del repetidor; un registro sin
+líneas de repetidor conserva las suyas. Revisa los slugs del repetidor y sus
+columnas con `query_module_describe`.
+
 No dividas más de 50 altas en propuestas pequeñas para evitar el importador.
 Cada importación admite 5000 filas / 5 MB: divide cargas mayores en archivos
 normalizados y mantén todos sus bloques en el importador, incluido un último
