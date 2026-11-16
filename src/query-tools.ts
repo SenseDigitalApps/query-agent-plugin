@@ -781,12 +781,12 @@ export function repairQueryActionStorageForThread(
 }
 
 export function proposeQueryImportForThread(
-  params: { threadId: string; module: string; attachmentId: number; mapping?: Record<string, string | null>; intent?: string },
+  params: { threadId: string; module: string; attachmentId: number; mapping?: Record<string, string | null>; matchBy?: string; intent?: string },
   log: QueryToolLog,
 ): Promise<unknown> {
   return postQuery(params.threadId,
     `modules/${encodeURIComponent(params.module)}/imports/propose/`,
-    { attachment_id: params.attachmentId, mapping: params.mapping ?? {}, intent: params.intent },
+    { attachment_id: params.attachmentId, mapping: params.mapping ?? {}, ...(params.matchBy ? { match_by: params.matchBy } : {}), intent: params.intent },
     "query_imports_propose", log);
 }
 
@@ -1815,16 +1815,17 @@ export default defineToolPlugin({
     tool({
       name: "query_imports_propose",
       label: "Query: preparar importacion masiva",
-      description: "Crear 51 o mas registros por modulo, sin importar la fuente original (texto, CSV, Excel, PDF o imagen). Primero interpreta la fuente completa y normaliza los datos segun query_module_describe; consulta ambiguedades, no inventes valores. Genera un CSV UTF-8 con slugs, fechas ISO y referencias existentes, subelo al mismo hilo con query_attachment_send y usa el attachment_id devuelto, nunca el ID del Excel/PDF/imagen original. Para 1 alta usa query_record_propose; para 2 a 50 usa query_records_propose_batch. Cada importacion admite 5000 filas/5 MB; divide cargas mayores en archivos de importacion (tambien el ultimo bloque pequeno). Siempre requiere aprobacion visual humana. Reutiliza action_id si duplicate=true; no recrees las filas con otras herramientas al reintentar.",
+      description: "Crear 51 o mas registros por modulo, sin importar la fuente original (texto, CSV, Excel, PDF o imagen). Primero interpreta la fuente completa y normaliza los datos segun query_module_describe; consulta ambiguedades, no inventes valores. Genera un CSV UTF-8 con slugs, fechas ISO y referencias existentes, subelo al mismo hilo con query_attachment_send y usa el attachment_id devuelto, nunca el ID del Excel/PDF/imagen original. Para 1 alta usa query_record_propose; para 2 a 50 usa query_records_propose_batch. Para actualizar registros existentes (51 o mas), incluye en el CSV una columna clave que identifique uno solo (p. ej. documento o codigo) y pasa su slug en match_by: las filas que coinciden actualizan ese registro (solo las celdas con valor; las vacias conservan lo guardado) y las demas se crean; los registros cerrados no se actualizan. Repetidores: una columna por cada columna del repetidor con encabezado repetidor.columna (slugs) y una linea por cada fila del repetidor; las lineas consecutivas del mismo registro (misma clave, o mismos datos del registro, o datos del registro vacios) forman un solo registro. Al actualizar, las filas del archivo reemplazan las guardadas; un registro sin lineas de repetidor conserva las suyas. Cada importacion admite 5000 filas/5 MB; divide cargas mayores en archivos de importacion (tambien el ultimo bloque pequeno). Siempre requiere aprobacion visual humana. Reutiliza action_id si duplicate=true; no recrees las filas con otras herramientas al reintentar.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         module: Type.String(),
         attachment_id: Type.Integer({ minimum: 1, description: "ID del CSV normalizado subido al hilo." }),
         mapping: Type.Optional(Type.Record(Type.String(), Type.Union([Type.String(), Type.Null()]))),
+        match_by: Type.Optional(Type.String({ description: "Slug del campo (texto o numero, importado en el CSV) que identifica el registro existente a actualizar. Sin el, todo se crea." })),
         intent: Type.Optional(Type.String({ description: "Objetivo y transformaciones relevantes para quien revisa." })),
       }),
-      execute: async ({ thread_id, module, attachment_id, mapping, intent }, _config, context) =>
-        proposeQueryImportForThread({ threadId: thread_id, module, attachmentId: attachment_id, mapping, intent }, context.api.logger),
+      execute: async ({ thread_id, module, attachment_id, mapping, match_by, intent }, _config, context) =>
+        proposeQueryImportForThread({ threadId: thread_id, module, attachmentId: attachment_id, mapping, matchBy: match_by, intent }, context.api.logger),
     }),
     tool({
       name: "query_imports_status",

@@ -82,6 +82,15 @@ describe("reviewed imports", () => {
     expect(url).toBe("https://query.test/api/v4/openclaw-agent/modules/clientes/imports/propose/");
     expect(JSON.parse(String(options.body))).toEqual({ attachment_id: 123, mapping: { Nombre: "nombre", Nota: null } });
   });
+  it("sends the key column only when the import updates existing records", async () => {
+    rememberDelegatedAuth("thread-import", { token: "import-token", expires_in: 900 }, "wss://query.test/ws/openclaw-agent/8/", "message-import");
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 201, json: async () => ({ action_id: "proposal", requires_confirmation: true }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+    await proposeQueryImportForThread({ threadId: "thread-import", module: "clientes", attachmentId: 123, matchBy: "documento" }, log);
+    const [, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(JSON.parse(String(options.body))).toEqual({ attachment_id: 123, mapping: {}, match_by: "documento" });
+  });
   it("preserves queued status rather than reporting completion", async () => {
     rememberDelegatedAuth("thread-import", { token: "import-token", expires_in: 900 }, "wss://query.test/ws/openclaw-agent/8/", "message-import");
     const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ status: "queued", import_result: { created: 0 } }) }));
