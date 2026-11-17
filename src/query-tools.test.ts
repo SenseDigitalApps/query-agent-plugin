@@ -27,6 +27,8 @@ import {
   proposeQueryImportForThread,
   queryImportStatusForThread,
   repairQueryActionStorageForThread,
+  RECORD_ASSET_GUIDANCE,
+  containsRecordAssetReference,
 } from "./query-tools.js";
 
 let stateDirectory: string;
@@ -603,6 +605,21 @@ describe("record asset backend compatibility", () => {
     expect(await postQuery("thread-asset", "modules/reports/records/9/propose/", { fields }, "query_record_propose", log)).toMatchObject({ requires_confirmation: true });
     expect(fetchMock).toHaveBeenCalledTimes(2);
     expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ fields });
+  });
+  it("checks support before posting references inside repeater rows", async () => {
+    const fetchMock = vi.fn().mockResolvedValueOnce({ ok: true, json: async () => ({ record_asset_references: true }) })
+      .mockResolvedValueOnce({ ok: true, json: async () => ({ requires_confirmation: true }) });
+    vi.stubGlobal("fetch", fetchMock);
+    const fields = { rep_adjuntos: [{ file_adjunto: "/media/register_files/a.pdf" }, { file_adjunto: { attachment_id: 7827 } }] };
+    expect(containsRecordAssetReference({ fields })).toBe(true);
+    await postQuery("thread-asset", "modules/gastos/records/9/propose/", { fields }, "query_record_propose", log);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+    expect(JSON.parse(fetchMock.mock.calls[1][1].body)).toEqual({ fields });
+  });
+  it("tells the agent how to use repeaters and to verify every cell", () => {
+    expect(RECORD_ASSET_GUIDANCE).toContain("slug_repetidor: [{columna: {attachment_id: ID}");
+    expect(RECORD_ASSET_GUIDANCE).toContain("status=executed no basta");
+    expect(RECORD_ASSET_GUIDANCE).toContain("cada celda");
   });
   it("does not add an extra call for ordinary proposals", async () => {
     const fetchMock = vi.fn(async () => ({ ok: true, json: async () => ({ requires_confirmation: true }) }));

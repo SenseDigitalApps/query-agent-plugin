@@ -194,7 +194,11 @@ registro. `query_module_describe` debe devolver `record_asset_references=true`;
 si falta, el backend requiere actualizarse y no debes enviar la referencia.
 Usa `query_record_propose` (o lote) con
 `fields: {"slug_real": {"attachment_id": 123}}`. El ID debe ser de un adjunto
-del mismo hilo; nunca lo inventes. Para archivos locales, subelos primero con
+del mismo hilo donde propones; un adjunto de otro canal se rechaza. Nunca lo inventes.
+En una tabla repetible, la referencia va en la columna `file`/`image` de cada
+fila: `fields: {"rep_adjuntos": [{"file_adjunto": {"attachment_id": 123}},
+{"file_adjunto": "/media/.../register_files/ya_guardado.pdf", "descripcion": "..."}]}`.
+Envia la tabla completa: las filas que ya existen van tal como estan. Para archivos locales, subelos primero con
 `query_attachment_send` y usa el ID de su respuesta. No incluyas rutas locales
 ni URLs temporales `/assets/` o `agent_chat` como valor del campo.
 
@@ -205,8 +209,11 @@ La copia es independiente del adjunto: no caduca por la retencion del chat,
 aunque sigue sujeta a borrado explicito y las politicas de respaldo del sistema.
 Se respetan permisos de modulo/campo; no se aceptan adjuntos de otro hilo.
 Si el contenido cambio, caduco o falta antes de aprobar, corrige la fuente y
-propone de nuevo; no afirmes que quedo archivado. Despues de aprobar verifica
-`query_record_get` y la URL permanente, o `api_response.record_assets` de la ejecucion.
+propone de nuevo; no afirmes que quedo archivado. `status=executed` no basta:
+despues de aprobar lee `query_record_get` (o `api_response.record_assets`) y
+confirma que cada campo y cada celda de archivo/imagen tenga una URL
+`register_files`/`register_images`. Si alguna conserva `attachment_id` o un enlace
+`/assets/` o `agent_chat`, no quedo archivado: dilo y no lo des por resuelto.
 Las URLs temporales guardadas anteriormente NO se migran automaticamente:
 requieren una propuesta nueva con el adjunto disponible.
 

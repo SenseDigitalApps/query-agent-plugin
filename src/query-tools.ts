@@ -242,12 +242,15 @@ export function containsRecordAssetReference(value: unknown): boolean {
 
 export const RECORD_ASSET_GUIDANCE =
   " Si la persona pide archivar un archivo en un campo file/image/img de un registro real, " +
-  "usa fields: {slug: {attachment_id: ID}} con un adjunto del mismo hilo. " +
+  "usa fields: {slug: {attachment_id: ID}} con un adjunto del mismo hilo donde propones (un adjunto de otro canal se rechaza). " +
+  "Dentro de una tabla repetible usa la columna file/image del repetidor: fields: {slug_repetidor: [{columna: {attachment_id: ID}, ...otras columnas}, ...]} " +
+  "y envia la tabla completa, con las filas que ya existen tal como estan. " +
   "query_module_describe debe confirmar record_asset_references=true; si falta, el backend requiere actualizarse. " +
   "Para un archivo local, subelo primero con query_attachment_send y usa su attachment_id. " +
   "Query copia los bytes al almacenamiento permanente del registro al aprobar, sin caducidad automatica; " +
   "no guardes URLs /assets/ ni agent_chat en esos campos. La mera entrega de un archivo sigue siendo query_attachment_send. " +
-  "Tras la aprobacion verifica query_record_get: debe contener register_files/register_images, no el enlace del chat.";
+  "status=executed no basta: tras la aprobacion lee query_record_get y confirma que cada campo y cada celda de archivo/imagen " +
+  "tenga una URL register_files/register_images; si alguna conserva attachment_id o un enlace /assets/ o agent_chat, no quedo archivado y debes decirlo.";
 
 export function containsGeneratedArtifactReference(value: unknown): boolean {
   if (value === undefined || value === null) return false;
