@@ -428,8 +428,11 @@ export async function retainQueryAttachmentForThread(params: {
   if (!threadId) {
     return { ok: false, error: "thread_required", detail: "Indica thread_id." };
   }
-  const persistent = params.persistent ?? params.days === undefined;
-  if (!persistent && (params.days === undefined || params.days < 1 || params.days > 365)) {
+  if (params.persistent === undefined && params.days === undefined) {
+    return { ok: false, error: "retain_choice_required", detail: "Indica persistent o days según lo que pidió la persona." };
+  }
+  const persistent = params.persistent ?? false;
+  if (!persistent && params.days !== undefined && (params.days < 1 || params.days > 365)) {
     return { ok: false, error: "invalid_retain_days", detail: "days debe estar entre 1 y 365, o usa persistent=true." };
   }
   const stored = await delegatedAuthForTool(threadId, "query_attachment_retain", params.log);
@@ -1107,7 +1110,7 @@ export default defineToolPlugin({
         persistent: Type.Optional(
           Type.Boolean({
             description:
-              "true fija el adjunto en Query: no vence. Úsalo solo si la persona pide conservarlo o es un entregable que debe permanecer; por defecto vence a los 8 días sin uso.",
+              "true fija el adjunto en Query: no vence. Solo si la persona lo pide explícitamente en el chat (conservarlo, guardarlo, que no se borre). No lo infieras porque sea un entregable, informe final o archivo importante: por defecto omítelo y vence a los 8 días sin uso; la persona puede conservarlo después.",
           }),
         ),
       }),
@@ -1191,7 +1194,7 @@ export default defineToolPlugin({
       description:
         "Cambia la vigencia de un adjunto ya enviado en ESTE hilo de Query. Por defecto los adjuntos del agente vencen a los 8 días sin uso y se borran. " +
         "persistent=true lo fija y no vence nunca; days=N (1-365) le da N días desde hoy sin fijarlo; persistent=false sin days lo devuelve a la vigencia normal. " +
-        "Usalo cuando la persona pida que un archivo no se borre o dure más. La vigencia vive en Query, no en el servidor del agente: storage_lifecycle no sirve para esto. " +
+        "Usalo SOLO cuando la persona pida explícitamente que un archivo no se borre o dure más; nunca por iniciativa propia. Indica siempre persistent o days. La vigencia vive en Query, no en el servidor del agente: storage_lifecycle no sirve para esto. " +
         "Un adjunto ya vencido no se puede recuperar con esta herramienta.",
       parameters: Type.Object({
         attachment_id: Type.Integer({ minimum: 1, description: "ID del adjunto en Query (attachment.id que devolvió query_attachment_send)." }),
