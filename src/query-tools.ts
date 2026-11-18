@@ -1421,6 +1421,71 @@ export default defineToolPlugin({
         ),
     }),
     tool({
+      name: "query_dw_catalog",
+      label: "Query: catalogo DataWarehouse",
+      description:
+        "Lista las vistas de reporteria del DataWarehouse que puedes consultar, con sus columnas y cuales de ellas son fechas o numeros. Leelo antes de consultar: no hay SQL libre, solo se puede pedir una de estas vistas con columnas, filtros y orden. La respuesta se cachea.",
+      parameters: Type.Object({ thread_id: THREAD_PARAM }),
+      execute: async ({ thread_id }, _config, context) =>
+        callQuery(
+          thread_id,
+          "dw/catalog/",
+          {},
+          "query_dw_catalog",
+          context.api.logger,
+          { cacheable: true },
+        ),
+    }),
+    tool({
+      name: "query_dw_query",
+      label: "Query: consultar DataWarehouse",
+      description:
+        "Consulta una vista del DataWarehouse de reporteria y devuelve las filas ya filtradas. No envies SQL: manda view tal como aparece en query_dw_catalog, y opcionalmente columns, filters, order_by y limit. filters es una lista de {column, op, value} combinados con AND; operadores: eq, ne, gt, gte, lt, lte, like (contiene, sobre texto), not_like, in, not_in, between (value de dos elementos), is_null, not_null. order_by acepta el nombre de la columna y un guion delante para descendente, por ejemplo -fecha. El tope de filas es 1000 y la respuesta trae truncated=true cuando habia mas: si pasa, agrega filtros o baja a agregados en vez de subir el limite. Si una columna no existe la respuesta lista las validas. Estos datos vienen de un proceso de actualizacion por lotes, no del ERP en vivo: no los presentes como cifras del momento.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        view: Type.String({
+          description:
+            "Nombre de la vista tal como aparece en query_dw_catalog, por ejemplo vw_factura_informe_general.",
+        }),
+        columns: Type.Optional(
+          Type.Array(Type.String(), {
+            description:
+              "Columnas a devolver. Si se omite se devuelven todas las de la vista.",
+          }),
+        ),
+        filters: Type.Optional(
+          Type.Array(
+            Type.Object({
+              column: Type.String({ description: "Columna del catalogo de esa vista." }),
+              op: Type.Optional(
+                Type.String({
+                  description:
+                    "Operador de comparacion. Por defecto eq.",
+                }),
+              ),
+              value: Type.Optional(
+                Type.Unknown({ description: "Valor a comparar. No aplica en is_null ni not_null." }),
+              ),
+            }),
+            { description: "Condiciones combinadas con AND." },
+          ),
+        ),
+        order_by: Type.Optional(
+          Type.String({
+            description:
+              "Columna de orden; con guion delante para descendente, por ejemplo -fecha.",
+          }),
+        ),
+        limit: Type.Optional(
+          Type.Number({
+            description: "Filas a devolver. Por defecto 200, maximo 1000.",
+          }),
+        ),
+      }),
+      execute: async ({ thread_id, ...body }, _config, context) =>
+        postQuery(thread_id, "dw/query/", body, "query_dw_query", context.api.logger),
+    }),
+    tool({
       name: "query_module_describe",
       label: "Query: describir modulo",
       description:

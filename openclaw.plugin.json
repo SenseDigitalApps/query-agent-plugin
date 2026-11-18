@@ -380,7 +380,9 @@
       "query_x",
       "query_meta",
       "query_silogtrans_catalog",
-      "query_silogtrans_query"
+      "query_silogtrans_query",
+      "query_dw_catalog",
+      "query_dw_query"
     ]
   }
 }
