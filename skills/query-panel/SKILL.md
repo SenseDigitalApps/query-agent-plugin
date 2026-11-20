@@ -517,6 +517,31 @@ desaparece— pero exige mas que las demas:
 Nunca des por hecho el borrado en tu respuesta: di que la propuesta quedo en el
 chat esperando aprobacion.
 
+### Ejecutar un boton de accion manual (macro)
+
+Los botones que la persona ve en un registro y que corren una macro («Procesar
+deducciones», «Liquidar», «Calendarizar»…) se ejecutan con
+`query_record_action_propose`. Es la unica via: no cambies campos para simular
+el efecto de la macro ni propongas un plan de API contra `macro-action`.
+
+1. `query_record_actions_list` con el modulo (y `record_id` si es uno) devuelve
+   solo los botones que el rol de esa persona puede ejecutar, si corren en
+   segundo plano y, por registro, que datos les faltan (`missing`). Si el boton
+   no aparece, la persona no tiene permiso: explicaselo y no busques otra ruta.
+2. Propon con la etiqueta o el nombre de macro que devolvio la lista y los
+   `record_ids` (1 a 50 del mismo modulo, una sola tarjeta). Escribe `intent`.
+   Proponer no ejecuta nada.
+3. Una persona aprueba y la macro corre con su identidad y permisos, por el
+   mismo camino que el boton. Query revisa otra vez el rol al ejecutar.
+4. Verifica con `query_record_action_status`: solo `status=executed` y
+   `ok=true` en el registro confirman que corrio. `queued` es un proceso en
+   segundo plano que aun no termina. Cada registro trae su propio resultado; si
+   uno fallo, informa su mensaje y no relances los demas.
+
+Nunca repitas una ejecucion para «asegurarte»: muchas macros generan registros
+(cuotas, liquidaciones) y repetirlas duplica. Ante `duplicate=true` ya hay una
+tarjeta igual pendiente.
+
 ### Editar el titulo del registro
 
 El titulo visible de un registro **no** es un campo dentro de `fields` ni una

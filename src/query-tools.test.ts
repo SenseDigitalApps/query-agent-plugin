@@ -27,6 +27,9 @@ import {
   proposeQueryImportForThread,
   queryImportStatusForThread,
   repairQueryActionStorageForThread,
+  listQueryRecordActionsForThread,
+  proposeQueryRecordActionForThread,
+  queryRecordActionStatusForThread,
   RECORD_ASSET_GUIDANCE,
   containsRecordAssetReference,
 } from "./query-tools.js";
@@ -100,6 +103,56 @@ describe("reviewed imports", () => {
     const result = await queryImportStatusForThread({ threadId: "thread-import", module: "clientes", actionId: "proposal" }, { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() });
     expect(result).toEqual({ status: "queued", import_result: { created: 0 } });
     expect(String((fetchMock.mock.calls[0] as unknown as [URL])[0])).toBe("https://query.test/api/v4/openclaw-agent/modules/clientes/imports/proposal/");
+  });
+});
+
+describe("manual record actions", () => {
+  const log = { info: vi.fn(), warn: vi.fn(), error: vi.fn(), debug: vi.fn() };
+  beforeEach(() => {
+    rememberDelegatedAuth("thread-actions", { token: "actions-token", expires_in: 900 }, "wss://query.test/ws/openclaw-agent/8/", "message-actions");
+    clearQueryMetadataCache();
+  });
+  afterEach(() => { vi.unstubAllGlobals(); forgetDelegatedAuth("thread-actions"); });
+
+  it("lists the buttons the person can run, optionally for one record", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => ({ ok: true, actions: [] }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    await listQueryRecordActionsForThread({ threadId: "thread-actions", module: "planes_de_descuento", recordId: 150711 }, log);
+    expect(String((fetchMock.mock.calls[0] as unknown as [URL])[0])).toBe(
+      "https://query.test/api/v4/openclaw-agent/modules/planes_de_descuento/manual-actions/?record_id=150711",
+    );
+  });
+
+  it("proposes the button without executing it and deduplicates record ids", async () => {
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 201, json: async () => ({ action_id: "a1", requires_confirmation: true, status: "pending" }) }));
+    vi.stubGlobal("fetch", fetchMock);
+    const result = await proposeQueryRecordActionForThread(
+      { threadId: "thread-actions", module: "planes_de_descuento", action: "Procesar deducciones", recordIds: [1, 2, 2], intent: "Generar cuotas" },
+      log,
+    );
+    expect(result).toMatchObject({ requires_confirmation: true, status: "pending" });
+    expect(fetchMock).toHaveBeenCalledTimes(1);
+    const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(url).toBe("https://query.test/api/v4/openclaw-agent/modules/planes_de_descuento/manual-actions/propose/");
+    expect(options.method).toBe("POST");
+    expect(JSON.parse(String(options.body))).toEqual({ action: "Procesar deducciones", record_ids: [1, 2], intent: "Generar cuotas" });
+  });
+
+  it("rejects empty or oversized proposals locally", async () => {
+    const fetchMock = vi.fn();
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await proposeQueryRecordActionForThread({ threadId: "thread-actions", module: "m", action: " ", recordIds: [1] }, log)).toMatchObject({ error: "action_required" });
+    expect(await proposeQueryRecordActionForThread({ threadId: "thread-actions", module: "m", action: "x", recordIds: [] }, log)).toMatchObject({ error: "record_ids_required" });
+    expect(await proposeQueryRecordActionForThread({ threadId: "thread-actions", module: "m", action: "x", recordIds: Array.from({ length: 51 }, (_, i) => i + 1) }, log)).toMatchObject({ error: "too_many_records" });
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it("reads persisted status and keeps queued results as queued", async () => {
+    const body = { status: "executed", results: [{ record_id: 1, ok: true, status: "queued", job_id: "j1" }] };
+    const fetchMock = vi.fn(async () => ({ ok: true, status: 200, json: async () => body }));
+    vi.stubGlobal("fetch", fetchMock);
+    expect(await queryRecordActionStatusForThread({ threadId: "thread-actions", module: "m", actionId: "a1" }, log)).toEqual(body);
+    expect(String((fetchMock.mock.calls[0] as unknown as [URL])[0])).toBe("https://query.test/api/v4/openclaw-agent/modules/m/manual-actions/a1/");
   });
 });
 

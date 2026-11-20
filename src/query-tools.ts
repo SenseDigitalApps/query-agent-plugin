@@ -595,6 +595,49 @@ export async function deleteQueryDashboardForThread(params: {
   );
 }
 
+export async function listQueryRecordActionsForThread(
+  params: { threadId: string; module: string; recordId?: number },
+  log: QueryToolLog,
+): Promise<unknown> {
+  return callQuery(
+    params.threadId,
+    `modules/${encodeURIComponent(params.module)}/manual-actions/`,
+    params.recordId === undefined ? {} : { record_id: String(params.recordId) },
+    "query_record_actions_list",
+    log,
+  );
+}
+
+export async function proposeQueryRecordActionForThread(
+  params: { threadId: string; module: string; action: string; recordIds: number[]; intent?: string },
+  log: QueryToolLog,
+): Promise<unknown> {
+  const recordIds = [...new Set(params.recordIds)];
+  if (!params.action.trim()) return { ok: false, error: "action_required" };
+  if (recordIds.length === 0) return { ok: false, error: "record_ids_required" };
+  if (recordIds.length > 50) return { ok: false, error: "too_many_records", max: 50 };
+  return postQuery(
+    params.threadId,
+    `modules/${encodeURIComponent(params.module)}/manual-actions/propose/`,
+    { action: params.action, record_ids: recordIds, ...(params.intent ? { intent: params.intent } : {}) },
+    "query_record_action_propose",
+    log,
+  );
+}
+
+export async function queryRecordActionStatusForThread(
+  params: { threadId: string; module: string; actionId: string },
+  log: QueryToolLog,
+): Promise<unknown> {
+  return callQuery(
+    params.threadId,
+    `modules/${encodeURIComponent(params.module)}/manual-actions/${encodeURIComponent(params.actionId)}/`,
+    {},
+    "query_record_action_status",
+    log,
+  );
+}
+
 export async function callQuery(
   threadId: string,
   path: string,
@@ -1748,6 +1791,50 @@ export default defineToolPlugin({
         ),
     }),
     tool({
+      name: "query_record_actions_list",
+      label: "Query: botones de accion manual disponibles",
+      description:
+        "Lista los botones de accion manual de macro de un modulo (por ejemplo «Procesar deducciones») que la persona del turno puede ejecutar segun su rol, igual que los veria en pantalla. Con record_id dice ademas que datos le faltan a ese registro para cada boton (missing). Usala antes de query_record_action_propose: si el boton no aparece, la persona no tiene permiso para ejecutarlo; explicaselo y no busques otra via.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        module: Type.String({ description: "Modulo donde estan los botones." }),
+        record_id: Type.Optional(Type.Integer({ description: "Registro concreto para revisar los datos que exige cada boton." })),
+      }),
+      execute: async ({ thread_id, module, record_id }, _config, context) =>
+        listQueryRecordActionsForThread({ threadId: thread_id, module, recordId: record_id }, context.api.logger),
+    }),
+    tool({
+      name: "query_record_action_propose",
+      label: "Query: proponer ejecutar un boton de accion manual",
+      description:
+        "Unica via para presionar un boton de accion manual de macro (el que la persona ve en el registro, como «Procesar deducciones» o «Liquidar») sobre 1 a 50 registros del mismo modulo. No ejecuta nada: deja una tarjeta en el chat y la macro corre solo cuando una persona la aprueba, con su identidad y sus permisos, por el mismo camino que el boton. Antes consulta query_record_actions_list y usa la etiqueta o el nombre de macro que devuelve; Query rechaza botones que el modulo no declara (action_not_declared), que el rol de la persona no tiene (action_role_denied) o registros a los que les faltan datos (requirements_missing). Si vuelve duplicate=true ya hay una tarjeta igual pendiente: no propongas otra. Despues pide revisar la tarjeta; no afirmes que se ejecuto. Solo status=executed con ok=true en cada registro de results confirma la ejecucion; un resultado queued es un proceso en segundo plano que aun corre: consultalo con query_record_action_status. Nunca repitas una ejecucion ni la reemplaces por otra herramienta, plan de API o edicion de campos.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        module: Type.String({ description: "Modulo de los registros." }),
+        action: Type.String({ description: "Etiqueta del boton o nombre de la macro, tal como lo devuelve query_record_actions_list." }),
+        record_ids: Type.Array(Type.Integer(), { minItems: 1, maxItems: 50, description: "Registros donde se ejecuta el boton." }),
+        intent: Type.Optional(Type.String({ description: "Por que se propone, en una frase. Lo lee la persona que decide." })),
+      }),
+      execute: async ({ thread_id, module, action, record_ids, intent }, _config, context) =>
+        proposeQueryRecordActionForThread(
+          { threadId: thread_id, module, action, recordIds: record_ids, intent },
+          context.api.logger,
+        ),
+    }),
+    tool({
+      name: "query_record_action_status",
+      label: "Query: estado de un boton de accion manual propuesto",
+      description:
+        "Estado persistido de una propuesta de query_record_action_propose: pending (sin aprobar), executed, failed, cancelled o expired, con el resultado por registro y el avance vivo de los procesos en segundo plano (job). Usala para verificar en vez de suponer; no la uses para volver a ejecutar.",
+      parameters: Type.Object({
+        thread_id: THREAD_PARAM,
+        module: Type.String({ description: "Modulo de la propuesta." }),
+        action_id: Type.String({ description: "action_id devuelto por query_record_action_propose." }),
+      }),
+      execute: async ({ thread_id, module, action_id }, _config, context) =>
+        queryRecordActionStatusForThread({ threadId: thread_id, module, actionId: action_id }, context.api.logger),
+    }),
+    tool({
       name: "query_api_read",
       label: "Query: leer la API",
       description:
@@ -1766,7 +1853,7 @@ export default defineToolPlugin({
       name: "query_api_plan_propose",
       label: "Query: proponer cambios de configuracion",
       description:
-        "Para configurar el panel: crear modulos, campos, carpetas, APIs externas, y sumar un modulo a una categoria existente (grupo de modulos). Propone una SECUENCIA de llamadas a la API de Query que una persona aprueba de una vez. No aplica nada por si sola: cada paso se comprueba contra el contrato real de su endpoint al proponer -si el cuerpo ya es incompatible, el plan se rechaza aqui mismo, no al aplicar- salvo que dependa de \"$N.campo\" de un paso anterior, en cuyo caso queda diferido hasta la ejecucion. Cada paso lleva method (POST/PUT/PATCH/DELETE), path y body. Para encadenar pasos usa \"$N.campo\" en el body: por ejemplo module: \"$0.id\" toma el id que devolvio el paso 0, util porque el modulo aun no existe cuando propones. Se ejecuta todo o nada: si un paso falla, ninguno queda aplicado. Rutas de cuentas: solo se admiten roles (/api/groups/, /api/groups/<id>/update_permissions/) y los roles de un usuario (PATCH /api/update-user/<id>/ con body solo {\"groups\": [...]}); contrasenas, tokens, altas y bajas de usuario, correos de cuenta y las rutas de agentes e instalacion estan bloqueadas y el plan se rechaza entero si incluyes una. Al crear un proceso en un modulo (PATCH /api/v2/modulos/<id>/ con process_array) indica en process_role_ids los roles que lo reciben: sin rol explicito el paso falla, no se asigna a nadie por defecto. Lee antes el estado con query_api_read y conserva los procesos que ya existen. Para sumar un modulo a una categoria usa POST en /api/v2/modulos-category/<id>/add-module/ con body {\"module\": \"$N.id\"}: es aditivo, no borra los modulos que la categoria ya tenia. Nunca mandes un campo \"group\" en el body de /api/v2/modulos/: no existe: la categoria se asocia despues, con ese paso aparte, y el id real de la categoria sale de query_module_categories_list. Para cambiar datos de registros NO uses esto: usa query_record_propose o query_records_propose_batch.",
+        "Para configurar el panel: crear modulos, campos, carpetas, APIs externas, y sumar un modulo a una categoria existente (grupo de modulos). Propone una SECUENCIA de llamadas a la API de Query que una persona aprueba de una vez. No aplica nada por si sola: cada paso se comprueba contra el contrato real de su endpoint al proponer -si el cuerpo ya es incompatible, el plan se rechaza aqui mismo, no al aplicar- salvo que dependa de \"$N.campo\" de un paso anterior, en cuyo caso queda diferido hasta la ejecucion. Cada paso lleva method (POST/PUT/PATCH/DELETE), path y body. Para encadenar pasos usa \"$N.campo\" en el body: por ejemplo module: \"$0.id\" toma el id que devolvio el paso 0, util porque el modulo aun no existe cuando propones. Se ejecuta todo o nada: si un paso falla, ninguno queda aplicado. Rutas de cuentas: solo se admiten roles (/api/groups/, /api/groups/<id>/update_permissions/) y los roles de un usuario (PATCH /api/update-user/<id>/ con body solo {\"groups\": [...]}); contrasenas, tokens, altas y bajas de usuario, correos de cuenta y las rutas de agentes e instalacion estan bloqueadas y el plan se rechaza entero si incluyes una. Al crear un proceso en un modulo (PATCH /api/v2/modulos/<id>/ con process_array) indica en process_role_ids los roles que lo reciben: sin rol explicito el paso falla, no se asigna a nadie por defecto. Lee antes el estado con query_api_read y conserva los procesos que ya existen. Para sumar un modulo a una categoria usa POST en /api/v2/modulos-category/<id>/add-module/ con body {\"module\": \"$N.id\"}: es aditivo, no borra los modulos que la categoria ya tenia. Nunca mandes un campo \"group\" en el body de /api/v2/modulos/: no existe: la categoria se asocia despues, con ese paso aparte, y el id real de la categoria sale de query_module_categories_list. Para cambiar datos de registros NO uses esto: usa query_record_propose o query_records_propose_batch. Para presionar un boton de accion manual (macro) usa query_record_action_propose, nunca un plan contra macro-action.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         steps: Type.Array(
