@@ -3,7 +3,7 @@ import {
   onAgentEvent,
   type AgentEventPayload,
 } from "openclaw/plugin-sdk/agent-harness-runtime";
-import { isSilentReplyText } from "openclaw/plugin-sdk/reply-chunking";
+import { isSilentReplyText } from "openclaw/plugin-sdk/reply-runtime";
 import { createHash, randomUUID } from "node:crypto";
 import { createWriteStream } from "node:fs";
 import {

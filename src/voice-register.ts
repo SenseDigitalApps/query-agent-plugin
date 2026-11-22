@@ -130,7 +130,7 @@ export function registerQueryVoice(api: OpenClawPluginApi): void {
       // This app control connection must obtain its own scoped device token.
       clientName: "gateway-client",
       mode: "ui",
-      onEvent: frame => driver?.handleGatewayEvent(frame as {event: string; payload?: unknown}),
+      onEvent: (frame: unknown) => driver?.handleGatewayEvent(frame as {event: string; payload?: unknown}),
       onHelloOk: () => { outsideRequest = AsyncLocalStorage.snapshot(); api.logger.info(`query_voice_gateway_connected device=${identity.deviceId.slice(0, 12)} scopes=${VOICE_OPERATOR_SCOPES.join(",")}`); },
       onClose: () => driver?.handleGatewayClosed(),
       // Pending approval shows up here; never log the error body (it may carry tokens).
