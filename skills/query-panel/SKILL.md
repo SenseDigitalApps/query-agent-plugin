@@ -1177,6 +1177,8 @@ Alta: `action=connect`, label y policy no secreta:
 ```
 Usa el servidor real del proveedor, no el ejemplo. La entrada privada recoge username/password, nunca argumentos de herramienta. Para renovar una contraseña usa connect con el mismo connection_id, policy y reconnect=true. TLS directo 993 y contraseña; OAuth IMAP, STARTTLS143 y POP3 no están implementados por este adaptador. Si el proveedor exige otra autenticación, informa la limitación concreta; evalúa su API HTTPS ya soportada sin cambiar de credencial automáticamente.
 
+Adjuntos en cualquier `request.body` (por ejemplo `RawContent` de un correo SES): nunca pegues el base64 en los argumentos. Escribe `{"$file_base64":"<ruta del archivo en tu workspace>"}` en su lugar y el plugin lo convierte al enviar (15 MB por archivo, 40 MB en total, solo archivos de tu workspace). Así el archivo no queda copiado en el historial ni lo pagas como tokens.
+
 Operaciones `action=request`, connection_id descubierto, idempotency_key única por consulta y request:
 - GET `/folders`: solo carpetas autorizadas; usa sus nombres exactos (IMAP modified UTF-7).
 - GET `/messages`: query mailbox (INBOX por defecto), limit (1–50), before_uid para paginar, since/before YYYY-MM-DD, unseen boolean, from/subject ASCII. Filtros Unicode requieren otra vía; no se aceptan comandos IMAP arbitrarios. Devuelve UIDs, uidvalidity y next_before_uid.
