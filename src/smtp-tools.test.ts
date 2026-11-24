@@ -11,7 +11,7 @@ describe('SMTP tool exposure', () => {
   it('exposes conversational SMTP tools through registration without secret schemas', () => {
     const metadata = getToolPluginMetadata(entry)!;
     const smtp = metadata.tools.filter(t => t.name.startsWith('query_smtp_'));
-    expect(smtp.map(t => t.name).sort()).toEqual(['accounts','grants','preauthorize','connect','revoke','disconnect','send','setup','prefer'].map(n => `query_smtp_${n}`).sort());
+    expect(smtp.map(t => t.name).sort()).toEqual(['accounts','grants','preauthorize','connect','revoke','disconnect','send','campaign','setup','prefer'].map(n => `query_smtp_${n}`).sort());
     for (const tool of smtp) {
       expect(Object.keys(tool.parameters.properties ?? {})).not.toContain('password');
       expect(tool.parameters.additionalProperties).toBe(false);
@@ -88,4 +88,22 @@ it('uses the scheduled identity for SMTP and private/FTP discovery instead of th
     expect(options.headers).toMatchObject({'X-Query-Delegated-Token':'scheduled-test'});
   }
   expect(fetchMock).toHaveBeenCalledTimes(4);
+});
+
+it.each([
+  {action:'campaign_propose',idempotency_key:'mx',subject:'Hola {{empresa}}',body:'Para {{empresa}}',attachment_ids:[9],recipients_attachment_id:31},
+  {action:'campaign_start',campaign_id:'c1',expected_digest:'d'},
+  {action:'campaign_status',campaign_id:'c1'},
+  {action:'campaign_recipients',campaign_id:'c1',recipient_status:'rejected',limit:100},
+])('forwards SMTP campaign action $action to the SMTP service',async params=>{
+  const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({status:'running'})}));
+  vi.stubGlobal('fetch',fetchMock);
+  const registerTool=vi.fn();
+  entry.register({registerTool,pluginConfig:{},logger:{info:vi.fn(),warn:vi.fn(),error:vi.fn(),debug:vi.fn()}} as any);
+  const registration=registerTool.mock.calls.find(c=>c[1]?.name==='query_smtp_campaign')!;
+  const tool=registration[0]({sessionKey:'smtp-campaign-session'});
+  await tool.execute('call',{thread_id:'42',account_id:'ses-account',...params});
+  const [url,options]=fetchMock.mock.calls.at(-1) as unknown as [string,RequestInit];
+  expect(url).toContain('/api/v4/openclaw-agent/smtp/');
+  expect(JSON.parse(String(options.body))).toEqual({thread_id:'42',account_id:'ses-account',...params});
 });
