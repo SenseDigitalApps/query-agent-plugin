@@ -89,5 +89,6 @@ it('exposes analytics without opening arbitrary URLs or credentials', () => {
   expect(schema).not.toContain('access_token');
   expect(schema).not.toContain('refresh_token');
   expect(tool.description).toContain('HTTP');
-  expect(tool.description).toContain('sin cron');
+  expect(tool.description).toContain('cron con autorización explícita «analytics»');
+  expect(schema).toContain('"analytics"');
 });

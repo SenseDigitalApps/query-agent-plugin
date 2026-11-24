@@ -1230,21 +1230,33 @@ por similitud de etiqueta; resolver IDs reales y ambigüedades primero.
 Preferir `query_linkedin action=analytics`, con account_id descubierto, destination e
 idempotency_key estable. Perfil: post_urn `urn:li:share:...` con recibo de publicación
 confirmado de esa misma cuenta/destino; metric opcional IMPRESSION (también
-MEMBERS_REACHED, REACTION, COMMENT, RESHARE). Página: destination organización,
-sin post_urn ni metric. Es acumulado disponible, no una cohorte a siete días.
+MEMBERS_REACHED, REACTION, COMMENT, RESHARE, o ALL para las cinco en un recibo).
+Página: destination organización; con post_urn (share o ugcPost) da las métricas de
+ese post, sin post_urn el acumulado de la página; nunca metric. Es el acumulado
+disponible al leer, no una cohorte a siete días: el recolector mide a la edad que
+necesite (p. ej. 24 h y 7 días) y guarda cada recibo.
+
+**Crones (loop de impresiones):** la lectura funciona en un cron solo con una
+autorización explícita de ESE cron y ESE destino: registrar el cron con
+query_cron_manage y, desde el mismo chat, `authorize` con actions que incluyan
+`analytics`. Es revocable con `revoke_authorization`. Leer no permite publicar y
+publicar no permite leer. El recibo de un cron solo se consulta desde ese cron.
+Antes de activar el recolector, validar UNA lectura real desde el cron.
 
 Ambas vías usan la cuenta LinkedIn existente. `query_api_request connections`
 expone su mismo ID con perfil linkedin_analytics y las rutas exactas permitidas:
 GET /rest/memberCreatorPostAnalytics y GET /rest/organizationalEntityShareStatistics.
 No crear otra cuenta ni pasar tokens. HTTP no permite rutas arbitrarias, headers
-de autenticación, escrituras, expansión de permisos ni crones. Las lecturas son
-solo para turnos humanos con acceso vigente a la cuenta.
+de autenticación, escrituras, expansión de permisos ni crones: en cron usar la
+herramienta nativa.
 
 Respuesta común: operation_id, status y result con http_status, provider_error
 depurado, metrics, measured_at y periodo. `status` consulta sin repetir. No cambiar
-clave ante running; no pasar a HTTP para eludir 403/429. Un 403 no prueba por sí
-solo falta de scope. Esta lectura no renueva OAuth ni modifica publicaciones.
-Ausencia de métricas no equivale a cero. Los números devueltos conservan la
+clave ante running; no pasar a HTTP para eludir 403/429. La lectura renueva el
+token con el refresh guardado y confirma permisos sin exponerlos;
+`linkedin_permission_required` indica que hay que reconectar la cuenta con permisos
+de analítica (r_member_postAnalytics para perfil; permisos de organización para
+página). Ausencia de métricas no equivale a cero. Los números devueltos conservan la
 estructura de elements; no se entregan URLs ni texto libre de la respuesta exitosa.
 ### Alcance de conexiones compartidas
 En `query_account_access grants`, comprobar `supports_scope_mode` antes de enviar
