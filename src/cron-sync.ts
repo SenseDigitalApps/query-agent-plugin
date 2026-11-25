@@ -749,6 +749,30 @@ export async function primeScheduleCredential(
   }
 }
 
+/**
+ * El programador exige la cuenta de inferencia grabada en cada tarea («no recorded inference
+ * account»). Query fija el modelo del agente con el único perfil de ese proveedor; si hay varios
+ * o ninguno, no adivina y deja que el programador decida.
+ */
+export function recordedInferenceModel(api: OpenClawPluginApi, agentId: string | undefined): string | undefined {
+  try {
+    const cfg = (api.runtime as unknown as { config?: { current?: () => unknown } }).config?.current?.() as
+      | { agents?: { entries?: Record<string, { model?: unknown }>; list?: Array<{ id?: string; model?: unknown }>;
+          defaults?: { model?: unknown } }; auth?: { profiles?: Record<string, { provider?: string }> } }
+      | undefined;
+    if (!cfg || !agentId) return undefined;
+    const entry = cfg.agents?.entries?.[agentId] ?? cfg.agents?.list?.find((item) => item.id === agentId);
+    const raw = entry?.model ?? cfg.agents?.defaults?.model;
+    const model = typeof raw === "string" ? raw : (raw as { primary?: unknown } | undefined)?.primary;
+    if (typeof model !== "string" || !model.includes("/") || model.includes("@")) return undefined;
+    const provider = model.split("/")[0];
+    const profiles = Object.entries(cfg.auth?.profiles ?? {}).filter(([, profile]) => profile?.provider === provider);
+    return profiles.length === 1 ? `${model}@${profiles[0][0]}` : undefined;
+  } catch {
+    return undefined;
+  }
+}
+
 export function registerQueryCronSync(
   api: OpenClawPluginApi,
   sendEvent: typeof sendQueryOutboundEvent = sendQueryOutboundEvent,
@@ -1275,8 +1299,10 @@ export function registerQueryCronSync(
             effectiveDelivery = params.job.delivery;
             await assertAuthorizedCronDestination(actor, effectiveDelivery);
             action = "added";
+            const pinned = recordedInferenceModel(api, ctx.agentId);
             const input = {
               ...params.job,
+              ...(pinned ? { payload: { ...(params.job.payload as Record<string, unknown>), model: pinned } } : {}),
               agentId: ctx.agentId,
               // Persist first, but never let the scheduler race authorization.
               enabled: false,
