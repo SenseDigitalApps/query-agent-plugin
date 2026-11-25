@@ -1393,8 +1393,12 @@ export function registerQueryCronSync(
           const code = error instanceof Error && allowed.has(error.message)
             ? error.message
             : "query_cron_manage_failed";
+          // Sin esto la causa real queda oculta tras el código genérico.
+          const cause = error instanceof Error ? error.message : String(error);
+          api.logger.warn(`query_cron_manage ${params.action} falló: ${cause}`);
           const publicResult = {
             ok: false, error: code,
+            ...(code === "query_cron_manage_failed" ? { cause: cause.slice(0, 300) } : {}),
             ...(removedJobId ? { removed_job_id: removedJobId, removed: true, synchronization_pending: true } : {}),
             ...(error instanceof Error && "authorizationReason" in error
               ? { authorization_reason: error.authorizationReason } : {}),
