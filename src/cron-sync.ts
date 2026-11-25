@@ -1056,6 +1056,14 @@ export function registerQueryCronSync(
           | { action: "update_many"; jobs: Array<{ job_id: string; patch: Record<string, unknown> & { delivery?: CronDelivery } }> }
           | { action: "run"; job_id: string }
           | { action: "remove"; job_id: string };
+        // El programador exige delivery.mode explícito; Query solo admite "announce".
+        const withMode = (delivery?: CronDelivery) =>
+          delivery ? { ...delivery, mode: "announce" as const } : delivery;
+        if (params.action === "add") params.job.delivery = withMode(params.job.delivery)!;
+        if (params.action === "update" && params.patch.delivery) params.patch.delivery = withMode(params.patch.delivery);
+        if (params.action === "update_many") {
+          for (const item of params.jobs) if (item.patch.delivery) item.patch.delivery = withMode(item.patch.delivery);
+        }
         const session = getQuerySession(ctx.sessionKey);
         const accountId = ctx.agentAccountId ?? session?.accountId;
         let actor: ExternalContext | undefined;
