@@ -1,5 +1,6 @@
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-core";
 import { Type } from "typebox";
+import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
 import {
   queryAccountIdForSocketUrl,
   requestQueryScheduleAuth,
@@ -773,6 +774,23 @@ export function recordedInferenceModel(api: OpenClawPluginApi, agentId: string |
   }
 }
 
+/**
+ * La cuenta de inferencia («inferenceBinding») solo la graba el método del Gateway
+ * cron.update; el servicio en proceso que usa Query no la captura. Sin ella la tarea
+ * falla al correr con «no recorded inference account». Si no se puede, se avisa en el log.
+ */
+async function bindInferenceAccount(api: OpenClawPluginApi, jobId: string, agentId: string | undefined) {
+  const model = recordedInferenceModel(api, agentId);
+  if (!model) return;
+  try {
+    await callGatewayTool("cron.update", { timeoutMs: 15_000 },
+      { id: jobId, patch: { payload: { kind: "agentTurn", model } } });
+  } catch (error) {
+    api.logger.warn(`query cron ${jobId}: no se pudo grabar la cuenta de inferencia: ${
+      error instanceof Error ? error.message : String(error)}`);
+  }
+}
+
 export function registerQueryCronSync(
   api: OpenClawPluginApi,
   sendEvent: typeof sendQueryOutboundEvent = sendQueryOutboundEvent,
@@ -1374,6 +1392,7 @@ export function registerQueryCronSync(
             activationAttempted = true;
             await cronService.update(jobId, { enabled: true });
           }
+          if (params.action === "add") await bindInferenceAccount(api, jobId, ctx.agentId);
           const publicResult = {
             ok: true,
             authorization,
