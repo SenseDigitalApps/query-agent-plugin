@@ -17,8 +17,9 @@ it('exposes LinkedIn automation without credentials or arbitrary remote URLs', (
   }
   expect(tool.parameters.properties).toHaveProperty('image_attachment_id');
   expect(tool.parameters.properties).toHaveProperty('first_comment');
-  expect(tool.parameters.properties).toHaveProperty('all_schedules');
-  expect(tool.description).toContain('all_schedules=true');
+  expect(tool.parameters.properties).not.toHaveProperty('all_schedules');
+  expect(tool.description).toContain('authorize ya no hace falta');
+  expect(tool.description).toContain('no detiene ningún cron');
 });
 
 it.each([
@@ -32,8 +33,6 @@ it.each([
   {action:'resume', operation_id:'operation-1'},
   {action:'revoke_authorization', schedule_external_id:'cron-1'},
   {action:'revoke_authorization', schedule_external_id:'cron-1', destination:'urn:li:person:Member_Test-1'},
-  {action:'authorize', all_schedules:true, destination:'urn:li:organization:123', actions:['analytics','read_comments']},
-  {action:'revoke_authorization', all_schedules:true},
 ])('forwards $action and uses the existing scheduled context when applicable', async params => {
   const isSchedule = ['publish','resume','comments','reply_comment'].includes(params.action);
   if (isSchedule) scheduled.credential = {auth:{token:'cron-test',source:'schedule'},socketUrl:'wss://query.test/ws/'};
@@ -93,6 +92,6 @@ it('exposes analytics without opening arbitrary URLs or credentials', () => {
   expect(schema).not.toContain('access_token');
   expect(schema).not.toContain('refresh_token');
   expect(tool.description).toContain('HTTP');
-  expect(tool.description).toContain('cron con autorización explícita «analytics»');
+  expect(tool.description).toContain('en cualquier cron que corra como alguien que puede usar la cuenta');
   expect(schema).toContain('"analytics"');
 });
