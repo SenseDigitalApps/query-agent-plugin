@@ -39,7 +39,9 @@ it('only connects, lists and disconnects; never takes tokens, URLs or Graph requ
 
 it('keeps the skill consistent: manual stays manual, Query never falls back, cron exception only by profile', async () => {
   const {readFileSync} = await import('node:fs');
-  const skill = readFileSync(new URL('../skills/query-panel/SKILL.md', import.meta.url), 'utf8');
+  // Meta vive en el anexo query-panel-redes; las reglas compartidas, en query-panel.
+  const skill = ['query-panel-redes', 'query-panel'].map((name) =>
+    readFileSync(new URL(`../skills/${name}/SKILL.md`, import.meta.url), 'utf8')).join('\n');
   const meta = skill.slice(skill.indexOf('## Meta: Facebook e Instagram'), skill.indexOf('## Generic authenticated HTTP'));
   expect(meta).toContain('Si una tarea ya era manual, permanece manual');
   expect(meta).not.toContain('esa tarea sigue por la manual');
