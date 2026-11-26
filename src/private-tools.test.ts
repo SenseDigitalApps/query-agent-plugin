@@ -62,6 +62,17 @@ describe('private delivery registration and transport',()=>{
     const schema=getToolPluginMetadata(entry)!.tools.find(t=>t.name==='query_account_access')!.parameters;
     expect(schema.properties.grant.properties).toHaveProperty('scope_mode');
   });
+  it('forwards the single owner consent for scheduled reads without credentials',async()=>{
+    const fetchMock=vi.fn(async()=>({ok:true,json:async()=>({grant:{sources:['schedule']}})}));
+    vi.stubGlobal('fetch',fetchMock);
+    const tool=registered().find(c=>c[1]?.name==='query_account_access')![0]({sessionKey:'test-sharing'});
+    await tool.execute('cron',{thread_id:'42',action:'authorize_schedules',family:'private',account_id:'ga4-connection',grant:{contexts:['private'],actions:['read']}});
+    expect(JSON.parse(String(fetchMock.mock.calls[0][1].body))).toMatchObject({action:'authorize_schedules',grant:{actions:['read']}});
+    const meta=getToolPluginMetadata(entry)!.tools.find(t=>t.name==='query_account_access')!;
+    expect(meta.parameters.properties.grant.properties).toHaveProperty('actions');
+    expect(meta.description).toContain('authorize_schedules');
+    expect(meta.description).not.toContain('HTTP/IMAP no lo admiten');
+  });
   it('advertises shared live protocol discovery without promising mailbox access',()=>{
     const tool=getToolPluginMetadata(entry)!.tools.find(t=>t.name==='query_api_request')!;
     expect(tool.description).toContain('action=connections');
