@@ -783,8 +783,11 @@ async function bindInferenceAccount(api: OpenClawPluginApi, jobId: string, agent
   const model = recordedInferenceModel(api, agentId);
   if (!model) return;
   try {
+    // Con el alcance mínimo del agente el Gateway no ve la tarea recién creada
+    // («Automation not found ... cross-session», 26-nov-2026); se pide alcance de
+    // administración solo para grabar la cuenta del modelo ya elegido.
     await callGatewayTool("cron.update", { timeoutMs: 15_000 },
-      { id: jobId, patch: { payload: { kind: "agentTurn", model } } });
+      { id: jobId, patch: { payload: { kind: "agentTurn", model } } }, { scopes: ["operator.admin"] });
   } catch (error) {
     api.logger.warn(`query cron ${jobId}: no se pudo grabar la cuenta de inferencia: ${
       error instanceof Error ? error.message : String(error)}`);
