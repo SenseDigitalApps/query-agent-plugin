@@ -1,4 +1,4 @@
-import { openAsBlob, promises as fs } from "node:fs";
+import { promises as fs } from "node:fs";
 import { basename, isAbsolute } from "node:path";
 import type { QueryAttachment } from "./types.js";
 
@@ -67,7 +67,17 @@ async function readArtifact(path: string): Promise<{ blob: Blob; size: number }>
       `Query artifact exceeds ${MAX_UPLOAD_BYTES} bytes: ${path}`,
     );
   }
-  return { blob: await openAsBlob(path), size: stats.size };
+  // Leer el archivo completo antes de subirlo. openAsBlob deja un Blob perezoso
+  // atado al archivo: si el agente lo reescribe mientras fetch lo transmite, Node
+  // lanza NotReadableError fuera de la promesa y tumba el Gateway (2026-11-26).
+  const data = await fs.readFile(path);
+  if (data.byteLength > MAX_UPLOAD_BYTES) {
+    throw new QueryUploadError(
+      "file_too_large",
+      `Query artifact exceeds ${MAX_UPLOAD_BYTES} bytes: ${path}`,
+    );
+  }
+  return { blob: new Blob([data]), size: data.byteLength };
 }
 
 /**
