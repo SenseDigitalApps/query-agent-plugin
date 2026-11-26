@@ -4,8 +4,9 @@ import { describe, expect, it } from "vitest";
 
 // Codex entrega una guía con skills_read solo si cabe entera en 64000 caracteres
 // ponderados; si no, la lectura falla y la tarea programada se detiene (LinkedIn,
-// 26-nov-2026). Se deja margen para el envoltorio y el crecimiento normal.
-const MAX_SKILL_CHARS = 56_000;
+// 26-nov-2026); además recorta la salida cerca de 47000 (query-panel con 49000 perdió
+// el final). Se deja margen para el envoltorio y el crecimiento normal.
+const MAX_SKILL_CHARS = 42_000;
 const skillsDir = join(__dirname, "..", "skills");
 
 describe("tamaño de las guías del plugin", () => {
