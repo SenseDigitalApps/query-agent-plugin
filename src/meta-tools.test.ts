@@ -48,7 +48,7 @@ it('keeps the skill consistent: manual stays manual, Query never falls back, cro
   expect(meta).toContain('no concluyas la causa');
   expect(meta).toContain('Conectar no autoriza publicar ni cambia el circuito editorial');
   expect(skill).not.toContain('HTTP/IMAP continúan sin cron');
-  expect(skill).toContain('IMAP sigue sin cron');
+  expect(skill).toContain('(HTTP de cualquier origen e IMAP)');
 });
 
 it.each([

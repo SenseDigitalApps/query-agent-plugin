@@ -15,7 +15,7 @@ to dedicated tools, not a permission bypass and not contingent on another tool
 failing. Use only discovered connection IDs and relative documented paths. Never
 supply provider credentials, owner/tenant identities or full URLs. Preserve the
 same idempotency key; running/uncertain results require reconciliation, not a new
-write. Supports private owner/authorized-user turns and explicitly granted groups, JSON/text/form bodies. Cron only on connections whose policy has `allow_schedules` (today: Meta; SES has it on by default unless `allow_schedules: false`) plus an owner-granted `schedule` permission;
+write. Supports private owner/authorized-user turns and explicitly granted groups, JSON/text/form bodies. A cron runs as its author and can use any connection the author can use in chat (GA4, Search Console, Otterly, Meta, SES or any other HTTP, and IMAP), in the same agent and context and with the same connection rules; it is blocked only if the owner turned crons off for that connection (`allow_schedules: false`, via `query_account_access disable_schedules`);
 and does not accept file uploads. `auth=oauth2` supports automatic refresh of already-authorized OAuth2 credentials; browser consent acquisition is separate. If disabled,
 report that state; do not use direct HTTP or extract credentials as a workaround.
 
@@ -72,10 +72,11 @@ En el privado del propietario (Google conserva administración de delegaciones):
    contexts `["*"]` = privados/canales autorizados; `["private"]` = solo privados.
    capabilities discover/consult/execute: consultar resultados no es ejecutar una consulta
    al proveedor. Leer correo requiere execute, limitado por la política de la conexión.
-   sources `["turn"]` por defecto; añadir schedule no crea tareas ni sustituye su
-   autorización. IMAP sigue sin cron. HTTP también, salvo las conexiones cuya política
-   trae `allow_schedules` con un perfil habilitado (hoy `meta_graph`), y las SES (`aws_sigv4`), que lo traen por defecto: ahí el dueño puede
-   conceder el origen schedule. rules solo HTTP/IMAP, dentro de su política.
+   sources `["turn"]` por defecto, y eso también vale en los crones: un cron corre como
+   su autor y usa la conexión con sus mismos permisos (HTTP de cualquier origen e IMAP),
+   en el mismo agente y contexto. No hace falta un permiso schedule aparte. El dueño
+   puede apagar los crones de una conexión con `disable_schedules` (y volver a
+   encenderlos con `enable_schedules`). rules solo HTTP/IMAP, dentro de su política.
 4. `revoke` retira únicamente grant_id. Los permisos se suman: para «solo este canal»,
    adoptar/revisar y retirar los permisos amplios incompatibles, no simplemente añadir otro.
 5. Releer grants y comprobar el alcance efectivo. No probar enviando mensajes.
@@ -99,11 +100,10 @@ ese post, sin post_urn el acumulado de la página; nunca metric. Es el acumulado
 disponible al leer, no una cohorte a siete días: el recolector mide a la edad que
 necesite (p. ej. 24 h y 7 días) y guarda cada recibo.
 
-**Crones (loop de impresiones):** la lectura funciona en un cron solo con una
-autorización explícita de ESE cron y ESE destino: registrar el cron con
-query_cron_manage y, desde el mismo chat, `authorize` con actions que incluyan
-`analytics`. Es revocable con `revoke_authorization`. Leer no permite publicar y
-publicar no permite leer. El recibo de un cron solo se consulta desde ese cron.
+**Crones (loop de impresiones):** el cron del dueño de la cuenta lee la analítica
+con sus mismos permisos; registrar el cron con query_cron_manage basta, sin
+`authorize`. Para detenerlo se usa query_cron_manage (`revoke_authorization` deja
+registro pero no detiene crones). El recibo de un cron solo se consulta desde ese cron.
 Antes de activar el recolector, validar UNA lectura real desde el cron.
 
 Ambas vías usan la cuenta LinkedIn existente. `query_api_request connections`
