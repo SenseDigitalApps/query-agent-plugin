@@ -1,6 +1,6 @@
 ---
 name: query-panel-reuniones
-description: 'Reuniones grabadas por el note taker de Query: buscar una reunión, citar lo acordado y el minuto, resumir y proponer tareas. Leer junto con query-panel.'
+description: 'Reuniones grabadas por el note taker de Query: buscar una reunión, citar lo acordado y el minuto, resumir y llevar sus tareas a «Mis tareas». Leer junto con query-panel.'
 ---
 
 # query-panel-reuniones
@@ -35,10 +35,28 @@ Cuando Query te pide el resumen de una reunion que termino (mensaje
 `[Reuniones]` en el chat privado de la persona organizadora):
 
 - Lee la reunion y la transcripcion por partes.
-- Propon las tareas con `query_records_propose_batch` en el modulo de tareas
-  (descubrelo con `query_modules_list` si no te lo indican). No las crees: una
-  persona las aprueba en las tarjetas.
-- Guarda resumen, decisiones y tareas con `query_meeting_summary_save`, citando
-  minutos y pasando los `action_id` de esas propuestas en `proposal_action_ids`.
+- Guarda resumen y decisiones con `query_meeting_summary_save`, citando minutos.
+- Las tareas acordadas van en `personal_tasks` de esa misma llamada (title,
+  description, due_at si se dijo, minute): quedan en «Mis tareas» de quien llevo
+  el bot, en el primer estado por hacer, con el minuto y el enlace a la reunion.
+  No piden aprobacion. Repetir el guardado no las duplica (reunion + titulo), asi
+  que conserva el mismo titulo al reintentar. Cuentale a la persona cuales quedaron.
+- Solo si la persona lo pide, proponlas ademas al modulo de tareas con
+  `query_records_propose_batch` (descubrelo con `query_modules_list` si no te lo
+  indican) y pasa sus `action_id` en `proposal_action_ids`.
 - No hay un chat por reunion: las preguntas sobre reuniones llegan por aqui.
+
+## Mis tareas (tablero personal)
+
+`query_personal_tasks` maneja el tablero «Mis tareas» de la persona de este
+turno (en un cron, de su autor); nunca el de otra persona.
+
+- `board` primero para ver estados (columnas) y tarjetas; no adivines ids.
+- `create` cuando la persona pide anotar, recordar o agendar algo para ella, o
+  sale de su propia reunion (pasa `link` `/reuniones/<id>` y el minuto en la
+  descripcion). No pidas aprobacion.
+- `move` con `column_name` o `column_id`; `done: true` la marca terminada.
+- `update` y `delete` solo en tarjetas propias (`own`). Las que otros le
+  asignaron solo se mueven.
+- Una tarea para otra persona no va aqui: usa las propuestas de registros.
 

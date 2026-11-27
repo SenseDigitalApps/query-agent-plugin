@@ -6,7 +6,7 @@ vi.mock("./delegated-store.js", () => ({getDelegatedAuth: () => ({auth: {token: 
 import entry from "./query-tools.js";
 import {getToolPluginMetadata} from "openclaw/plugin-sdk/tool-plugin";
 
-const MEETING_TOOLS = ["query_meetings_search", "query_meeting_get", "query_meeting_transcript", "query_meeting_summary_save"];
+const MEETING_TOOLS = ["query_meetings_search", "query_meeting_get", "query_meeting_transcript", "query_meeting_summary_save", "query_personal_tasks"];
 
 afterEach(() => vi.unstubAllGlobals());
 
@@ -75,6 +75,29 @@ describe("Query meeting tools", () => {
     const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
     expect(String(url)).toBe("https://query.test/api/v4/openclaw-agent/meetings/7/summary/");
     expect(JSON.parse(String(options.body))).toMatchObject({summary: "Acordamos la propuesta."});
+  });
+
+  it("summary save sends the meeting tasks for the owner's personal board", async () => {
+    const fetchMock = okFetch({saved: true, personal_task_ids: [5]});
+    const personal_tasks = [{title: "Enviar contrato", description: "Versión firmada", due_at: "2026-11-09", minute: "02:05"}];
+    await registered("query_meeting_summary_save").execute("call", {thread_id: "42", meeting_id: 7, summary: "Acordamos.", personal_tasks});
+    expect(JSON.parse(String((fetchMock.mock.calls[0] as unknown as [string, RequestInit])[1].body))).toMatchObject({personal_tasks});
+    const tool = getToolPluginMetadata(entry)!.tools.find(t => t.name === "query_meeting_summary_save")!;
+    expect((tool.parameters.properties as any).personal_tasks.maxItems).toBe(30);
+    expect(tool.description).toContain("Mis tareas");
+  });
+
+  it("personal tasks post to the delegated personal board endpoint", async () => {
+    const fetchMock = okFetch({action: "create", card: {id: 9}});
+    await registered("query_personal_tasks").execute("call", {thread_id: "42", action: "create", title: "Llamar a Acme", column_name: "En curso"});
+    const [url, options] = fetchMock.mock.calls[0] as unknown as [string, RequestInit];
+    expect(String(url)).toBe("https://query.test/api/v4/openclaw-agent/personal-tasks/");
+    expect(options.method).toBe("POST");
+    expect(options.headers).toMatchObject({"X-Query-Delegated-Token": "delegated-test"});
+    expect(JSON.parse(String(options.body))).toMatchObject({thread_id: "42", action: "create", title: "Llamar a Acme", column_name: "En curso"});
+    const tool = getToolPluginMetadata(entry)!.tools.find(t => t.name === "query_personal_tasks")!;
+    expect(Object.keys(tool.parameters.properties as object)).not.toContain("user_id");
+    expect(tool.description).toMatch(/nunca el de otra persona/);
   });
 
   it("surfaces a not-found meeting without inventing content", async () => {

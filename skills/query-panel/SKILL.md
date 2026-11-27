@@ -30,7 +30,7 @@ que lo que ves es exactamente lo que ella ve. No es tu acceso: es el suyo.
 Esta guía tiene las reglas generales. Los temas específicos viven en guías aparte para que quepan en el presupuesto de lectura. Antes de trabajar en uno de estos temas, cárgalo completo con `skills_read` usando el nombre exacto:
 
 - `query-panel-reportes`: Diseño de HTML con datos de Query y reportes o dashboards en vivo fijados al menú de Query. Leer junto con query-panel antes de crear o publicar cualquier HTML, reporte o dashboard.
-- `query-panel-reuniones`: Reuniones grabadas por el note taker de Query: buscar una reunión, citar lo acordado y el minuto, resumir y proponer tareas. Leer junto con query-panel.
+- `query-panel-reuniones`: Reuniones grabadas por el note taker de Query: buscar una reunión, citar lo acordado y el minuto, resumir y llevar sus tareas a «Mis tareas». También el tablero personal «Mis tareas» de la persona del turno (`query_personal_tasks`). Leer junto con query-panel.
 - `query-panel-correo`: Conectar, compartir y usar correo SMTP, WorkMail o SES en Query, incluidas campañas y su estado de entrega. Leer junto con query-panel antes de enviar o configurar correo.
 - `query-panel-facturacion`: Facturación electrónica Matias desde Query (query_billing_*): disponibilidad, emisión, documentos y conciliación. Leer junto con query-panel.
 - `query-panel-redes`: LinkedIn (cuenta guardada, varios destinos, automatización), X con Manuela y Meta (Facebook e Instagram) por la conexión de Query. Leer junto con query-panel antes de publicar o medir en redes.
@@ -119,6 +119,8 @@ Solo informa que se eliminó cuando la respuesta confirme `ok=true` y
 desaparece del programador de OpenClaw.
 
 ## Cambiar datos mediante las herramientas de Query
+
+«Mis tareas» (tablero personal de la persona del turno) no es un módulo: créalas, muévelas o termínalas con `query_personal_tasks`, sin propuesta ni aprobación (guía `query-panel-reuniones`).
 
 `query_record_propose` es la via para proponer cambios individuales de registros de negocio. La facturacion electronica usa exclusivamente las herramientas `query_billing_*` descritas en la guía `query-panel-facturacion`; no se sustituye por edicion de campos. Sirve
 tanto para crear como para actualizar. Por defecto deja una propuesta en el

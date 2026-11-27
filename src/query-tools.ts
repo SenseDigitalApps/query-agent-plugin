@@ -1133,6 +1133,13 @@ export default defineToolPlugin({
     }),
 
     tool({
+      name: "query_personal_tasks", label: "Query: Mis tareas (tablero personal)",
+      description: "Tablero personal «Mis tareas» de la persona de este turno (en un cron, de su autor); nunca el de otra persona, aunque la conversación la nombre. Las tarjetas son tareas asignadas a ella misma. board trae los estados (columnas) y las tarjetas: las propias (own) y las que otros le asignaron. create crea una tarjeta (title, description, due_at AAAA-MM-DD o ISO, column_id o column_name, link y origin_label opcionales para el origen) sin pedir aprobación cuando la persona lo pide o cuando sale de su propia reunión; por defecto va al primer estado por hacer. update edita title/description/due_at y delete borra, solo de tarjetas propias. move lleva task_id a column_id o column_name; done:true la pasa al primer estado de terminadas (la marca hecha) y sacarla de ahí la reabre. Las asignadas por otros solo se mueven. Para tareas de otras personas o del módulo de tareas usa las propuestas de registros.",
+      parameters: Type.Object({thread_id: THREAD_PARAM, action: Type.Union([Type.Literal("board"), Type.Literal("create"), Type.Literal("update"), Type.Literal("move"), Type.Literal("delete")]), task_id: Type.Optional(Type.Integer({minimum:1})), title: Type.Optional(Type.String({minLength:1,maxLength:255})), description: Type.Optional(Type.String({maxLength:10000})), due_at: Type.Optional(Type.Union([Type.String(), Type.Null()], {description: "Fecha límite AAAA-MM-DD o ISO; null la quita."})), column_id: Type.Optional(Type.Integer({minimum:1})), column_name: Type.Optional(Type.String({maxLength:60})), done: Type.Optional(Type.Boolean()), link: Type.Optional(Type.String({maxLength:2000, description: "Enlace al origen (p. ej. /reuniones/12)."})), origin_label: Type.Optional(Type.String({maxLength:255}))}, {additionalProperties:false}),
+      execute: async ({thread_id, ...params}, _config, context) => postQuery(thread_id, "personal-tasks/", {thread_id, ...params}, "query_personal_tasks", context.api.logger),
+    }),
+
+    tool({
       name: "query_delivery_targets",
       label: "Query: destinos de tareas programadas",
       description:
@@ -2090,7 +2097,7 @@ export default defineToolPlugin({
       name: "query_meeting_summary_save",
       label: "Query: guardar resumen de reunion",
       description:
-        "Guarda el resumen, las decisiones y las tareas propuestas de una reunion. Solo lo acepta el agente con el que entro el bot a esa reunion, cuando Query se lo pide al terminar. Cita el minuto de cada decision y tarea. Guardar el resumen NO crea tareas: antes proponlas con query_records_propose_batch en el modulo de tareas y pasa aqui sus action_id en proposal_action_ids, para que una persona las apruebe desde el chat o desde el detalle de la reunion.",
+        "Guarda el resumen, las decisiones y las tareas de una reunion. Solo lo acepta el agente con el que entro el bot a esa reunion, cuando Query se lo pide al terminar, en el turno de quien llevo el bot. Cita el minuto de cada decision y tarea. Las tareas acordadas van en personal_tasks (title, description, due_at, minute; hasta 30): quedan en «Mis tareas» de quien llevo el bot, en el primer estado por hacer, con el minuto y el enlace a la reunion, sin aprobacion. Repetir el guardado no las duplica (misma reunion y titulo). Proponlas ademas al modulo de tareas con query_records_propose_batch solo si la persona lo pide, y entonces pasa sus action_id en proposal_action_ids.",
       parameters: Type.Object({
         thread_id: THREAD_PARAM,
         meeting_id: Type.Integer({ description: "Id de la reunion." }),
@@ -2106,6 +2113,12 @@ export default defineToolPlugin({
           due_date: Type.Optional(Type.String({ description: "AAAA-MM-DD si se dijo." })),
           minute: Type.Optional(Type.String()),
         }), { maxItems: 50 })),
+        personal_tasks: Type.Optional(Type.Array(Type.Object({
+          title: Type.String({ minLength: 1, maxLength: 255 }),
+          description: Type.Optional(Type.String({ maxLength: 10000 })),
+          due_at: Type.Optional(Type.String({ description: "Fecha limite AAAA-MM-DD si se dijo." })),
+          minute: Type.Optional(Type.String({ description: "Minuto mm:ss donde se acordo." })),
+        }), { maxItems: 30, description: "Tareas para «Mis tareas» de quien llevo el bot." })),
         proposal_action_ids: Type.Optional(Type.Array(Type.String(), { maxItems: 50 })),
         model: Type.Optional(Type.String({ description: "Modelo con que generaste el resumen, si lo sabes." })),
       }),

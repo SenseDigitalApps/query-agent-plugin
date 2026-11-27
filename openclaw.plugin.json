@@ -346,6 +346,7 @@
       "query_meeting_get",
       "query_meeting_transcript",
       "query_meeting_summary_save",
+      "query_personal_tasks",
       "query_api_plan_propose",
       "query_api_read",
       "query_account_access",
