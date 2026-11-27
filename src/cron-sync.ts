@@ -1,3 +1,4 @@
+import { execFile } from "node:child_process";
 import type { OpenClawPluginApi } from "openclaw/plugin-sdk/channel-core";
 import { Type } from "typebox";
 import { callGatewayTool } from "openclaw/plugin-sdk/agent-harness-runtime";
@@ -775,22 +776,55 @@ export function recordedInferenceModel(api: OpenClawPluginApi, agentId: string |
 }
 
 /**
+ * Comando de operador que graba la cuenta de inferencia («inferenceBinding»). Usa el mismo
+ * Node y el mismo CLI del Gateway en ejecución, sin depender del PATH.
+ */
+export function inferenceBindingCommand(jobId: string, model: string,
+  execPath = process.execPath, entry = process.argv[1]): { command: string; args: string[] } | undefined {
+  if (!entry || !/openclaw/i.test(entry) || !/^[0-9a-f-]{36}$/i.test(jobId) || !/^[\w.-]+\/[\w.:-]+@[\w.:@+-]+$/.test(model)) return undefined;
+  return { command: execPath, args: [entry, "cron", "edit", jobId, "--model", model] };
+}
+
+function runInferenceBindingCommand(jobId: string, model: string): Promise<void> {
+  const spec = inferenceBindingCommand(jobId, model);
+  if (!spec) return Promise.reject(new Error("comando de operador no disponible"));
+  return new Promise((resolve, reject) => {
+    execFile(spec.command, spec.args, { timeout: 60_000, maxBuffer: 1024 * 1024 }, (error, _stdout, stderr) => {
+      if (error) reject(new Error(`${error.message}${stderr ? `: ${String(stderr).slice(0, 300)}` : ""}`));
+      else resolve();
+    });
+  });
+}
+
+/**
  * La cuenta de inferencia («inferenceBinding») solo la graba el método del Gateway
  * cron.update; el servicio en proceso que usa Query no la captura. Sin ella la tarea
- * falla al correr con «no recorded inference account». Si no se puede, se avisa en el log.
+ * falla al correr con «no recorded inference account».
+ *
+ * Con la identidad del agente el Gateway no ve la tarea recién creada («Automation not
+ * found ... cross-session», 26-nov-2026), ni siquiera pidiendo alcance de administración.
+ * Por eso, si falla, se graba con el CLI de operador (lo mismo que hace el guardián) y
+ * siempre ANTES de activar la tarea, para que nunca corra sin cuenta.
  */
-async function bindInferenceAccount(api: OpenClawPluginApi, jobId: string, agentId: string | undefined) {
+async function bindInferenceAccount(api: OpenClawPluginApi, jobId: string, agentId: string | undefined): Promise<boolean> {
   const model = recordedInferenceModel(api, agentId);
-  if (!model) return;
+  if (!model) return false;
   try {
-    // Con el alcance mínimo del agente el Gateway no ve la tarea recién creada
-    // («Automation not found ... cross-session», 26-nov-2026); se pide alcance de
-    // administración solo para grabar la cuenta del modelo ya elegido.
     await callGatewayTool("cron.update", { timeoutMs: 15_000 },
       { id: jobId, patch: { payload: { kind: "agentTurn", model } } }, { scopes: ["operator.admin"] });
+    return true;
+  } catch (error) {
+    api.logger.info?.(`query cron ${jobId}: cron.update del agente no grabó la cuenta (${
+      error instanceof Error ? error.message.slice(0, 120) : String(error)}); se usa el CLI de operador.`);
+  }
+  try {
+    await runInferenceBindingCommand(jobId, model);
+    api.logger.info?.(`query cron ${jobId}: cuenta de inferencia grabada con el CLI de operador (${model}).`);
+    return true;
   } catch (error) {
     api.logger.warn(`query cron ${jobId}: no se pudo grabar la cuenta de inferencia: ${
       error instanceof Error ? error.message : String(error)}`);
+    return false;
   }
 }
 
@@ -1391,11 +1425,12 @@ export function registerQueryCronSync(
           await syncChanged({ action, jobId, job: resultingJob }, mutation, true);
           const authorization = await confirmAuthorization(jobId, effectiveDelivery,
             mutation.actorIsTenantAdmin ? undefined : mutation.runAsUserId);
+          // La cuenta del modelo se graba con la tarea aún apagada: nunca debe correr sin ella.
+          if (params.action === "add") await bindInferenceAccount(api, jobId, ctx.agentId);
           if (params.action === "add" && params.job.enabled !== false) {
             activationAttempted = true;
             await cronService.update(jobId, { enabled: true });
           }
-          if (params.action === "add") await bindInferenceAccount(api, jobId, ctx.agentId);
           const publicResult = {
             ok: true,
             authorization,
