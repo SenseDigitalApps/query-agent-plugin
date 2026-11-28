@@ -191,3 +191,61 @@ puede retirar desde la configuración del negocio en Meta. Si Meta confirma solo
 algunas identidades, el resultado lo dice (`identities_unconfirmed`). Si Meta no confirma el retiro, explica que
 la empresa puede quitar la app desde la configuración de su negocio en Meta.
 
+### Meta Ads: conexión con perfil `meta_ads` (Manuela)
+
+La conexión de anuncios usa el perfil revisado `meta_ads`. Sus reglas cubren todo Graph
+(`GET /`, `POST /`, `DELETE /`); Query valida cada solicitud con la configuración vigente de
+la conexión. No supongas límites: léelos.
+
+- `query_api_request action=profile_config connection_id=…`: configuración vigente (cuentas
+  con moneda y topes, páginas, Instagram, versión, ramas y campos permitidos, `max_active_tests`,
+  `require_paused_on_create`, `allow_delete`, `schedule_writes`, `only_query_created`...),
+  propuestas pendientes e historial.
+- `action=connections` → `profile_state`: reservado, pendiente de conciliar y saldo del lote,
+  global y del mes por cuenta (en la moneda de la cuenta), y `metrics_catalog`.
+
+Cambiar la configuración: `action=propose_config` con `changes` (JSON merge patch: `null` quita
+la clave y vuelve al valor por defecto), `reason` y, para leer cuentas, monedas, páginas e
+Instagram del token, `discover: true`. Muestra el antes y el después. Se aplica solo cuando el
+dueño de la conexión, o un aprobador que el dueño autorizó, escribe «confirmo» (o «aplícalo»;
+«cancela» la descarta) en ese mismo chat, privado o grupo; un «sí» suelto no basta. Tú no
+puedes confirmar (`owner_confirmation_required`). Hoy no hay topes ni límite de pruebas activas:
+sugiere delimitarlos cuando haga falta, no los impongas.
+
+Aprobadores: si el dueño te pide nombrar o quitar a alguien, propón `{"approver_user_ids":[…]}`
+con la lista completa (sin la persona para quitarla). El id lo obtienes en el chat privado del
+dueño con `action=grant_candidates connection_id=… query="<nombre>"`; en un grupo pídele hacerlo
+en privado. Repite nombre e id antes de que confirme. Esa propuesta solo la confirma el dueño
+real de la conexión, no un aprobador (`meta_ads_approvers_owner_only`).
+
+Rutas (versión = `graph_version`): lectura de la cuenta y sus ramas, de cualquier objeto de las
+cuentas configuradas (Query verifica la cuenta con Meta la primera vez) y del orgánico asignado.
+Crear bajo `/{act}/campaigns|adsets|adcreatives|ads|advideos|adimages` (según `create_edges`).
+Modificar `POST /{id}`. `fields` y `metric` solo nombres simples separados por comas; sin `{}`,
+`.limit()`, `ids=` ni `/batch`. Importes en unidades de la API de la cuenta (COP: pesos).
+Para cambiar el presupuesto de un objeto, léelo antes una vez. Usa `validate_only` antes de crear
+y la misma `idempotency_key` para reintentar la misma pieza.
+
+Activación (`status=ACTIVE`): si la configuración tiene `max_active_tests`, Query consulta a
+Meta los conjuntos entregando o armados de la cuenta; con `require_end_time_on_activate` exige fin
+nativo futuro. ACTIVE no es entrega: confírmala con impresiones y gasto.
+
+Códigos frecuentes: `meta_ads_create_must_be_paused`, `meta_ads_value_not_allowed`,
+`meta_ads_param_not_allowed`, `meta_ads_edge_not_allowed`, `meta_ads_budget_over_limit`,
+`meta_ads_budget_unbounded`, `meta_ads_batch_budget_exceeded`, `meta_ads_global_budget_exceeded`,
+`meta_ads_monthly_budget_exceeded`, `meta_ads_currency_mismatch`,
+`meta_ads_read_before_budget_change`, `meta_ads_budget_changed_outside`,
+`object_outside_account`, `meta_ads_reference_outside_assets`, `meta_ads_object_not_registered`,
+`meta_ads_other_test_delivering`, `meta_ads_window_overlap`, `meta_ads_max_active_tests`,
+`meta_ads_end_time_required`, `meta_ads_duplicate_name`, `meta_ads_reconcile_required`,
+`meta_ads_delete_forbidden`, `meta_ads_archive_forbidden`, `meta_ads_organic_publish_disabled`,
+`meta_ads_schedule_read_only`, `meta_ads_config_changed`, `meta_fields_not_allowed`.
+Ante `uncertain` o `meta_ads_reconcile_required` no repitas con otra clave: lee en Meta si el
+objeto existe e informa al dueño; la conciliación la hace el dueño o un administrador.
+
+Métricas de Instagram: `metrics_catalog` por tipo (REELS/FEED/STORY y cuenta, con retiradas). Lo
+que Meta no devuelve es «no disponible», nunca cero; lo acumulado después de pautar no es
+orgánico puro.
+
+Nada de esto autoriza gastar: crear, subir presupuesto o activar requiere la decisión explícita del dueño para esa pieza o lote, aunque la configuración lo permita y haya saldo. Los crones solo leen
+salvo `schedule_writes`.
